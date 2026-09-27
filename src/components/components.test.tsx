@@ -6,13 +6,14 @@ import { InvestmentWorkspace } from "./investment-workspace";
 import { ObligationExplorer } from "./obligation-explorer";
 import { StatusPill } from "./primitives";
 import { TreasuryWorkspaceProvider } from "./treasury-workspace-provider";
+import { WalletPanel } from "./wallet-panel";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/obligations" }));
 const renderWorkspace = (node: React.ReactNode) => render(<TreasuryWorkspaceProvider>{node}</TreasuryWorkspaceProvider>);
 beforeEach(() => { window.localStorage.clear(); window.HTMLElement.prototype.scrollIntoView = vi.fn(); });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-describe("Stage 2 interactions", () => {
+describe("Stage 3 interactions", () => {
   it("marks the active navigation destination", () => { renderWorkspace(<AppShell><div>Content</div></AppShell>); expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("link", { name: "Obligations" })).toHaveAttribute("aria-current", "page"); });
   it("creates an obligation and recalculates protected capital", async () => {
     const user = userEvent.setup(); renderWorkspace(<ObligationExplorer />); await user.click(screen.getByRole("button", { name: /new obligation/i }));
@@ -23,4 +24,11 @@ describe("Stage 2 interactions", () => {
   it("rejects allocation targets that do not total 100 percent", async () => { const user = userEvent.setup(); renderWorkspace(<InvestmentWorkspace />); await user.clear(screen.getByLabelText("Morpho target")); await user.type(screen.getByLabelText("Morpho target"), "40"); await user.click(screen.getByRole("button", { name: /save targets/i })); expect(screen.getByRole("alert")).toHaveTextContent("exactly 100%"); });
   it("opens a deterministic allocation preview and returns focus", async () => { const user = userEvent.setup(); renderWorkspace(<InvestmentWorkspace />); const trigger = screen.getByRole("button", { name: /preview engine plan/i }); await user.click(trigger); expect(screen.getByRole("dialog", { name: /allocation plan/i })).toBeVisible(); expect(screen.getByRole("button", { name: /execution begins/i })).toBeDisabled(); await user.click(screen.getByRole("button", { name: /close investment preview/i })); expect(trigger).toHaveFocus(); });
   it("renders a textual state in addition to color", () => { render(<StatusPill label="SAFE" tone="success" />); expect(screen.getByText("SAFE")).toBeVisible(); });
+  it("validates and links only a public Arc Testnet wallet address", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => ({ status: "READY", snapshot: { address: "0x0000000000000000000000000000000000000001", chain: "ARC-TESTNET", chainId: 5_042_002, balance: { currency: "USDC", minorUnits: "20000000", decimals: 6 }, blockNumber: "42", observedAt: "2026-09-27T12:00:00.000Z" } }) })));
+    const user = userEvent.setup(); renderWorkspace(<WalletPanel />); await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+    await user.type(screen.getByLabelText("Public Arc Testnet address"), "invalid"); await user.click(screen.getByRole("button", { name: /link public address/i })); expect(screen.getByRole("alert")).toHaveTextContent(/valid EVM wallet address/i);
+    await user.clear(screen.getByLabelText("Public Arc Testnet address")); await user.type(screen.getByLabelText("Public Arc Testnet address"), "0x0000000000000000000000000000000000000001"); await user.click(screen.getByRole("button", { name: /link public address/i }));
+    expect(await screen.findByText("20.00 USDC")).toBeVisible(); expect(screen.getByText(/signing: disabled/i)).toBeVisible(); expect(screen.getByText(/execution: disabled/i)).toBeVisible();
+  });
 });
