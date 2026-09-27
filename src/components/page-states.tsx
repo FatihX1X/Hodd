@@ -1,0 +1,19 @@
+export function PageSkeleton() {
+  return (
+    <div aria-label="Loading sample treasury" role="status" className="animate-pulse">
+      <div className="h-56 bg-[#151816]" />
+      <div className="mx-auto grid max-w-[1440px] gap-4 px-5 py-8 md:grid-cols-2 md:px-8 xl:grid-cols-4 lg:px-10">
+        {Array.from({ length: 8 }, (_, index) => <div key={index} className="h-36 border border-black/10 bg-black/[0.05]" />)}
+      </div>
+    </div>
+  );
+}
+
+export function EmptyState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="p-8 text-center">
+      <p className="text-sm font-semibold">{title}</p>
+      <p className="mx-auto mt-2 max-w-md text-xs leading-5 text-black/50">{description}</p>
+    </div>
+  );
+}
