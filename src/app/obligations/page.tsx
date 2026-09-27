@@ -7,7 +7,7 @@ export default function ObligationsPage() {
   return (
     <>
       <PageHeader eyebrow="03 · Obligations" title="Know what is due." description="Create and maintain the local obligation ledger that drives protected and deployable capital." />
-      <DemoNotice>Changes persist in this browser and immediately recalculate Stage 2 policy. Payment creation and execution remain unavailable.</DemoNotice>
+      <DemoNotice>Changes persist in this browser and recalculate policy only when the authoritative treasury balance is available. Payment execution remains unavailable.</DemoNotice>
       <ObligationExplorer />
     </>
   );

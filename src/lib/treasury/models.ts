@@ -23,6 +23,22 @@ export const activityEntrySchema = z.object({
 });
 export const agentDecisionSchema = z.object({ id: z.string(), createdAt: z.string().datetime(), title: z.string(), summary: z.string(), rationale: z.string(), policy: policyResultSchema });
 export const integrationStatusSchema = z.object({ name: z.string(), status: z.enum(["DEMO", "NOT_CONNECTED", "UNAVAILABLE", "FUTURE"]), message: z.string() });
+export const walletConnectionSchema = z.object({
+  provider: z.literal("CIRCLE_AGENT_WALLET"),
+  chain: z.literal("ARC-TESTNET"),
+  chainId: z.literal(5_042_002),
+  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  label: z.string().trim().min(1).max(60),
+  connectedAt: z.string().datetime(),
+});
+export const walletSnapshotSchema = z.object({
+  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  chain: z.literal("ARC-TESTNET"),
+  chainId: z.literal(5_042_002),
+  balance: moneySchema.extend({ currency: z.literal("USDC"), decimals: z.literal(6) }),
+  blockNumber: z.string().regex(/^\d+$/),
+  observedAt: z.string().datetime(),
+});
 const strategyBpsSchema = z.object({ LIQUID: z.number().int().min(0).max(10_000), MORPHO: z.number().int().min(0).max(10_000), USYC: z.number().int().min(0).max(10_000), BTC_RESERVE: z.number().int().min(0).max(10_000) });
 const strategyEnabledSchema = z.object({ LIQUID: z.boolean(), MORPHO: z.boolean(), USYC: z.boolean(), BTC_RESERVE: z.boolean() });
 export const treasuryPolicySchema = z.object({
@@ -30,11 +46,22 @@ export const treasuryPolicySchema = z.object({
   strategyCapsBps: strategyBpsSchema, enabledStrategies: strategyEnabledSchema,
   liquidityWaterfall: z.tuple([z.literal("LIQUID_USDC"), z.literal("MORPHO"), z.literal("USYC"), z.literal("BTC_CREDIT"), z.literal("BTC_SALE")]),
 });
-export const treasuryWorkspaceSchema = z.object({
-  schemaVersion: z.literal(1), updatedAt: z.string().datetime(), totalTreasury: moneySchema, liquidUsdc: moneySchema, pendingTransactions: moneySchema,
+const treasuryWorkspaceFields = {
+  updatedAt: z.string().datetime(), totalTreasury: moneySchema, liquidUsdc: moneySchema, pendingTransactions: moneySchema,
   obligations: z.array(obligationSchema), strategies: z.array(strategyPositionSchema), policy: treasuryPolicySchema,
   targetAllocationsBps: strategyBpsSchema.refine((value) => Object.values(value).reduce((sum, item) => sum + item, 0) === 10_000, "Target allocations must total 100%"),
   activities: z.array(activityEntrySchema), decisions: z.array(agentDecisionSchema), integrations: z.array(integrationStatusSchema),
+};
+export const legacyTreasuryWorkspaceSchema = z.object({ schemaVersion: z.literal(1), ...treasuryWorkspaceFields });
+export const treasuryWorkspaceSchema = z.object({
+  schemaVersion: z.literal(2),
+  treasuryMode: z.enum(["LOCAL_DEMO", "ARC_TESTNET_WALLET"]),
+  walletConnection: walletConnectionSchema.nullable(),
+  ...treasuryWorkspaceFields,
+}).superRefine((workspace, context) => {
+  if (workspace.treasuryMode === "ARC_TESTNET_WALLET" && !workspace.walletConnection) {
+    context.addIssue({ code: "custom", path: ["walletConnection"], message: "A wallet connection is required in Arc Testnet mode" });
+  }
 });
 
 export type Money = z.infer<typeof moneySchema>;
@@ -46,8 +73,16 @@ export type PolicyResult = z.infer<typeof policyResultSchema>;
 export type ActivityEntry = z.infer<typeof activityEntrySchema>;
 export type AgentDecision = z.infer<typeof agentDecisionSchema>;
 export type IntegrationStatus = z.infer<typeof integrationStatusSchema>;
+export type WalletConnection = z.infer<typeof walletConnectionSchema>;
+export type WalletSnapshot = z.infer<typeof walletSnapshotSchema>;
 export type TreasuryPolicy = z.infer<typeof treasuryPolicySchema>;
 export type TreasuryWorkspace = z.infer<typeof treasuryWorkspaceSchema>;
+export type WalletCapability = "READ_BALANCE" | "SIGN" | "SUBMIT_TRANSACTION";
+export type WalletReadState =
+  | Readonly<{ status: "IDLE" | "LOADING" }>
+  | Readonly<{ status: "READY"; snapshot: WalletSnapshot }>
+  | Readonly<{ status: "ERROR"; code: "INVALID_ADDRESS" | "WRONG_CHAIN" | "INVALID_USDC" | "RPC_UNAVAILABLE" | "INVALID_RESPONSE"; message: string; staleSnapshot?: WalletSnapshot }>;
+export type WalletCapabilities = Readonly<Record<WalletCapability, boolean>>;
 export type PolicyViolation = Readonly<{ code: "LIQUIDITY_SHORTFALL" | "MINIMUM_COVERAGE" | "STRATEGY_DISABLED" | "ALLOCATION_CAP"; severity: "REVIEW" | "BLOCKED"; message: string }>;
 export type LiquidityStep = Readonly<{ source: LiquiditySource; amount: Money }>;
 export type PaymentFeasibility = Readonly<{ obligationId: string; status: "SAFE" | "AT_RISK"; required: Money; availableAfterReserves: Money; shortfall: Money; steps: readonly LiquidityStep[] }>;
