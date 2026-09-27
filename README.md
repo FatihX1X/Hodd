@@ -1,38 +1,58 @@
 # Hodd
 
-Hodd is a liquidity-first treasury operations console for individuals, freelancers, and small businesses. It is being built for the Tameion Agents Hackathon on Arc.
+Hodd is a liquidity-first treasury operations console for individuals, freelancers, and small businesses, built for the Tameion Agents Hackathon on Arc.
 
-This repository currently contains **Stage 1 only**: a responsive, read-only product foundation using clearly labeled sample data. It does not connect to a wallet, RPC endpoint, database, LLM, Morpho vault, or payment execution service.
+This repository contains **Stage 2**: a deterministic Treasury Engine and a browser-local, editable treasury workspace. It does not connect to a wallet, RPC endpoint, database, LLM, Morpho vault, or payment execution service.
 
-## What Stage 1 includes
+## What Stage 2 includes
 
-- Portfolio view with total treasury, one Arc USDC balance, upcoming obligations, safety buffer, deployable capital, next-payment safety, sample allocation, recent activity, and agent explanations.
-- Invest view with a deliberately small strategy shelf and a review-only allocation preview.
-- Obligations view with filters and accessible read-only detail drawers.
-- Activity view with actor, rationale, policy, approval, and execution fields.
-- A runtime-validated fixture model behind a `TreasuryRepository` interface.
-- Loading, empty, stale/unavailable, error, responsive, keyboard, and reduced-motion states.
+- Exact minor-unit financial arithmetic using decimal strings and `bigint`.
+- A 30-day obligation horizon with create and edit flows for draft/upcoming obligations.
+- Deterministic protected capital, deployable capital, liquidity coverage, payment feasibility, and shortfall calculations.
+- A configurable safety buffer, minimum coverage floor, strategy caps, and fixed liquidity waterfall.
+- Engine-generated allocation previews that leave blocked or capped amounts in Liquid USDC.
+- A versioned, Zod-validated local workspace stored in the current browser.
+- Local activity records for obligation, policy, and allocation-target changes.
+- Fail-closed recovery for corrupt or unsupported saved workspace data.
 
-## Important boundaries
+## Financial rules
 
-- All values and records are sample data dated September 27, 2026.
-- Derived financial values are fixture fields; no Treasury Engine or Policy Engine runs in Stage 1.
-- No button creates a proposal, signs a message, approves a token, or submits a transaction.
-- Hodd shows one USDC balance on Arc. Native gas and the ERC-20 interface expose the same underlying USDC balance and must never be double-counted.
-- USDC values use decimal-string minor units with six decimals. JavaScript floating-point numbers are not used for monetary storage.
-- No secrets, wallet addresses, recovery files, OTPs, API keys, or entity secrets belong in this repository.
+```text
+protected capital = upcoming obligations + safety buffer + pending transactions
+deployable capital = max(total treasury - protected capital, 0)
+```
+
+Draft and paid obligations are excluded. Active and overdue obligations due within the fixed 30-day planning horizon are protected. Liquidity is evaluated in this order: Liquid USDC, Morpho, USYC, BTC-backed credit, BTC sale. Sources without an available adapter contribute zero liquidity.
+
+USDC is represented as:
+
+```ts
+type Money = {
+  currency: "USDC" | "USD";
+  minorUnits: string;
+  decimals: number;
+};
+```
+
+No JavaScript floating-point value is used to store or add monetary amounts. Arc native and ERC-20 USDC views represent one economic balance and are never double-counted.
+
+## Local workspace boundary
+
+- Data is private to the current browser profile and is not synchronized.
+- There is no authentication or multi-user database in Stage 2.
+- The workspace contains no private keys, API keys, wallet addresses, OTPs, recovery files, or entity secrets.
+- Resetting the demo workspace removes the saved local record and restores the canonical 10,000 USDC scenario.
+- Preview and policy controls cannot create proposals, signatures, approvals, deposits, withdrawals, or transfers.
 
 ## Stack
 
-- Next.js App Router and React
-- TypeScript in strict mode
-- Tailwind CSS
+- Next.js App Router, React, TypeScript strict mode, Tailwind CSS
 - Zod runtime schemas
 - Vitest and Testing Library
-- Playwright for desktop and mobile browser verification
+- Playwright desktop/mobile browser verification
 - pnpm
 
-## Run locally
+## Run and verify
 
 ```bash
 pnpm install
@@ -40,8 +60,6 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
-
-## Verify
 
 ```bash
 pnpm typecheck
@@ -52,31 +70,14 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-## Data architecture
-
-Routes are Server Components that request read-only data through `TreasuryRepository`. Interactive filters and accessible drawers are isolated Client Components. The fixture repository can later be replaced by persistent and onchain adapters without coupling screens to data files.
-
-Money is represented as:
-
-```ts
-type Money = {
-  currency: "USDC" | "USD";
-  minorUnits: string;
-  decimals: number;
-};
-```
-
 ## Integration roadmap
 
-The following stages are intentionally not implemented here:
+1. **Stage 3** — Circle treasury wallet, Arc Testnet connection, live USDC balance, wallet state, and authorization foundation.
+2. **Stage 4** — selected Morpho vault discovery, position data, deposit, withdrawal, and redeem.
+3. **Stage 5** — immutable payment proposals, approval, Arc App Kit Send, receipt tracking, and duplicate-execution protection.
+4. **Stage 6** — business-level MCP tools and natural-language intent parsing.
 
-1. Stage 2 — deterministic Treasury Engine, Policy Engine, obligation editing, liquidity waterfall, and tests.
-2. Stage 3 — Circle treasury wallet and live Arc Testnet USDC balance.
-3. Stage 4 — selected Morpho vault discovery, deposit, withdrawal, and redeem.
-4. Stage 5 — immutable payment proposals, approval, Arc App Kit Send, receipt tracking, and duplicate-execution protection.
-5. Stage 6 — business-level MCP tools and natural-language intent parsing.
-
-Current integration work must be checked against the latest official [Arc documentation](https://docs.arc.io/) and [Circle developer documentation](https://developers.circle.com/). Circle Skills are used for stable architectural guidance; changing method names, chain data, and contract addresses must be verified from live official sources before implementation.
+Before each integration stage, method names, supported chains, addresses, and SDK behavior must be checked against current official Arc and Circle documentation. Circle Skills provide architectural guidance; they are not a substitute for current API references.
 
 ## License
 

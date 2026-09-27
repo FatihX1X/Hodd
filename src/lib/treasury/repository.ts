@@ -1,31 +1,18 @@
-import type {
-  ActivityEntry,
-  AgentDecision,
-  IntegrationStatus,
-  Obligation,
-  PortfolioSnapshot,
-  StrategyPosition,
-} from "./models";
-import { demoTreasury } from "./fixtures";
+import { initialWorkspace } from "./fixtures";
+import { treasuryWorkspaceSchema, type TreasuryWorkspace } from "./models";
 
-export interface TreasuryRepository {
-  getPortfolio(): Promise<PortfolioSnapshot>;
-  listObligations(): Promise<Obligation[]>;
-  listStrategies(): Promise<StrategyPosition[]>;
-  listActivities(): Promise<ActivityEntry[]>;
-  listAgentDecisions(): Promise<AgentDecision[]>;
-  listIntegrations(): Promise<IntegrationStatus[]>;
-}
+export const WORKSPACE_STORAGE_KEY = "hodd.stage2.workspace.v1";
+export type WorkspaceLoadResult = { status: "EMPTY" | "READY"; workspace: TreasuryWorkspace } | { status: "CORRUPT"; workspace: TreasuryWorkspace; message: string };
+export interface TreasuryRepository { load(): WorkspaceLoadResult; save(workspace: TreasuryWorkspace): void; reset(): TreasuryWorkspace; }
 
-class DemoTreasuryRepository implements TreasuryRepository {
-  async getPortfolio() { return demoTreasury.portfolio; }
-  async listObligations() { return demoTreasury.obligations; }
-  async listStrategies() { return demoTreasury.strategies; }
-  async listActivities() { return demoTreasury.activities; }
-  async listAgentDecisions() { return demoTreasury.decisions; }
-  async listIntegrations() { return demoTreasury.integrations; }
-}
-
-export function getTreasuryRepository(): TreasuryRepository {
-  return new DemoTreasuryRepository();
+export class LocalTreasuryRepository implements TreasuryRepository {
+  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem">) {}
+  load(): WorkspaceLoadResult {
+    const raw = this.storage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!raw) return { status: "EMPTY", workspace: structuredClone(initialWorkspace) };
+    try { const parsed = treasuryWorkspaceSchema.safeParse(JSON.parse(raw)); return parsed.success ? { status: "READY", workspace: parsed.data } : { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved workspace failed schema validation." }; }
+    catch { return { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved workspace is not valid JSON." }; }
+  }
+  save(workspace: TreasuryWorkspace) { this.storage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(treasuryWorkspaceSchema.parse(workspace))); }
+  reset() { this.storage.removeItem(WORKSPACE_STORAGE_KEY); return structuredClone(initialWorkspace); }
 }
