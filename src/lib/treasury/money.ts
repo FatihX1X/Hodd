@@ -1,0 +1,13 @@
+import type { Money } from "./models";
+
+export class MoneyMismatchError extends Error { constructor() { super("Money values must use the same currency and decimals"); } }
+export function assertCompatible(...values: Money[]) { const first = values[0]; if (first && values.some((value) => value.currency !== first.currency || value.decimals !== first.decimals)) throw new MoneyMismatchError(); }
+export function moneyLike(template: Money, minorUnits: bigint | string): Money { return { ...template, minorUnits: minorUnits.toString() }; }
+export function addMoney(...values: Money[]): Money { if (!values.length) throw new Error("At least one money value is required"); assertCompatible(...values); return moneyLike(values[0], values.reduce((sum, value) => sum + BigInt(value.minorUnits), 0n)); }
+export function subtractMoneyFloor(value: Money, ...subtractors: Money[]): Money { assertCompatible(value, ...subtractors); const remainder = subtractors.reduce((sum, item) => sum - BigInt(item.minorUnits), BigInt(value.minorUnits)); return moneyLike(value, remainder > 0n ? remainder : 0n); }
+export function minMoney(left: Money, right: Money): Money { assertCompatible(left, right); return BigInt(left.minorUnits) <= BigInt(right.minorUnits) ? left : right; }
+export function multiplyBps(value: Money, bps: number): Money { if (!Number.isInteger(bps) || bps < 0) throw new Error("Basis points must be a non-negative integer"); return moneyLike(value, (BigInt(value.minorUnits) * BigInt(bps)) / 10_000n); }
+export function ratioBps(numerator: Money, denominator: Money): number | null { assertCompatible(numerator, denominator); const divisor = BigInt(denominator.minorUnits); if (divisor === 0n) return null; const result = (BigInt(numerator.minorUnits) * 10_000n) / divisor; return result > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(result); }
+export function parseMoneyInput(value: string, currency: Money["currency"] = "USDC", decimals = 6): Money { const match = value.trim().match(/^(\d+)(?:\.(\d+))?$/); if (!match || (match[2]?.length ?? 0) > decimals) throw new Error(`Enter a positive amount with up to ${decimals} decimals`); const minorUnits = `${match[1]}${(match[2] ?? "").padEnd(decimals, "0")}`.replace(/^0+(?=\d)/, ""); if (BigInt(minorUnits) <= 0n) throw new Error("Amount must be greater than zero"); return { currency, decimals, minorUnits }; }
+export function moneyToInput(value: Money): string { const raw = value.minorUnits.padStart(value.decimals + 1, "0"); const whole = raw.slice(0, -value.decimals) || "0"; const fraction = raw.slice(-value.decimals).replace(/0+$/, ""); return fraction ? `${whole}.${fraction}` : whole; }
+

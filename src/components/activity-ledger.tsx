@@ -22,12 +22,12 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
         <div role="group" aria-label="Filter activity by actor" className="flex flex-wrap gap-2">
           {filters.map((item) => <button key={item} onClick={() => setFilter(item)} aria-pressed={filter === item} className={clsx("border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em]", filter === item ? "border-[#164b32] bg-[#164b32] text-white" : "border-black/15 bg-[#fffdf7] text-black/55 hover:border-black/40")}>{item}</button>)}
         </div>
-        <div className="flex items-center gap-2"><span className="size-1.5 bg-[#8be0b1]" /><span className="mono text-[10px] uppercase tracking-[0.14em] text-black/45">Append-only presentation</span></div>
+        <div className="flex items-center gap-2"><span className="size-1.5 bg-[#8be0b1]" /><span className="mono text-[10px] uppercase tracking-[0.14em] text-black/45">Local audit trail</span></div>
       </div>
 
       <SectionCard>
         <SectionHeading index="04.1" title="Decision ledger" description="Expand a record to inspect rationale, policy and authorization state" />
-        {visible.length === 0 ? <EmptyState title="No matching records" description="Choose another actor type to inspect the Stage 1 sample activity." /> : (
+        {visible.length === 0 ? <EmptyState title="No matching records" description="Choose another actor type to inspect local activity." /> : (
           <div className="divide-y divide-black/10">
             {visible.map((entry) => {
               const Icon = actorIcon[entry.actor];
@@ -53,7 +53,7 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
 
       <div className="mt-6 border border-black/15 bg-[#0b0d0c] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
         <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#8be0b1]">Stage boundary</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
-        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Future transaction records must include a confirmed state and transaction hash. Stage 1 intentionally contains neither.</p>
+        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Future transaction records must include a confirmed state and transaction hash. Stage 2 creates local calculation records only.</p>
       </div>
     </div>
   );
