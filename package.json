@@ -1,0 +1,43 @@
+{
+  "name": "hodd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint src tests next.config.ts playwright.config.ts vitest.config.ts vitest.setup.ts eslint.config.mjs postcss.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "latest",
+    "clsx": "latest",
+    "lucide-react": "latest",
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@tailwindcss/postcss": "latest",
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
+    "@testing-library/user-event": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.3.6",
+    "jsdom": "latest",
+    "tailwindcss": "latest",
+    "typescript": "^6.0.0",
+    "vitest": "latest"
+  },
+  "packageManager": "pnpm@11.19.0"
+}
