@@ -1,11 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-const routes = [["/", "Liquidity before yield."], ["/invest", "Review idle capital."], ["/obligations", "Know what is due."], ["/activity", "Every decision leaves a trace."]] as const;
+const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
+test.beforeEach(async ({ page }) => { await page.route("**/api/earn/portfolio*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(earnReadOnlyResponse) })); });
+
+const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/activity", "Every decision leaves a trace."]] as const;
 for (const [route, heading] of routes) {
   test(`${route} renders without console errors or horizontal overflow`, async ({ page }) => {
     const errors: string[] = []; page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(route); await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|apys remain|entries are stored/i);
+    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|quotes and approvals/i);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false); expect(errors).toEqual([]);
   });
 }
@@ -22,7 +25,7 @@ test("obligation create, edit and persistence recalculate capital", async ({ pag
 
 test("policy changes persist and update engine metrics", async ({ page }) => {
   await page.goto("/"); await page.getByRole("button", { name: /edit policy/i }).click(); await page.getByLabel("Safety buffer").fill("1500"); await page.getByRole("button", { name: /save policy and recalculate/i }).click();
-  await expect(page.getByText("4,000.00 USDC", { exact: true })).toBeVisible(); await page.reload(); await expect(page.getByText("4,000.00 USDC", { exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByText("4,000.00 USDC", { exact: true })).toBeVisible(); await page.reload(); await expect(page.getByRole("main").getByText("4,000.00 USDC", { exact: true })).toBeVisible();
 });
 
 test("investment target validation and preview remain non-executable", async ({ page }) => {
@@ -31,7 +34,7 @@ test("investment target validation and preview remain non-executable", async ({ 
 });
 
 test("corrupt storage fails closed and can be reset", async ({ page }) => {
-  await page.goto("/"); await page.evaluate(() => localStorage.setItem("hodd.stage3.workspace.v2", "not-json")); await page.reload();
+  await page.goto("/"); await page.evaluate(() => localStorage.setItem("hodd.stage4.workspace.v3", "not-json")); await page.reload();
   const recovery = page.getByRole("alert").filter({ hasText: "No saved value was used" }); await expect(recovery).toBeVisible(); await page.getByRole("button", { name: /reset demo workspace/i }).click(); await expect(recovery).toHaveCount(0);
 });
 

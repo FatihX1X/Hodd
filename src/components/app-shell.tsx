@@ -16,8 +16,10 @@ const navigation = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { workspace, walletState } = useTreasuryWorkspace();
+  const { workspace, walletState, earnState } = useTreasuryWorkspace();
   const liveMode = workspace.treasuryMode === "ARC_TESTNET_WALLET";
+  const localEarnExecution = earnState.status === "READY" && earnState.portfolio.integration.execution === "LOCAL_ENABLED" && workspace.walletConnection?.provider === "CIRCLE_DEVELOPER_CONTROLLED_WALLET";
+  const walletLabel = workspace.walletConnection?.provider === "CIRCLE_DEVELOPER_CONTROLLED_WALLET" ? "Developer-Controlled Wallet" : "Agent Wallet";
 
   return (
     <div className="min-h-screen bg-[#f3f0e8] lg:grid lg:grid-cols-[244px_1fr]">
@@ -46,8 +48,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="mt-auto border-t border-white/10 p-5">
           <div className="border border-white/10 bg-white/[0.03] p-4">
-            <div className="flex items-center gap-2 text-xs text-[#b7f3cf]"><span className="size-1.5 bg-[#8be0b1]" />{liveMode ? "Arc Testnet · read-only" : "Local demo workspace"}</div>
-            <p className="mt-2 text-xs leading-5 text-white/45">{liveMode ? walletState.status === "READY" ? "Live USDC balance · signing disabled" : "Live balance unavailable · engine paused" : "Treasury Engine · no funds can move"}</p>
+            <div className="flex items-center gap-2 text-xs text-[#b7f3cf]"><span className="size-1.5 bg-[#8be0b1]" />{liveMode ? `Arc Testnet · ${localEarnExecution ? "local Earn enabled" : "read-only"}` : "Local demo workspace"}</div>
+            <p className="mt-2 text-xs leading-5 text-white/45">{liveMode ? walletState.status === "READY" ? localEarnExecution ? "Live balances · explicit confirmation required" : "Live reads · hosted writes disabled" : "Live balance unavailable · engine paused" : "Treasury Engine · no funds can move"}</p>
           </div>
           <a href="https://docs.arc.io/" target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-between text-xs text-white/45 hover:text-white">
             Arc documentation <ArrowUpRight aria-hidden="true" className="size-3.5" />
@@ -62,9 +64,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="font-semibold tracking-[-0.03em]">Hodd</span>
           </Link>
           <div className="hidden items-center gap-3 lg:flex">
-            <span className="mono text-[10px] uppercase tracking-[0.18em] text-black/45">{liveMode ? "Circle Agent Wallet" : "Local workspace"}</span>
+            <span className="mono text-[10px] uppercase tracking-[0.18em] text-black/45">{liveMode ? walletLabel : "Local workspace"}</span>
             <span className="h-3 w-px bg-black/15" />
-            <span className="text-xs text-black/55">{liveMode ? "Read-only · no signing" : "Editable · no funds can move"}</span>
+            <span className="text-xs text-black/55">{liveMode ? localEarnExecution ? "Local Earn · server signing" : "Read-only · no signing" : "Editable · no funds can move"}</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="hidden text-xs text-black/45 sm:inline">Updated {formatDate(workspace.updatedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>

@@ -22,7 +22,7 @@ export function DemoNotice({ children }: { children?: React.ReactNode }) {
     <div className="border-b border-black/15 bg-[#dff5e8] px-5 py-3 md:px-8 lg:px-10" role="note">
       <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#164b32]">
         <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#164b32]" />
-        {children ?? "Local Stage 2 workspace. Deterministic policy calculations run in-browser; no wallet, protocol or transaction execution is connected."}
+        {children ?? "Stage 4 keeps hosted builds read-only. Local Earn execution requires a configured Developer-Controlled Wallet, a fresh quote and explicit confirmation."}
       </div>
     </div>
   );

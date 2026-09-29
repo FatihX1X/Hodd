@@ -9,7 +9,7 @@ export default function ActivityPage() {
   return (
     <>
       <PageHeader eyebrow="04 · Activity" title="Every decision leaves a trace." description="A local audit view showing workspace changes, rationale, policy state and execution boundaries." />
-      <DemoNotice>Entries are stored in this browser. Wallet events are local audit records; no onchain transaction has been submitted.</DemoNotice>
+      <DemoNotice>Quotes and approvals are local audit records. A transaction hash appears only when Circle App Kit returns a confirmed Arc Testnet receipt.</DemoNotice>
       <ActivityLedger activities={workspace.activities} />
     </>
   );

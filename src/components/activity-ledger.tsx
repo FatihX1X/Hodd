@@ -42,7 +42,7 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
                   <div className="grid gap-px border-t border-black/10 bg-black/10 sm:grid-cols-3">
                     <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Why this record exists</p><p className="mt-3 text-xs leading-5 text-black/60">{entry.reason}</p></div>
                     <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Policy state</p><div className="mt-3"><PolicyPill policy={entry.policy} /></div><p className="mt-3 text-xs leading-5 text-black/60">{entry.policy.reason}</p></div>
-                    <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p><p className="mt-3 text-xs leading-5 text-black/60">No signature, wallet request or onchain submission exists.</p></div>
+                    <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p>{entry.transactionHash && entry.explorerUrl ? <><p className="mono mt-3 break-all text-[10px] text-black/60">{entry.transactionHash}</p><a href={entry.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-semibold text-[#164b32] underline">Open onchain receipt</a></> : <p className="mt-3 text-xs leading-5 text-black/60">Local audit record only. No onchain receipt is attached.</p>}</div>
                   </div>
                 </details>
               );
@@ -53,7 +53,7 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
 
       <div className="mt-6 border border-black/15 bg-[#0b0d0c] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
         <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#8be0b1]">Stage boundary</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
-        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Future transaction records must include a confirmed state and transaction hash. Stage 2 creates local calculation records only.</p>
+        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Stage 4 attaches a real hash and explorer URL only after App Kit returns a confirmed result. Quotes, approvals and failures remain clearly labeled local audit records.</p>
       </div>
     </div>
   );
