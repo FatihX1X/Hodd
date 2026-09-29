@@ -13,18 +13,20 @@ export const liquiditySourceSchema = z.enum(["LIQUID_USDC", "MORPHO", "USYC", "B
 export const strategyPositionSchema = z.object({
   id: z.string(), name: z.string(), kind: strategyKindSchema, balance: moneySchema, redeemable: moneySchema,
   apyBps: z.number().int().nullable(), risk: z.enum(["LOW", "MODERATE", "HIGH"]),
-  liquidity: z.enum(["INSTANT", "VARIABLE", "RESTRICTED"]), integration: z.enum(["DEMO", "UNAVAILABLE", "FUTURE"]),
+  liquidity: z.enum(["INSTANT", "VARIABLE", "RESTRICTED"]), integration: z.enum(["DEMO", "LIVE", "UNAVAILABLE", "FUTURE"]),
 });
 export const policyResultSchema = z.object({ status: z.enum(["PASS", "REVIEW", "BLOCKED", "NOT_EVALUATED"]), label: z.string(), reason: z.string() });
 export const activityEntrySchema = z.object({
   id: z.string(), occurredAt: z.string().datetime(), actor: z.enum(["HUMAN", "AGENT", "SYSTEM"]), action: z.string(), summary: z.string(), reason: z.string(),
   policy: policyResultSchema, approval: z.enum(["NOT_REQUIRED", "PENDING", "APPROVED", "DENIED"]),
-  execution: z.enum(["LOCAL_ONLY", "DEMO_ONLY", "NOT_STARTED", "COMPLETE", "FAILED"]),
+  execution: z.enum(["LOCAL_ONLY", "DEMO_ONLY", "NOT_STARTED", "SUBMITTED", "COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"]),
+  transactionHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+  explorerUrl: z.string().url().optional(),
 });
 export const agentDecisionSchema = z.object({ id: z.string(), createdAt: z.string().datetime(), title: z.string(), summary: z.string(), rationale: z.string(), policy: policyResultSchema });
 export const integrationStatusSchema = z.object({ name: z.string(), status: z.enum(["DEMO", "NOT_CONNECTED", "UNAVAILABLE", "FUTURE"]), message: z.string() });
 export const walletConnectionSchema = z.object({
-  provider: z.literal("CIRCLE_AGENT_WALLET"),
+  provider: z.enum(["CIRCLE_AGENT_WALLET_READ_ONLY", "CIRCLE_DEVELOPER_CONTROLLED_WALLET"]),
   chain: z.literal("ARC-TESTNET"),
   chainId: z.literal(5_042_002),
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
@@ -53,8 +55,17 @@ const treasuryWorkspaceFields = {
   activities: z.array(activityEntrySchema), decisions: z.array(agentDecisionSchema), integrations: z.array(integrationStatusSchema),
 };
 export const legacyTreasuryWorkspaceSchema = z.object({ schemaVersion: z.literal(1), ...treasuryWorkspaceFields });
-export const treasuryWorkspaceSchema = z.object({
+export const stage2TreasuryWorkspaceSchema = z.object({
   schemaVersion: z.literal(2),
+  treasuryMode: z.enum(["LOCAL_DEMO", "ARC_TESTNET_WALLET"]),
+  walletConnection: z.object({
+    provider: z.literal("CIRCLE_AGENT_WALLET"), chain: z.literal("ARC-TESTNET"), chainId: z.literal(5_042_002),
+    address: z.string().regex(/^0x[a-fA-F0-9]{40}$/), label: z.string().trim().min(1).max(60), connectedAt: z.string().datetime(),
+  }).nullable(),
+  ...treasuryWorkspaceFields,
+});
+export const treasuryWorkspaceSchema = z.object({
+  schemaVersion: z.literal(3),
   treasuryMode: z.enum(["LOCAL_DEMO", "ARC_TESTNET_WALLET"]),
   walletConnection: walletConnectionSchema.nullable(),
   ...treasuryWorkspaceFields,

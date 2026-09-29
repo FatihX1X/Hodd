@@ -2,7 +2,7 @@ import { treasuryWorkspaceSchema, type Money } from "./models";
 
 export const usdc = (minorUnits: string): Money => ({ currency: "USDC", minorUnits, decimals: 6 });
 export const initialWorkspace = treasuryWorkspaceSchema.parse({
-  schemaVersion: 2, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: "2026-09-27T09:30:00.000Z", totalTreasury: usdc("10000000000"), liquidUsdc: usdc("10000000000"), pendingTransactions: usdc("0"),
+  schemaVersion: 3, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: "2026-09-27T09:30:00.000Z", totalTreasury: usdc("10000000000"), liquidUsdc: usdc("10000000000"), pendingTransactions: usdc("0"),
   policy: { safetyBuffer: usdc("1000000000"), minimumLiquidityCoverageBps: 10000, obligationHorizonDays: 30,
     strategyCapsBps: { LIQUID: 10000, MORPHO: 6000, USYC: 0, BTC_RESERVE: 0 }, enabledStrategies: { LIQUID: true, MORPHO: true, USYC: false, BTC_RESERVE: false },
     liquidityWaterfall: ["LIQUID_USDC", "MORPHO", "USYC", "BTC_CREDIT", "BTC_SALE"] },
@@ -26,7 +26,7 @@ export const initialWorkspace = treasuryWorkspaceSchema.parse({
   integrations: [
     { name: "Circle Agent Wallet", status: "NOT_CONNECTED", message: "Ready to link a public Circle Agent Wallet address. Signing remains outside Hodd." },
     { name: "Arc Testnet", status: "NOT_CONNECTED", message: "A server-only read adapter is ready; no RPC request is made until a wallet is linked." },
-    { name: "Morpho", status: "UNAVAILABLE", message: "Vault discovery and execution are planned for Stage 4." },
+    { name: "Morpho", status: "NOT_CONNECTED", message: "Arc Earn vault discovery is live. Position reads and local execution require a configured Circle Developer-Controlled Wallet." },
   ],
 });
 export const demoTreasury = initialWorkspace;

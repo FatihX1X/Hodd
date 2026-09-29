@@ -18,7 +18,7 @@ export function buildWaterfall(required: Money, sources: readonly { source: Liqu
 function liquiditySources(workspace: TreasuryWorkspace) {
   const sourceMap: Record<LiquiditySource, Money> = { LIQUID_USDC: workspace.liquidUsdc, MORPHO: zero(workspace.liquidUsdc), USYC: zero(workspace.liquidUsdc), BTC_CREDIT: zero(workspace.liquidUsdc), BTC_SALE: zero(workspace.liquidUsdc) };
   for (const strategy of workspace.strategies) {
-    if (strategy.kind === "MORPHO" && strategy.integration === "DEMO") sourceMap.MORPHO = strategy.redeemable;
+    if (strategy.kind === "MORPHO" && (strategy.integration === "DEMO" || strategy.integration === "LIVE")) sourceMap.MORPHO = strategy.redeemable;
     if (strategy.kind === "USYC" && strategy.integration === "DEMO") sourceMap.USYC = strategy.redeemable;
     if (strategy.kind === "BTC_RESERVE" && strategy.integration === "DEMO") sourceMap.BTC_SALE = strategy.redeemable;
   }
@@ -59,4 +59,3 @@ export function previewAllocation(workspace: TreasuryWorkspace, assessment = ass
   const approvedRisk = addMoney(zero(deployable), ...lines.map((line) => line.approved));
   return { deployableCapital: deployable, lines, unallocatedToLiquid: subtractMoneyFloor(deployable, approvedRisk), violations, status: violations.length ? "REVIEW" : "PASS" };
 }
-
