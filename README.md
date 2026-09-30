@@ -1,111 +1,78 @@
 # Hodd
 
-Hodd is a liquidity-first treasury operations console for individuals, freelancers, and small businesses, built for the Tameion Agents Hackathon on Arc.
+Hodd is a liquidity-first treasury console for individuals and small businesses on Arc Testnet.
 
-This repository contains **Stage 4**: the deterministic Treasury Engine plus live Arc Testnet Morpho Earn discovery, wallet positions, quotes, deposits, partial withdrawals, and redeem-all through Circle App Kit. Hosted builds and production remain permanently read-only; real writes are available only on a loopback local development server with an explicitly configured Circle Developer-Controlled Wallet.
+The wallet ownership update adds user choice: Circle Embedded (Hodd email/Google sign-in plus Circle PIN), Circle Passkey (WebAuthn), or an existing MetaMask/Rabby wallet. One selected wallet is authoritative at a time. Funds remain in that wallet; balances are never pooled into the previous developer-controlled treasury.
 
-## Stage 4 capabilities
+## Current capabilities
 
-- Exact minor-unit arithmetic using decimal strings and `bigint`; monetary decisions never use floating point or an LLM.
-- Versioned, Zod-validated browser workspace v3 with safe migration from Stage 2 and Stage 3 records.
-- Live canonical Arc Testnet USDC reads and a single authoritative treasury wallet.
-- Live Morpho USDC vault discovery through `@circle-fin/app-kit`, constrained by a server allowlist.
-- Live APY, vault liquidity, wallet positions, shares, P&L state, and fresh maximum-withdrawable data.
-- Treasury totals that combine liquid USDC and Morpho position value without double-counting Arc's native and ERC-20 USDC views.
-- Redeemable Morpho liquidity equal to the minimum of position value, fresh maximum withdrawal, and vault liquidity. Unavailable data contributes zero liquidity.
-- Deposit, partial withdraw, and redeem-all flows using quote → deterministic policy result → separate explicit confirmation.
-- Short-lived, random, single-use server quote identifiers. Changed client payloads cannot alter the stored executable quote.
-- Real transaction hashes only after Circle App Kit returns a confirmed result; ambiguous failures are never retried automatically.
-- Local audit records kept distinct from onchain receipts.
+- Deterministic Treasury Engine with integer minor-unit arithmetic, obligations, policy and allocation previews.
+- Workspace schema v4; migration preserves policy and obligations while disconnecting legacy shared wallets.
+- Public Arc Testnet USDC and ERC-4626 Morpho position reads for any selected wallet.
+- Circle App Kit vault discovery, canonical USDC and a verified vault allowlist.
+- Supabase SSR email/Google authentication and owner-scoped workspace persistence.
+- Guest and authenticated local caches use separate keys. Account changes clear the in-memory signer.
+- Supabase RLS limits each user to their own rows. No service-role key is used.
 
-## Financial and policy rules
+**Earn transaction execution is paused during the user-owned signer migration.** Existing server quote/execute routes reject requests, including development requests with the old feature flag. Browser adapters are connected in memory; Circle PIN and passkey wallets currently connect for public reads. The user-owned quote/policy/confirmation flow must be verified before deposit/withdraw/redeem are enabled. Legacy developer-wallet signing code has been removed.
 
-```text
-protected capital = upcoming obligations + safety buffer + pending transactions
-deployable capital = max(total treasury - protected capital, 0)
-```
-
-Deposits are limited by both deployable capital and the Morpho strategy cap. The amount plus the quote's fee reserve must fit the lower limit. Withdraw and redeem operations are not blocked by an allocation cap, but cannot exceed the current redeemable position. APY is display and sorting data only.
-
-Draft and paid obligations are excluded. Active and overdue obligations due within the fixed 30-day horizon are protected. The deterministic liquidity waterfall remains Liquid USDC → Morpho → USYC → BTC-backed credit → BTC sale; unavailable adapters contribute zero.
-
-Arc Testnet uses chain ID `5042002`. Canonical 6-decimal USDC is `0x3600000000000000000000000000000000000000`. Arc's native 18-decimal gas view and ERC-20 interface represent one economic USDC balance and are never counted separately.
-
-## Verified vault allowlist
-
-Hodd does not accept an arbitrary vault address. `src/lib/earn/allowlist.ts` contains a versioned server allowlist selected from live official discovery after checking Arc Testnet, Morpho, canonical USDC, active status, liquidity, risk warnings, bytecode, and the verification block. Runtime discovery must still match those properties or the integration fails closed.
-
-The allowlist is intentionally small and is not an endorsement or guarantee. Vault APY can change, liquidity can fall, smart contracts can fail, and withdrawals can be partial. Review the live warnings and quote before confirming.
-
-## Local execution setup
-
-Copy `.env.example` to the git-ignored `.env.local` and fill it locally:
-
-```dotenv
-CIRCLE_API_KEY=
-CIRCLE_ENTITY_SECRET=
-CIRCLE_WALLET_ADDRESS=0x...
-HODD_EARN_EXECUTION_ENABLED=true
-```
-
-- `CIRCLE_API_KEY`: Circle testnet Developer Services API key.
-- `CIRCLE_ENTITY_SECRET`: registered Developer-Controlled Wallet entity secret.
-- `CIRCLE_WALLET_ADDRESS`: public Arc Testnet address of that wallet.
-- `HODD_EARN_EXECUTION_ENABLED`: non-secret local execution switch.
-
-The address in Hodd must exactly match the configured wallet. API keys and entity secrets are loaded only by `server-only` modules and must never be pasted into the UI, chat, logs, source control, or localStorage. Hodd never requests a private key, seed phrase, OTP, or recovery file.
-
-Execution routes additionally require `NODE_ENV=development`, a loopback host, same-origin JSON, and explicit confirmation. Production rejects writes even if the feature flag is set. First deposits may require an approval plus the deposit transaction; the UI makes this multi-step possibility explicit.
-
-If the existing Circle wallet is an Agent Wallet, create and fund an Arc Testnet Developer-Controlled Wallet in Circle Console before enabling writes. Read-only Agent Wallet addresses remain supported but cannot sign through Hodd.
-
-## Redeem-all behavior
-
-Redeem all obtains a fresh position and maximum-withdrawable quote, submits one withdrawal, then reads the position again. If shares remain, Hodd reports `PARTIAL/REVIEW`; it never submits a second transaction automatically. If the post-transaction position cannot be verified, status is `UNKNOWN` and the user must inspect the wallet and explorer before doing anything else.
-
-## Persistence and boundaries
-
-- Browser workspace data is local to one profile and is not synchronized.
-- There is no authentication or multi-user database.
-- The browser stores only public wallet metadata, policy, obligations, and audit records.
-- Reset restores the canonical 10,000 USDC demo workspace.
-- Allocation previews remain read-only and never create an Earn transaction.
-- Stage 4 does not implement payment proposals or Send execution; those remain Stage 5 work.
-
-## Stack
-
-- Next.js App Router, React, strict TypeScript, Tailwind CSS
-- Circle App Kit and Circle Wallets adapter
-- Zod runtime schemas
-- Vitest, Testing Library, and Playwright
-- pnpm
-
-## Run and verify
+## Setup
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Copy `.env.example` to git-ignored `.env.local`. Configure:
+
+- `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` from your Supabase project.
+- `CIRCLE_API_KEY` as a server-only Circle testnet API key for user-controlled wallet sessions.
+- `NEXT_PUBLIC_CIRCLE_APP_ID` from Circle User-Controlled Wallet configuration.
+- `NEXT_PUBLIC_CLIENT_KEY` from Circle Modular Wallet Client Keys, restricted to the intended domain.
+- `NEXT_PUBLIC_CLIENT_URL` defaults to the official Modular RPC endpoint.
+
+An entity secret, private key or seed phrase is not required for these user-owned wallet choices. End users connect through the browser, PIN or passkey; they do not run Circle CLI.
+
+The Hodd Supabase project is provisioned in Frankfurt (`eu-central-1`) on the Free plan. Migration `20260930070053_user_owned_treasury.sql` matches the applied remote migration. Both tables have owner RLS; live SQL tests verified cross-owner reads, updates and inserts are rejected, and the security advisor returned no findings.
+
+Enable Email Auth and optionally Google, and allow `/auth/callback` for your local/hosted origins. For SSR email confirmation use `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email` in the Supabase email template. Set Site URL to the intended app origin. Google OAuth uses `/auth/callback`. The schema explicitly grants authenticated Data API access and enables owner RLS.
+
+In Circle Console configure the User-Controlled Wallet App ID, Modular Client Key and Passkey Domain. Passkeys are bound to that domain. Sessions are deliberately memory-only and require reconnecting after refresh. Recovery is managed through the wallet provider; no private keys or PINs are stored in the workspace.
+
+For hosting, configure environment variables in the host project. `.env.local` stays on your machine. Public-prefixed configuration is included in the browser bundle; the Circle API key stays server-side. This change does not deploy the application.
+
+## Persistence
+
+Guests use a local demo workspace. Signed-in users load their own cloud record and a separate local cache. Changes are saved locally first and synchronized to Supabase; a visible message reports failed sync. Offline edits can be restored from the same account's cache. Concurrent multi-device editing is last-write-wins; local activity is not a tamper-proof audit ledger. Wallet addresses are public metadata, not proof of wallet ownership for server authorization.
+
+## Financial rules
+
+```text
+protected capital = obligations within 30 days + safety buffer + pending transactions
+deployable capital = max(total treasury - protected capital, 0)
+```
+
+Draft/paid obligations are excluded. Active overdue obligations are included. APY is for display only. Morpho redeemable liquidity is the minimum of position value, `maxWithdraw` and vault liquidity. Public reads use one block per position. Missing/stale positions contribute no redeemable liquidity and are labeled unavailable. P&L is unavailable without principal history.
+
+Arc Testnet chain ID is `5042002`; canonical 6-decimal USDC is `0x3600000000000000000000000000000000000000`. The native gas and ERC-20 views represent one economic USDC balance and are counted once.
+
+## Verification
 
 ```bash
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-pnpm exec playwright install chromium
 pnpm test:e2e
 pnpm audit --prod
 ```
 
-## Roadmap
+Live authentication, passkey/PIN provisioning, database RLS and wallet execution require configured projects and provider settings. Automated tests use mocks for provider APIs.
 
-1. **Stage 5** — immutable payment proposals, approval, Arc App Kit Send, receipt tracking, and duplicate-execution protection.
-2. **Stage 6** — business-level MCP tools and natural-language intent parsing. Financial calculation, validation, and transaction amount selection remain deterministic.
+Dependency audit: patched `undici` and `uuid` transitives. One low-severity [elliptic advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84) remains through Circle/Ethers dependencies; the reported fix `6.6.2` is not published in the registry. Audit does not currently pass cleanly.
 
-Before each integration stage, method names, supported chains, addresses, and SDK behavior must be checked against current official Arc, Circle, and Morpho documentation.
+## Next work
 
-## License
+Complete and verify the user-owned Earn signing flow, then payment proposals/approval/Send and receipt tracking. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
 
 MIT — see [LICENSE](./LICENSE).

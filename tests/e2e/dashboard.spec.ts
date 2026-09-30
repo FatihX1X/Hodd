@@ -34,16 +34,41 @@ test("investment target validation and preview remain non-executable", async ({ 
 });
 
 test("corrupt storage fails closed and can be reset", async ({ page }) => {
-  await page.goto("/"); await page.evaluate(() => localStorage.setItem("hodd.stage4.workspace.v3", "not-json")); await page.reload();
+  await page.goto("/"); await page.evaluate(() => localStorage.setItem("hodd.stage5.workspace.v4", "not-json")); await page.reload();
   const recovery = page.getByRole("alert").filter({ hasText: "No saved value was used" }); await expect(recovery).toBeVisible(); await page.getByRole("button", { name: /reset demo workspace/i }).click(); await expect(recovery).toHaveCount(0);
 });
 
 test("portfolio reflows at the 200 percent equivalent viewport", async ({ page }) => { await page.setViewportSize({ width: 640, height: 900 }); await page.goto("/"); expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false); await expect(page.getByRole("heading", { name: "Liquidity before yield." })).toBeVisible(); });
 test("activity details are keyboard accessible", async ({ page }) => { await page.goto("/activity"); const disclosure = page.locator("summary").filter({ hasText: "Treasury Engine baseline evaluated" }).first(); await disclosure.focus(); await disclosure.press("Enter"); await expect(page.getByText("Why this record exists").first()).toBeVisible(); });
 
-test("a linked wallet makes verified Arc USDC authoritative without enabling execution", async ({ page }) => {
-  await page.route("**/api/arc/treasury?address=*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "READY", snapshot: { address: "0x0000000000000000000000000000000000000001", chain: "ARC-TESTNET", chainId: 5_042_002, balance: { currency: "USDC", minorUnits: "20000000", decimals: 6 }, blockNumber: "42", observedAt: "2026-09-27T12:00:00.000Z" } }) }));
-  await page.goto("/"); const trigger = page.getByRole("button", { name: /connect wallet/i }); await trigger.click(); await page.getByLabel("Public Arc Testnet address").fill("0x0000000000000000000000000000000000000001"); await page.getByRole("button", { name: /link public address/i }).click();
-  await expect(page.getByText("20.00 USDC").first()).toBeVisible(); await expect(page.getByText(/signing: disabled/i)).toBeVisible(); await expect(page.getByText(/execution: disabled/i)).toBeVisible(); await expect(page.getByText("AT RISK")).toBeVisible();
-  await page.reload(); await expect(page.getByText("20.00 USDC").first()).toBeVisible();
+test("wallet selection supports all user-owned providers", async ({ page }) => {
+  await page.goto("/"); const trigger = page.getByRole("button", { name: /choose wallet/i }); await trigger.click();
+  for (const name of ["Circle Passkey", "Circle Embedded", "Browser wallet"]) await expect(page.getByRole("heading", { name })).toBeVisible();
+  await expect(page.getByRole("button", { name: "MetaMask" })).toBeVisible(); await expect(page.getByRole("button", { name: "Rabby" })).toBeVisible();
+  await page.getByRole("button", { name: /close wallet dialog/i }).click(); await expect(trigger).toBeFocused();
+});
+test("legacy execution routes reject every request", async ({ request }) => {
+  for (const path of ["/api/earn/quote", "/api/earn/execute", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
+    const response = await request.post(path, { data: {} }); expect(response.status()).toBe(403);
+  }
+});
+
+test("browser wallet connection uses its account balance and survives refresh as read-only metadata", async ({ page }) => {
+  const address = "0x0000000000000000000000000000000000000001";
+  await page.addInitScript(({ address }) => {
+    Object.defineProperty(window, "ethereum", { value: {
+      isMetaMask: true,
+      request: async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0x4cef52";
+        if (method === "eth_accounts" || method === "eth_requestAccounts") return [address];
+        throw new Error(`Unexpected wallet request: ${method}`);
+      },
+      on: () => undefined,
+      removeListener: () => undefined,
+    } });
+  }, { address });
+  await page.route("**/api/arc/treasury?address=*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "READY", snapshot: { address, chain: "ARC-TESTNET", chainId: 5_042_002, balance: { currency: "USDC", minorUnits: "20000000", decimals: 6 }, blockNumber: "42", observedAt: "2026-09-30T12:00:00.000Z" } }) }));
+  await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask" }).click();
+  await expect(page.getByText("Custody: user")).toBeVisible(); await expect(page.getByText("20.00 USDC").first()).toBeVisible();
+  await page.reload(); await expect(page.getByText("20.00 USDC").first()).toBeVisible(); await expect(page.getByText("Signer session: reconnect required")).toBeVisible();
 });
