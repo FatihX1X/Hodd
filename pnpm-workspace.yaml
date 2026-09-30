@@ -1,10 +1,13 @@
 allowBuilds:
   bufferutil: false
+  protobufjs: true
   unrs-resolver: true
   utf-8-validate: false
 onlyBuiltDependencies:
   - unrs-resolver
 overrides:
+  undici@6: 6.28.1
+  '@circle-fin/w3s-pw-web-sdk>uuid': 11.1.1
   toml: 4.2.0
   jayson>uuid: 11.1.1
   jayson>stream-json: 3.7.0

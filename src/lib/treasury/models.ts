@@ -26,7 +26,10 @@ export const activityEntrySchema = z.object({
 export const agentDecisionSchema = z.object({ id: z.string(), createdAt: z.string().datetime(), title: z.string(), summary: z.string(), rationale: z.string(), policy: policyResultSchema });
 export const integrationStatusSchema = z.object({ name: z.string(), status: z.enum(["DEMO", "NOT_CONNECTED", "UNAVAILABLE", "FUTURE"]), message: z.string() });
 export const walletConnectionSchema = z.object({
-  provider: z.enum(["CIRCLE_AGENT_WALLET_READ_ONLY", "CIRCLE_DEVELOPER_CONTROLLED_WALLET"]),
+  provider: z.enum(["CIRCLE_USER_CONTROLLED", "CIRCLE_MODULAR", "INJECTED_METAMASK", "INJECTED_RABBY"]),
+  custody: z.literal("USER_CONTROLLED"),
+  accountType: z.enum(["EOA", "SCA", "MSCA"]),
+  walletId: z.string().min(1).max(128).optional(),
   chain: z.literal("ARC-TESTNET"),
   chainId: z.literal(5_042_002),
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
@@ -64,8 +67,18 @@ export const stage2TreasuryWorkspaceSchema = z.object({
   }).nullable(),
   ...treasuryWorkspaceFields,
 });
-export const treasuryWorkspaceSchema = z.object({
+export const stage4TreasuryWorkspaceSchema = z.object({
   schemaVersion: z.literal(3),
+  treasuryMode: z.enum(["LOCAL_DEMO", "ARC_TESTNET_WALLET"]),
+  walletConnection: z.object({
+    provider: z.enum(["CIRCLE_AGENT_WALLET_READ_ONLY", "CIRCLE_DEVELOPER_CONTROLLED_WALLET"]),
+    chain: z.literal("ARC-TESTNET"), chainId: z.literal(5_042_002), address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+    label: z.string().trim().min(1).max(60), connectedAt: z.string().datetime(),
+  }).nullable(),
+  ...treasuryWorkspaceFields,
+});
+export const treasuryWorkspaceSchema = z.object({
+  schemaVersion: z.literal(4),
   treasuryMode: z.enum(["LOCAL_DEMO", "ARC_TESTNET_WALLET"]),
   walletConnection: walletConnectionSchema.nullable(),
   ...treasuryWorkspaceFields,

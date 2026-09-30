@@ -2,7 +2,7 @@ import { treasuryWorkspaceSchema, type Money } from "./models";
 
 export const usdc = (minorUnits: string): Money => ({ currency: "USDC", minorUnits, decimals: 6 });
 export const initialWorkspace = treasuryWorkspaceSchema.parse({
-  schemaVersion: 3, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: "2026-09-27T09:30:00.000Z", totalTreasury: usdc("10000000000"), liquidUsdc: usdc("10000000000"), pendingTransactions: usdc("0"),
+  schemaVersion: 4, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: "2026-09-27T09:30:00.000Z", totalTreasury: usdc("10000000000"), liquidUsdc: usdc("10000000000"), pendingTransactions: usdc("0"),
   policy: { safetyBuffer: usdc("1000000000"), minimumLiquidityCoverageBps: 10000, obligationHorizonDays: 30,
     strategyCapsBps: { LIQUID: 10000, MORPHO: 6000, USYC: 0, BTC_RESERVE: 0 }, enabledStrategies: { LIQUID: true, MORPHO: true, USYC: false, BTC_RESERVE: false },
     liquidityWaterfall: ["LIQUID_USDC", "MORPHO", "USYC", "BTC_CREDIT", "BTC_SALE"] },
@@ -24,9 +24,9 @@ export const initialWorkspace = treasuryWorkspaceSchema.parse({
   ],
   decisions: [{ id: "decision-1", createdAt: "2026-09-27T09:30:00.000Z", title: "Preserve the payment runway", summary: "Keep obligations and the safety buffer protected before reviewing any investment.", rationale: "Payment readiness has priority over yield.", policy: { status: "PASS", label: "Liquidity check", reason: "Protected capital is calculated by the Treasury Engine." } }],
   integrations: [
-    { name: "Circle Agent Wallet", status: "NOT_CONNECTED", message: "Ready to link a public Circle Agent Wallet address. Signing remains outside Hodd." },
+    { name: "User wallet", status: "NOT_CONNECTED", message: "Choose Circle embedded, passkey, MetaMask or Rabby. The selected wallet remains user-controlled." },
     { name: "Arc Testnet", status: "NOT_CONNECTED", message: "A server-only read adapter is ready; no RPC request is made until a wallet is linked." },
-    { name: "Morpho", status: "NOT_CONNECTED", message: "Arc Earn vault discovery is live. Position reads and local execution require a configured Circle Developer-Controlled Wallet." },
+    { name: "Morpho", status: "NOT_CONNECTED", message: "Arc Earn vault discovery and public position reads are available after a user wallet is connected." },
   ],
 });
 export const demoTreasury = initialWorkspace;

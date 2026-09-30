@@ -1,15 +1,17 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { getAddress } from "viem";
-import { walletApiResponseSchema, walletAddressInputSchema } from "@/lib/arc/schemas";
+import { walletApiResponseSchema } from "@/lib/arc/schemas";
 import { earnPortfolioApiSchema, type EarnExecutionResult, type EarnPortfolioResponse } from "@/lib/earn/models";
 import { assessTreasury, previewAllocation } from "@/lib/treasury/engine";
 import { initialWorkspace } from "@/lib/treasury/fixtures";
 import { LocalTreasuryRepository } from "@/lib/treasury/repository";
 import { formatMoney } from "@/lib/treasury/format";
 import { addMoney, moneyLike } from "@/lib/treasury/money";
-import type { ActivityEntry, Obligation, ObligationInput, StrategyKind, TreasuryPolicy, TreasuryWorkspace, WalletReadState, WalletSnapshot } from "@/lib/treasury/models";
+import { walletConnectionSchema, type ActivityEntry, type Obligation, type ObligationInput, type StrategyKind, type TreasuryPolicy, type TreasuryWorkspace, type WalletConnection, type WalletReadState, type WalletSnapshot } from "@/lib/treasury/models";
+import { clearActiveWalletRuntime } from "@/lib/wallet/runtime";
+import { loadCloudWorkspace, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Assessment = ReturnType<typeof assessTreasury>;
 type AllocationPlan = ReturnType<typeof previewAllocation>;
@@ -23,7 +25,7 @@ type WorkspaceContextValue = {
   earnState: EarnReadState;
   hydrated: boolean;
   storageIssue: string | null;
-  connectWallet(address: string, label: string, provider?: "CIRCLE_AGENT_WALLET_READ_ONLY" | "CIRCLE_DEVELOPER_CONTROLLED_WALLET"): void;
+  connectWallet(connection: WalletConnection): void;
   disconnectWallet(): void;
   refreshWallet(): void;
   refreshEarn(): void;
@@ -42,7 +44,7 @@ function makeActivity(action: string, summary: string, reason: string, occurredA
 }
 
 export function applyWalletSnapshot(workspace: TreasuryWorkspace, snapshot: WalletSnapshot): TreasuryWorkspace {
-  const strategies = workspace.strategies.map((strategy) => strategy.kind === "LIQUID" ? { ...strategy, balance: snapshot.balance, redeemable: snapshot.balance, integration: "DEMO" as const } : strategy);
+  const strategies = workspace.strategies.map((strategy) => strategy.kind === "LIQUID" ? { ...strategy, balance: snapshot.balance, redeemable: snapshot.balance, integration: "LIVE" as const } : strategy);
   return { ...workspace, totalTreasury: snapshot.balance, liquidUsdc: snapshot.balance, strategies };
 }
 
@@ -70,20 +72,49 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   const [earnRefreshSequence, setEarnRefreshSequence] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [storageIssue, setStorageIssue] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | undefined>();
+  const [cloudIssue, setCloudIssue] = useState<string | null>(null);
+  const [cloudReadable, setCloudReadable] = useState(false);
 
   useEffect(() => {
     let active = true;
-    queueMicrotask(() => {
-      if (!active) return;
-      const repository = new LocalTreasuryRepository(window.localStorage);
+    let generation = 0;
+    let lastOwner: string | undefined;
+    let initialized = false;
+    const load = async (owner?: string) => {
+      if (initialized && lastOwner === owner) return;
+      initialized = true; lastOwner = owner;
+      const requestGeneration = ++generation;
+      clearActiveWalletRuntime();
+      setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" });
+      setWorkspace(structuredClone(initialWorkspace)); setStorageIssue(null); setCloudReadable(false);
+      setUserId(owner); setCloudIssue(null);
+      const repository = new LocalTreasuryRepository(window.localStorage, owner);
       const result = repository.load();
-      if (result.status === "MIGRATED") repository.save(result.workspace);
-      setWorkspace(result.workspace);
-      setStorageIssue(result.status === "CORRUPT" ? result.message : null);
+      let cloud: TreasuryWorkspace | null = null;
+      try { cloud = owner ? await loadCloudWorkspace(owner) : null; if (active && generation === requestGeneration) setCloudReadable(true); }
+      catch { if (active && generation === requestGeneration) setCloudIssue("Cloud workspace unavailable. Changes remain on this device until sync succeeds."); }
+      if (!active || generation !== requestGeneration) return;
+      const selected = cloud && (result.status === "EMPTY" || result.status === "CORRUPT" || Date.parse(cloud.updatedAt) >= Date.parse(result.workspace.updatedAt)) ? cloud : result.workspace;
+      if (result.status === "MIGRATED" || selected === cloud) repository.save(selected);
+      setWorkspace(selected);
+      setStorageIssue(result.status === "CORRUPT" && selected !== cloud ? result.message : null);
       setEvaluatedAt(new Date().toISOString()); setHydrated(true);
+    };
+    const client = createSupabaseBrowserClient();
+    if (!client) { queueMicrotask(() => { void load(); }); return () => { active = false; }; }
+    const { data } = client.auth.onAuthStateChange((_event, session) => {
+      // Supabase callbacks must return before another auth request is made.
+      window.setTimeout(() => { if (active) void load(session?.user.id); }, 0);
     });
-    return () => { active = false; };
+    return () => { active = false; generation++; data.subscription.unsubscribe(); };
   }, []);
+
+  const persist = useCallback((next: TreasuryWorkspace) => {
+    new LocalTreasuryRepository(window.localStorage, userId).save(next);
+    if (userId && !cloudReadable) return;
+    void syncWorkspaceToCloud(next, userId).then(() => setCloudIssue(null)).catch(() => setCloudIssue("Cloud sync failed. Your changes are saved on this device."));
+  }, [userId, cloudReadable]);
 
   const walletAddress = workspace.treasuryMode === "ARC_TESTNET_WALLET" ? workspace.walletConnection?.address : undefined;
   useEffect(() => {
@@ -137,7 +168,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   }, [earnRefreshSequence, hydrated, walletAddress]);
 
   const commit = useCallback((next: TreasuryWorkspace) => {
-    if (storageIssue) return;
+    if (storageIssue || !hydrated) return;
     try {
       const input = operationalInput(next, walletState, earnState);
       const evaluation = input ? assessTreasury(input, new Date(next.updatedAt)) : null;
@@ -149,18 +180,18 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
         policy: evaluation ? { status: blocked ? "BLOCKED" : evaluation.violations.length ? "REVIEW" : "PASS", label: "Treasury policy", reason: evaluation.violations.map((item) => item.message).join(" ") || "All configured liquidity rules pass." } : { status: "NOT_EVALUATED", label: "Live balance required", reason: "The engine failed closed until Arc data is available." },
         approval: "NOT_REQUIRED", execution: "LOCAL_ONLY",
       }, ...next.activities] };
-      new LocalTreasuryRepository(window.localStorage).save(evaluated);
+      persist(evaluated);
       setWorkspace(evaluated); setEvaluatedAt(evaluated.updatedAt);
     } catch { setStorageIssue("The browser could not persist this workspace. Reset it before making more changes."); }
-  }, [earnState, storageIssue, walletState]);
+  }, [earnState, storageIssue, walletState, hydrated, persist]);
 
-  const connectWallet = (address: string, label: string, provider: "CIRCLE_AGENT_WALLET_READ_ONLY" | "CIRCLE_DEVELOPER_CONTROLLED_WALLET" = "CIRCLE_AGENT_WALLET_READ_ONLY") => {
-    const parsed = walletAddressInputSchema.safeParse(address);
-    if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid wallet address");
-    const now = new Date().toISOString(); const normalized = getAddress(parsed.data); setWalletState({ status: "LOADING" });
-    commit({ ...workspace, treasuryMode: "ARC_TESTNET_WALLET", walletConnection: { provider, chain: "ARC-TESTNET", chainId: 5_042_002, address: normalized, label: label.trim() || "Treasury wallet", connectedAt: now }, updatedAt: now, activities: [makeActivity(provider === "CIRCLE_DEVELOPER_CONTROLLED_WALLET" ? "Circle Developer-Controlled Wallet linked" : "Circle Agent Wallet linked", `${label.trim() || "Treasury wallet"} was linked as ${provider === "CIRCLE_DEVELOPER_CONTROLLED_WALLET" ? "the local execution wallet" : "read-only"}.`, "Only the public Arc Testnet address is stored in the browser. Credentials remain server-only.", now), ...workspace.activities] });
+  const connectWallet = (candidate: WalletConnection) => {
+    const parsed = walletConnectionSchema.safeParse(candidate);
+    if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid wallet connection");
+    const now = new Date().toISOString(); setWalletState({ status: "LOADING" });
+    commit({ ...workspace, treasuryMode: "ARC_TESTNET_WALLET", walletConnection: parsed.data, updatedAt: now, activities: [makeActivity("User-controlled wallet connected", `${parsed.data.label} is now the single authoritative Arc Testnet treasury wallet.`, "Hodd stores only public wallet metadata. Signing remains on the selected user-controlled wallet surface.", now), ...workspace.activities] });
   };
-  const disconnectWallet = () => { const now = new Date().toISOString(); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); commit({ ...workspace, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: now, activities: [makeActivity("Wallet disconnected", "The workspace returned to its local demo treasury balance.", "Disconnecting removes only the public address from Hodd and does not alter the Circle wallet.", now), ...workspace.activities] }); };
+  const disconnectWallet = () => { const now = new Date().toISOString(); clearActiveWalletRuntime(); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); commit({ ...workspace, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: now, activities: [makeActivity("Wallet disconnected", "The workspace returned to its local demo treasury balance.", "Disconnecting removes the public connection metadata from Hodd and never alters the user-owned wallet.", now), ...workspace.activities] }); };
   const refreshWallet = () => setRefreshSequence((value) => value + 1);
   const refreshEarn = () => setEarnRefreshSequence((value) => value + 1);
   const recordEarnActivity = (action: string, summary: string, reason: string, result?: EarnExecutionResult, state?: Pick<ActivityEntry, "approval" | "execution">) => {
@@ -168,7 +199,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     const activity: ActivityEntry = { id: crypto.randomUUID(), occurredAt: now, actor: "HUMAN", action, summary, reason, policy: { status: result?.status === "PARTIAL" || result?.status === "UNKNOWN" || state?.execution === "UNKNOWN" ? "REVIEW" : "PASS", label: result ? "Onchain receipt" : "Earn local audit", reason: result ? "The record was created from the confirmed App Kit response." : "This record describes local authorization or request state and is not an onchain receipt." }, approval: state?.approval ?? (result ? "APPROVED" : "PENDING"), execution: state?.execution ?? result?.status ?? "NOT_STARTED", transactionHash: result?.txHash, explorerUrl: result?.explorerUrl };
     setWorkspace((current) => {
       const next = { ...current, updatedAt: now, activities: [activity, ...current.activities] };
-      try { new LocalTreasuryRepository(window.localStorage).save(next); setEvaluatedAt(now); return next; }
+      try { persist(next); setEvaluatedAt(now); return next; }
       catch { setStorageIssue("The browser could not persist this audit record. Reset the workspace before continuing."); return current; }
     });
   };
@@ -176,13 +207,13 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   const updateObligation = (id: string, input: ObligationInput) => { if (!workspace.obligations.some((item) => item.id === id)) return; const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, obligations: workspace.obligations.map((item) => item.id === id ? { ...input, id } : item), activities: [makeActivity("Obligation updated", `${input.title} was updated.`, "The saved obligation changed and the Treasury Engine recalculated the workspace when verified funds were available.", now), ...workspace.activities] }); };
   const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Safety buffer, coverage floor or allocation limits changed.", "The local policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
   const updateTargets = (targets: Record<StrategyKind, number>) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, targetAllocationsBps: targets, activities: [makeActivity("Allocation targets updated", "Investment targets were updated for preview.", "Targets affect deterministic previews only and cannot move funds.", now), ...workspace.activities] }); };
-  const resetWorkspace = () => { const reset = new LocalTreasuryRepository(window.localStorage).reset(); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(new Date().toISOString()); setHydrated(true); };
+  const resetWorkspace = () => { clearActiveWalletRuntime(); const reset = { ...new LocalTreasuryRepository(window.localStorage, userId).reset(), updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
 
   const operationalWorkspace = useMemo(() => operationalInput(workspace, walletState, earnState), [earnState, workspace, walletState]);
   const assessment = useMemo(() => operationalWorkspace ? assessTreasury(operationalWorkspace, new Date(evaluatedAt)) : null, [operationalWorkspace, evaluatedAt]);
   const allocationPlan = useMemo(() => operationalWorkspace && assessment ? previewAllocation(operationalWorkspace, assessment) : null, [operationalWorkspace, assessment]);
   const value = { workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, recordEarnActivity, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
-  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+  return <WorkspaceContext.Provider value={value}>{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 bg-[#fff2d4] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-black/15 px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 
 export function useTreasuryWorkspace() { const context = useContext(WorkspaceContext); if (!context) throw new Error("useTreasuryWorkspace must be used within TreasuryWorkspaceProvider"); return context; }
