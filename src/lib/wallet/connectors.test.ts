@@ -18,4 +18,14 @@ describe("Browser wallet connections", () => {
     await expect(connectInjectedWallet("METAMASK")).rejects.toEqual({ code: 4001 });
     expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ method: "wallet_addEthereumChain" }));
   });
+  it("invalidates signing when the account or network changes", async () => {
+    let chain = "0x4cef52"; let address = "0x0000000000000000000000000000000000000001";
+    window.ethereum = { isMetaMask: true, request: vi.fn(async ({ method }) => method === "eth_chainId" ? chain : [address]) };
+    const { runtime } = await connectInjectedWallet("METAMASK");
+    const calls = [{ to: runtime.connection.address as `0x${string}` }];
+    address = "0x0000000000000000000000000000000000000002";
+    await expect(runtime.sendCalls!(calls, "1")).rejects.toThrow("changed");
+    address = runtime.connection.address; chain = "0x1";
+    await expect(runtime.sendCalls!(calls, "1")).rejects.toThrow("changed");
+  });
 });

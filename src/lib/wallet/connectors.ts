@@ -1,12 +1,13 @@
 "use client";
 
-import { createPublicClient, type Transport } from "viem";
+import { createPublicClient, createWalletClient, custom, http, type Transport } from "viem";
 import { arcTestnet } from "viem/chains";
-import { toWebAuthnAccount } from "viem/account-abstraction";
+import { createBundlerClient, toWebAuthnAccount } from "viem/account-abstraction";
 import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { getAddress } from "viem";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { ActiveWalletRuntime } from "./runtime";
+import { boundedArcGasPrice } from "@/lib/earn/gas";
 
 export interface InjectedProvider {
   isMetaMask?: boolean; isRabby?: boolean; providers?: InjectedProvider[];
@@ -48,7 +49,20 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
     provider: provider as Parameters<typeof createViemAdapterFromProvider>[0]["provider"],
     capabilities: { addressContext: "user-controlled" },
   });
-  return { runtime: { connection: walletConnection, adapter }, provider };
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei) => {
+    if (calls.length !== 1) throw new Error("This browser wallet requires one transaction at a time.");
+    const current = await provider.request({ method: "eth_accounts" });
+    if (!Array.isArray(current) || String(current[0]).toLowerCase() !== walletConnection.address.toLowerCase() || String(await provider.request({ method: "eth_chainId" })).toLowerCase() !== ARC_CHAIN_HEX) throw new Error("The wallet account or network changed. Reconnect and request a new quote.");
+    const publicClient = createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io", { retryCount: 0 }) });
+    const call = calls[0];
+    const account = getAddress(walletConnection.address);
+    const gas = await publicClient.estimateGas({ account, ...call, value: BigInt(call.value ?? "0") });
+    const gasPrice = boundedArcGasPrice(await publicClient.getGasPrice());
+    if (gas * gasPrice > BigInt(gasBudgetWei)) throw new Error("Current gas exceeds the approved fee reserve. Request a new quote.");
+    const wallet = createWalletClient({ account, chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) });
+    return wallet.sendTransaction({ ...call, value: BigInt(call.value ?? "0"), gas, gasPrice });
+  };
+  return { runtime: { connection: walletConnection, adapter, sendCalls, expiresAt: Date.now() + 55 * 60_000 }, provider };
 }
 
 export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<ActiveWalletRuntime> {
@@ -63,7 +77,21 @@ export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<
   // modular-wallets-core currently resolves its own compatible viem patch version.
   // The runtime objects are compatible even though the duplicated type identities are not.
   const account = await toCircleSmartAccount({ client: client as unknown as Parameters<typeof toCircleSmartAccount>[0]["client"], owner: toWebAuthnAccount({ credential }), name: "Hodd Treasury" });
-  return { connection: connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), adapter: null };
+  const bundler = createBundlerClient({ account: account as unknown as NonNullable<Parameters<typeof createBundlerClient>[0]["account"]>, chain: arcTestnet, transport: toModularTransport(`${clientUrl}/arcTestnet`, clientKey) as unknown as Transport });
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, _gasBudgetWei, onUserOperation) => {
+    // Circle paymaster sponsorship is required; no unsponsored UserOperation fallback.
+    if (await client.getChainId() !== 5_042_002) throw new Error("The passkey RPC is not Arc Testnet.");
+    const prepared = await bundler.prepareUserOperation({ calls: calls.map((call) => ({ ...call, value: BigInt(call.value ?? "0") })), paymaster: true });
+    if (typeof prepared.paymaster !== "string" || /^0x0+$/.test(prepared.paymaster)) throw new Error("Verified gas sponsorship is unavailable. No unsponsored operation was submitted.");
+    // Viem's generic entry-point union keeps the request's `paymaster: true`
+    // type although prepareUserOperation replaces it with the resolved address.
+    const hash = await bundler.sendUserOperation(prepared as unknown as Parameters<typeof bundler.sendUserOperation>[0]);
+    onUserOperation?.(hash);
+    const receipt = await bundler.waitForUserOperationReceipt({ hash, timeout: 120_000 });
+    if (!receipt.success || receipt.receipt.status !== "success") throw new Error("The UserOperation did not succeed. Inspect its receipt before retrying.");
+    return receipt.receipt.transactionHash;
+  };
+  return { connection: connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
 }
 
 type CircleSession = { status: "READY"; userToken: string; encryptionKey: string } | { status: "ERROR"; message: string };
@@ -95,6 +123,5 @@ export async function connectCircleEmbeddedWallet(onProgress?: (message: string)
   if (!wallet) throw new Error("No Arc Testnet embedded wallet was found.");
   const walletConnection = connection("CIRCLE_USER_CONTROLLED", wallet.address, "Circle Embedded", "SCA", wallet.id);
   // Circle's UCW adapter is server-only. Never import it into the browser bundle.
-  // The PIN wallet connects for public reads; execution awaits a verified server challenge flow.
-  return { connection: walletConnection, adapter: null };
+  return { connection: walletConnection, adapter: null, approveChallenge: approve, expiresAt: Date.now() + 55 * 60_000 };
 }
