@@ -92,15 +92,22 @@ export const earnErrorResponseSchema = z.object({ status: z.literal("ERROR"), co
 export const earnPortfolioApiSchema = z.union([earnPortfolioResponseSchema, earnErrorResponseSchema]);
 
 export const earnQuoteRequestSchema = z.object({
+  workspaceScope: z.enum(["TREASURY", "SMOKE_TEST"]).default("TREASURY"),
   operation: earnOperationSchema,
-  walletAddress: arcAddressSchema,
   vaultAddress: arcAddressSchema,
   amount: z.string().trim().regex(/^\d+(?:\.\d{1,6})?$/).optional(),
-  policyLimit: usdcMoneySchema,
-});
+}).strict();
 export const earnQuoteApiSchema = z.union([z.object({ status: z.literal("READY"), quote: earnQuoteSchema }), earnErrorResponseSchema]);
-export const earnExecuteRequestSchema = z.object({ quoteId: z.string().uuid(), confirmed: z.literal(true), warningsAcknowledged: z.boolean() });
+export const earnExecuteRequestSchema = z.object({ workspaceScope: z.enum(["TREASURY", "SMOKE_TEST"]).default("TREASURY"), quoteId: z.string().uuid(), confirmed: z.literal(true), warningsAcknowledged: z.boolean() }).strict();
 export const earnExecuteApiSchema = z.union([z.object({ status: z.literal("READY"), result: earnExecutionResultSchema }), earnErrorResponseSchema]);
+export const earnJobSchema = z.object({
+  status: z.literal("PENDING"), executionId: z.string().uuid(),
+  state: z.enum(["AWAITING_SIGNATURE", "SUBMITTED", "COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"]),
+  events: z.array(z.object({ stage: z.string(), hash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional() })),
+  pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), challengeId: z.string().optional() }).nullable(),
+  result: earnExecutionResultSchema.nullable(),
+});
+export const earnJobApiSchema = z.union([earnJobSchema, earnErrorResponseSchema]);
 
 export type EarnVault = z.infer<typeof earnVaultSchema>;
 export type EarnPosition = z.infer<typeof earnPositionSchema>;

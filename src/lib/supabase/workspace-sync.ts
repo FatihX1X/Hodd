@@ -2,13 +2,14 @@
 
 import { treasuryWorkspaceSchema, type TreasuryWorkspace } from "@/lib/treasury/models";
 import { createSupabaseBrowserClient } from "./client";
+import type { WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 
-export async function loadCloudWorkspace(userId: string): Promise<TreasuryWorkspace | null> {
+export async function loadCloudWorkspace(userId: string, scope: WorkspaceScope = "TREASURY"): Promise<TreasuryWorkspace | null> {
   const client = createSupabaseBrowserClient();
   if (!client) return null;
   const { data: auth } = await client.auth.getUser();
   if (auth.user?.id !== userId) throw new Error("Workspace session changed.");
-  const { data, error } = await client.from("treasury_workspaces").select("workspace").eq("user_id", auth.user.id).maybeSingle();
+  const { data, error } = await client.from(scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces").select("workspace").eq("user_id", auth.user.id).maybeSingle();
   if (error) throw new Error("Cloud workspace could not be loaded.");
   if (!data) return null;
   const parsed = treasuryWorkspaceSchema.safeParse(data.workspace);
@@ -18,28 +19,30 @@ export async function loadCloudWorkspace(userId: string): Promise<TreasuryWorksp
 
 const pendingSyncs = new Map<string, Promise<void>>();
 
-export function syncWorkspaceToCloud(workspace: TreasuryWorkspace, userId?: string): Promise<void> {
+export function syncWorkspaceToCloud(workspace: TreasuryWorkspace, userId?: string, scope: WorkspaceScope = "TREASURY"): Promise<void> {
   if (!userId) return Promise.resolve();
-  const previous = pendingSyncs.get(userId) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(() => writeCloudWorkspace(treasuryWorkspaceSchema.parse(workspace), userId));
-  pendingSyncs.set(userId, next);
-  void next.finally(() => { if (pendingSyncs.get(userId) === next) pendingSyncs.delete(userId); }).catch(() => undefined);
+  const key = `${userId}:${scope}`;
+  const previous = pendingSyncs.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => writeCloudWorkspace(treasuryWorkspaceSchema.parse(workspace), userId, scope));
+  pendingSyncs.set(key, next);
+  void next.finally(() => { if (pendingSyncs.get(key) === next) pendingSyncs.delete(key); }).catch(() => undefined);
   return next;
 }
 
-async function writeCloudWorkspace(workspace: TreasuryWorkspace, userId: string): Promise<void> {
+async function writeCloudWorkspace(workspace: TreasuryWorkspace, userId: string, scope: WorkspaceScope): Promise<void> {
   const client = createSupabaseBrowserClient();
   if (!client || !userId) return;
   const { data: auth } = await client.auth.getUser();
   if (auth.user?.id !== userId) throw new Error("Workspace session changed.");
 
-  const { error: workspaceError } = await client.from("treasury_workspaces").upsert({
+  const { error: workspaceError } = await client.from(scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces").upsert({
     user_id: auth.user.id,
     schema_version: workspace.schemaVersion,
     workspace,
     updated_at: workspace.updatedAt,
   }, { onConflict: "user_id" });
   if (workspaceError) throw workspaceError;
+  if (scope === "SMOKE_TEST") return;
 
   if (!workspace.walletConnection) {
     const { error } = await client.from("wallet_connections").delete().eq("user_id", auth.user.id).eq("chain", "ARC-TESTNET");

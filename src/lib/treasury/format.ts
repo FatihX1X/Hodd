@@ -1,6 +1,6 @@
 import type { Money } from "./models";
 
-export function formatMoney(money: Money, options: { compact?: boolean } = {}) {
+export function formatMoney(money: Money, options: { compact?: boolean; fractionDigits?: number } = {}) {
   const divisor = BigInt(10) ** BigInt(money.decimals);
   const raw = BigInt(money.minorUnits);
   const whole = raw / divisor;
@@ -11,7 +11,7 @@ export function formatMoney(money: Money, options: { compact?: boolean } = {}) {
     return `${compactValue.toLocaleString("en-US", { maximumFractionDigits: 1 })}K ${money.currency}`;
   }
 
-  const fractionText = fraction.toString().padStart(money.decimals, "0").slice(0, 2);
+  const fractionText = fraction.toString().padStart(money.decimals, "0").slice(0, options.fractionDigits ?? 2);
   const numberText = `${whole.toLocaleString("en-US")}.${fractionText}`;
   return `${numberText} ${money.currency}`;
 }

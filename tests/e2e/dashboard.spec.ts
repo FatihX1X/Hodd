@@ -47,8 +47,8 @@ test("wallet selection supports all user-owned providers", async ({ page }) => {
   await expect(page.getByRole("button", { name: "MetaMask" })).toBeVisible(); await expect(page.getByRole("button", { name: "Rabby" })).toBeVisible();
   await page.getByRole("button", { name: /close wallet dialog/i }).click(); await expect(trigger).toBeFocused();
 });
-test("legacy execution routes reject every request", async ({ request }) => {
-  for (const path of ["/api/earn/quote", "/api/earn/execute", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
+test("production execution routes fail closed even with the development flag", async ({ request }) => {
+  for (const path of ["/api/earn/quote", "/api/earn/execute", "/api/earn/execution", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
     const response = await request.post(path, { data: {} }); expect(response.status()).toBe(403);
   }
 });

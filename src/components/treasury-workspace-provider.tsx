@@ -12,11 +12,13 @@ import { walletConnectionSchema, type ActivityEntry, type Obligation, type Oblig
 import { clearActiveWalletRuntime } from "@/lib/wallet/runtime";
 import { loadCloudWorkspace, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 
 type Assessment = ReturnType<typeof assessTreasury>;
 type AllocationPlan = ReturnType<typeof previewAllocation>;
 export type EarnReadState = Readonly<{ status: "IDLE" | "LOADING" }> | Readonly<{ status: "READY"; portfolio: EarnPortfolioResponse }> | Readonly<{ status: "ERROR"; message: string; stalePortfolio?: EarnPortfolioResponse }>;
 type WorkspaceContextValue = {
+  workspaceScope: WorkspaceScope;
   workspace: TreasuryWorkspace;
   operationalWorkspace: TreasuryWorkspace | null;
   assessment: Assessment | null;
@@ -29,6 +31,8 @@ type WorkspaceContextValue = {
   disconnectWallet(): void;
   refreshWallet(): void;
   refreshEarn(): void;
+  syncForEarn(): Promise<void>;
+  recordEarnEvent(stage: string, hash?: string): void;
   recordEarnActivity(action: string, summary: string, reason: string, result?: EarnExecutionResult, state?: Pick<ActivityEntry, "approval" | "execution">): void;
   createObligation(input: ObligationInput): void;
   updateObligation(id: string, input: ObligationInput): void;
@@ -64,6 +68,7 @@ function operationalInput(workspace: TreasuryWorkspace, walletState: WalletReadS
 }
 
 export function TreasuryWorkspaceProvider({ children }: { children: React.ReactNode }) {
+  const [workspaceScope, setWorkspaceScope] = useState<WorkspaceScope>("TREASURY");
   const [workspace, setWorkspace] = useState<TreasuryWorkspace>(initialWorkspace);
   const [evaluatedAt, setEvaluatedAt] = useState(initialWorkspace.updatedAt);
   const [walletState, setWalletState] = useState<WalletReadState>({ status: "IDLE" });
@@ -89,13 +94,14 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" });
       setWorkspace(structuredClone(initialWorkspace)); setStorageIssue(null); setCloudReadable(false);
       setUserId(owner); setCloudIssue(null);
-      const repository = new LocalTreasuryRepository(window.localStorage, owner);
+      const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${owner ?? "guest"}:smoke` : owner);
       const result = repository.load();
       let cloud: TreasuryWorkspace | null = null;
-      try { cloud = owner ? await loadCloudWorkspace(owner) : null; if (active && generation === requestGeneration) setCloudReadable(true); }
+      try { cloud = owner ? await loadCloudWorkspace(owner, workspaceScope) : null; if (active && generation === requestGeneration) setCloudReadable(true); }
       catch { if (active && generation === requestGeneration) setCloudIssue("Cloud workspace unavailable. Changes remain on this device until sync succeeds."); }
       if (!active || generation !== requestGeneration) return;
-      const selected = cloud && (result.status === "EMPTY" || result.status === "CORRUPT" || Date.parse(cloud.updatedAt) >= Date.parse(result.workspace.updatedAt)) ? cloud : result.workspace;
+      const local = result.status === "EMPTY" && workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : result.workspace;
+      const selected = cloud && (result.status === "EMPTY" || result.status === "CORRUPT" || Date.parse(cloud.updatedAt) >= Date.parse(result.workspace.updatedAt)) ? cloud : local;
       if (result.status === "MIGRATED" || selected === cloud) repository.save(selected);
       setWorkspace(selected);
       setStorageIssue(result.status === "CORRUPT" && selected !== cloud ? result.message : null);
@@ -103,18 +109,19 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     };
     const client = createSupabaseBrowserClient();
     if (!client) { queueMicrotask(() => { void load(); }); return () => { active = false; }; }
-    const { data } = client.auth.onAuthStateChange((_event, session) => {
+    const { data } = client.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT" || !session) clearActiveWalletRuntime();
       // Supabase callbacks must return before another auth request is made.
       window.setTimeout(() => { if (active) void load(session?.user.id); }, 0);
     });
     return () => { active = false; generation++; data.subscription.unsubscribe(); };
-  }, []);
+  }, [workspaceScope]);
 
   const persist = useCallback((next: TreasuryWorkspace) => {
-    new LocalTreasuryRepository(window.localStorage, userId).save(next);
+    new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId).save(next);
     if (userId && !cloudReadable) return;
-    void syncWorkspaceToCloud(next, userId).then(() => setCloudIssue(null)).catch(() => setCloudIssue("Cloud sync failed. Your changes are saved on this device."));
-  }, [userId, cloudReadable]);
+    void syncWorkspaceToCloud(next, userId, workspaceScope).then(() => setCloudIssue(null)).catch(() => setCloudIssue("Cloud sync failed. Your changes are saved on this device."));
+  }, [userId, cloudReadable, workspaceScope]);
 
   const walletAddress = workspace.treasuryMode === "ARC_TESTNET_WALLET" ? workspace.walletConnection?.address : undefined;
   useEffect(() => {
@@ -203,17 +210,28 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       catch { setStorageIssue("The browser could not persist this audit record. Reset the workspace before continuing."); return current; }
     });
   };
+  const recordEarnEvent = (stage: string, hash?: string) => {
+    const confirmed = stage === "APPROVAL_CONFIRMED" || stage === "EARN_CONFIRMED";
+    const transaction = hash && (confirmed || stage === "TRANSACTION_SUBMITTED") ? hash : undefined;
+    const now = new Date().toISOString();
+    const entry: ActivityEntry = { id: crypto.randomUUID(), occurredAt: now, actor: "SYSTEM", action: `Earn ${stage.toLowerCase().replaceAll("_", " ")}`, summary: hash ? `${stage} · ${hash}` : stage, reason: confirmed ? "The server verified the Arc receipt against the expected call or vault operation." : stage === "USER_OPERATION_SUBMITTED" ? "UserOperation hash only; this is not a transaction receipt." : "Local execution progress, not proof of onchain success.", policy: { status: confirmed ? "PASS" : "NOT_EVALUATED", label: confirmed ? "ONCHAIN RECEIPT" : "LOCAL AUDIT", reason: confirmed ? "Verified receipt" : "Observed execution stage" }, approval: "APPROVED", execution: confirmed ? "COMPLETE" : hash ? "SUBMITTED" : "NOT_STARTED", transactionHash: transaction, explorerUrl: transaction ? `https://testnet.arcscan.app/tx/${transaction}` : undefined };
+    setWorkspace((current) => { const next = { ...current, updatedAt: now, activities: [entry, ...current.activities] }; persist(next); return next; });
+  };
   const createObligation = (input: ObligationInput) => { const now = new Date().toISOString(); const obligation: Obligation = { ...input, id: crypto.randomUUID() }; commit({ ...workspace, updatedAt: now, obligations: [...workspace.obligations, obligation], activities: [makeActivity("Obligation created", `${obligation.title} was added as ${obligation.status.toLowerCase()}.`, "The obligation was added to this browser's local treasury workspace.", now), ...workspace.activities] }); };
   const updateObligation = (id: string, input: ObligationInput) => { if (!workspace.obligations.some((item) => item.id === id)) return; const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, obligations: workspace.obligations.map((item) => item.id === id ? { ...input, id } : item), activities: [makeActivity("Obligation updated", `${input.title} was updated.`, "The saved obligation changed and the Treasury Engine recalculated the workspace when verified funds were available.", now), ...workspace.activities] }); };
   const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Safety buffer, coverage floor or allocation limits changed.", "The local policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
   const updateTargets = (targets: Record<StrategyKind, number>) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, targetAllocationsBps: targets, activities: [makeActivity("Allocation targets updated", "Investment targets were updated for preview.", "Targets affect deterministic previews only and cannot move funds.", now), ...workspace.activities] }); };
-  const resetWorkspace = () => { clearActiveWalletRuntime(); const reset = { ...new LocalTreasuryRepository(window.localStorage, userId).reset(), updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
+  const resetWorkspace = () => { clearActiveWalletRuntime(); const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId); const base = repository.reset(); const reset = workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : { ...base, updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
 
   const operationalWorkspace = useMemo(() => operationalInput(workspace, walletState, earnState), [earnState, workspace, walletState]);
   const assessment = useMemo(() => operationalWorkspace ? assessTreasury(operationalWorkspace, new Date(evaluatedAt)) : null, [operationalWorkspace, evaluatedAt]);
   const allocationPlan = useMemo(() => operationalWorkspace && assessment ? previewAllocation(operationalWorkspace, assessment) : null, [operationalWorkspace, assessment]);
-  const value = { workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, recordEarnActivity, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
-  return <WorkspaceContext.Provider value={value}>{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 bg-[#fff2d4] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-black/15 px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
+  const syncForEarn = async () => {
+    if (!userId || !cloudReadable || storageIssue) throw new Error("Sign in and resolve workspace sync before reviewing an Earn quote.");
+    await syncWorkspaceToCloud(workspace, userId, workspaceScope);
+  };
+  const value = { workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
+  return <WorkspaceContext.Provider value={value}>{userId && <div role="note" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/15 bg-[#fff2d4] px-5 py-3 text-xs"><p>{workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST WORKSPACE · separate ledger, 1 USDC initial buffer, max 1 USDC deposit. Connect a different test wallet; your main treasury is unchanged." : "Main treasury workspace · isolated smoke tests do not change its obligations or policy."}</p><button disabled={!hydrated} onClick={() => { clearActiveWalletRuntime(); setWorkspaceScope(workspaceScope === "TREASURY" ? "SMOKE_TEST" : "TREASURY"); }} className="shrink-0 border border-black/20 px-3 py-2">{workspaceScope === "SMOKE_TEST" ? "Return to treasury" : "Open isolated smoke workspace"}</button></div>}{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 bg-[#fff2d4] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-black/15 px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 
 export function useTreasuryWorkspace() { const context = useContext(WorkspaceContext); if (!context) throw new Error("useTreasuryWorkspace must be used within TreasuryWorkspaceProvider"); return context; }
