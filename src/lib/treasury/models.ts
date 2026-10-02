@@ -7,6 +7,9 @@ export const obligationSchema = z.object({
   dueAt: z.string().datetime(), recipient: z.string().trim().max(120).nullable(),
   priority: z.enum(["CRITICAL", "HIGH", "NORMAL", "LOW"]), status: z.enum(["UPCOMING", "DRAFT", "PAID", "OVERDUE"]),
   description: z.string().trim().max(500),
+  recipientAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).nullable().optional(),
+  revision: z.number().int().positive().optional(),
+  paymentReference: z.string().uuid().nullable().optional(),
 });
 export const strategyKindSchema = z.enum(["LIQUID", "MORPHO", "USYC", "BTC_RESERVE"]);
 export const liquiditySourceSchema = z.enum(["LIQUID_USDC", "MORPHO", "USYC", "BTC_CREDIT", "BTC_SALE"]);
@@ -52,6 +55,7 @@ export const treasuryPolicySchema = z.object({
   liquidityWaterfall: z.tuple([z.literal("LIQUID_USDC"), z.literal("MORPHO"), z.literal("USYC"), z.literal("BTC_CREDIT"), z.literal("BTC_SALE")]),
 });
 const treasuryWorkspaceFields = {
+  paymentReservations: z.array(z.object({ proposalId: z.string().uuid(), obligationId: z.string(), amount: moneySchema, feeReserve: moneySchema })).optional(),
   updatedAt: z.string().datetime(), totalTreasury: moneySchema, liquidUsdc: moneySchema, pendingTransactions: moneySchema,
   obligations: z.array(obligationSchema), strategies: z.array(strategyPositionSchema), policy: treasuryPolicySchema,
   targetAllocationsBps: strategyBpsSchema.refine((value) => Object.values(value).reduce((sum, item) => sum + item, 0) === 10_000, "Target allocations must total 100%"),
@@ -113,4 +117,4 @@ export type PaymentFeasibility = Readonly<{ obligationId: string; status: "SAFE"
 export type TreasuryAssessment = Readonly<{ evaluatedAt: string; upcomingObligations: Money; protectedCapital: Money; deployableCapital: Money; safelyAvailableLiquidity: Money; liquidityCoverageBps: number | null; coverageStatus: "SAFE" | "REVIEW" | "AT_RISK" | "NO_OBLIGATIONS"; nextPayment: Obligation | null; nextPaymentFeasibility: PaymentFeasibility | null; violations: readonly PolicyViolation[] }>;
 export type AllocationLine = Readonly<{ strategy: StrategyKind; requested: Money; approved: Money; reason: string }>;
 export type AllocationPlan = Readonly<{ deployableCapital: Money; lines: readonly AllocationLine[]; unallocatedToLiquid: Money; violations: readonly PolicyViolation[]; status: "PASS" | "REVIEW" }>;
-export type ObligationInput = Omit<Obligation, "id" | "status"> & { status: "DRAFT" | "UPCOMING" };
+export type ObligationInput = Omit<Obligation, "id" | "status" | "revision" | "paymentReference"> & { status: "DRAFT" | "UPCOMING" };

@@ -18,7 +18,7 @@ test("obligation create, edit and persistence recalculate capital", async ({ pag
   await page.getByLabel("Obligation title").fill("Urgent invoice"); await page.getByLabel("Obligation amount").fill("2000"); await page.getByLabel("Due date").fill("2026-09-28");
   await page.getByRole("button", { name: /save and recalculate/i }).click();
   await expect(page.getByText("6,500.00 USDC")).toBeVisible(); await expect(page.getByText("2,500.00 USDC")).toBeVisible();
-  await page.reload(); await expect(page.getByText("Urgent invoice")).toBeVisible();
+  await page.reload(); await expect(page.getByRole("heading", { name: "Urgent invoice", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Edit Urgent invoice" }).click(); await page.getByLabel("Obligation amount").fill("2500"); await page.getByRole("button", { name: /save and recalculate/i }).click();
   await expect(page.getByText("7,000.00 USDC")).toBeVisible(); await expect(page.getByText("Deployable capital").locator("..").getByText("2,000.00 USDC")).toBeVisible();
 });
@@ -48,7 +48,7 @@ test("wallet selection supports all user-owned providers", async ({ page }) => {
   await page.getByRole("button", { name: /close wallet dialog/i }).click(); await expect(trigger).toBeFocused();
 });
 test("production execution routes fail closed even with the development flag", async ({ request }) => {
-  for (const path of ["/api/earn/quote", "/api/earn/execute", "/api/earn/execution", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
+  for (const path of ["/api/payments", "/api/earn/quote", "/api/earn/execute", "/api/earn/execution", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
     const response = await request.post(path, { data: {} }); expect(response.status()).toBe(403);
   }
 });

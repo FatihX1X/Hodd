@@ -48,7 +48,7 @@ For hosting, configure environment variables in the host project. `.env.local` s
 
 ## Persistence
 
-Guests use a local demo workspace. Signed-in users load their own cloud record and a separate local cache. Changes are saved locally first and synchronized to Supabase; a visible message reports failed sync. Offline edits can be restored from the same account's cache. Concurrent multi-device editing is last-write-wins; local activity is not a tamper-proof audit ledger. Wallet addresses are public metadata, not proof of wallet ownership for server authorization.
+Guests use a local demo workspace. Signed-in users load their own cloud record and a separate local cache. Changes are saved locally first and synchronized to Supabase; a visible message reports failed sync. Offline edits can be restored from the same account's cache. Ordinary workspace fields use last-write-wins; Stage 5 obligation revision checks reject conflicting edits, and pending payments lock financial mutations. Local activity is not a tamper-proof audit ledger. Wallet addresses are public metadata, not proof of wallet ownership for server authorization.
 
 ## Financial rules
 
@@ -88,8 +88,24 @@ Live authentication, passkey/PIN provisioning, database RLS and wallet execution
 
 Dependency audit: patched `undici`, `uuid` and `@grpc/grpc-js` transitives. One low-severity [elliptic advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84) remains through Circle/Ethers dependencies; the reported fix `6.6.2` is not published in the registry. Audit does not currently pass cleanly.
 
+Supabase security advisor reports the existing [leaked-password protection setting](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) as disabled. The payment migrations introduced no additional security-advisor finding. Current automated checkpoint: strict typecheck/lint/build passed, 113 Vitest tests and 26 desktop/mobile Playwright checks passed; production payment routes are tested closed even with execution flags set. Client static bundles were scanned for configured server credential values without printing those values; no matches were found.
+
 ## Next work
 
-Complete the three-provider live testnet verification before declaring Stage 4 complete. Stage 5 payments/Send, proposals and deployment are out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
+Complete the three-provider live testnet verification before declaring Stage 4 complete. Stage 5 is in progress; it is not a completed payment product. Deployment remains out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
+
+## Stage 5 payment implementation status
+
+Single-obligation, full-amount Arc Testnet USDC payment review uses server-owned policy inputs, fresh balances/positions and integer fee reserves. It does not use investment deployable capital as a payment limit. Earlier obligations, safety buffer, pending reservations and post-payment coverage must remain protected. Pending payments replace their protected obligation with amount + fee reserve, rather than double-counting the same obligation.
+
+The payment ledger migration introduces owner-readable, server-written obligations and proposals, revision checks, atomic five-minute proposal claims, unique active wallet/obligation constraints and unique confirmed receipt references. Only server-verified canonical USDC Transfer evidence may finalize PAID. Browser activity remains local audit, not payment proof. Additive workspace fields preserve existing obligations/policy and schema-v4 caches.
+
+`SUPABASE_SECRET_KEY` belongs only in git-ignored `.env.local` and server-only code. No entity secret or private key is required. `HODD_PAYMENT_EXECUTION_ENABLED=true` is insufficient on its own: a provider must have verified Stage 4 receipt evidence. Production/Vercel, non-loopback hosts and mismatched origins remain closed. Smart-account Send remains unavailable until provider-specific fee ceilings and real signing are verified; the current signing job is EOA-only. The three-provider live acceptance requirement is **not yet satisfied**.
+
+Payment and Earn share a durable per-wallet lease. Once a signing request is exposed, an uncertain outcome keeps its reservation and lease even if the browser reports cancellation. Known hashes can be rechecked without sending a new transaction. Do not remove `.hodd-local` leases to retry. Receipt network fees are not represented as a sponsored wallet's actual debit.
+
+The ledger and state-audit migrations are applied. Rollback-only synthetic database tests cover owner isolation, browser write denial, PAID forgery, single-use claims, pending reservations and release. Automated jobs/routes test EOA signing orchestration, replay, parallel wallet leases, uncertain outcomes and environment guards. The UI reads owner-scoped server payment history and separates LOCAL AUDIT from ONCHAIN RECEIPT events. A newer local cache cannot revert a confirmed PAID record or override server reservations.
+
+Outstanding acceptance work: finish smart-account fee quoting and PIN Send, register genuinely verified Stage 4 provider receipt evidence, complete three-provider payment smoke tests of at most 1 USDC to a user-owned test recipient, and verify confirmation/recovery on real provider sessions. No live payment has been performed by this implementation. Stage 6 is not started.
 
 MIT — see [LICENSE](./LICENSE).
