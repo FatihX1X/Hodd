@@ -7,7 +7,8 @@ const zero = (template: Money) => moneyLike(template, 0n);
 
 export function getProtectedObligations(workspace: TreasuryWorkspace, evaluatedAt: Date): Obligation[] {
   const horizon = evaluatedAt.getTime() + workspace.policy.obligationHorizonDays * DAY_MS;
-  return workspace.obligations.filter((item) => (item.status === "UPCOMING" || item.status === "OVERDUE") && new Date(item.dueAt).getTime() <= horizon)
+  const reserved = new Set(workspace.paymentReservations?.map((item) => item.obligationId));
+  return workspace.obligations.filter((item) => !reserved.has(item.id) && (item.status === "UPCOMING" || item.status === "OVERDUE") && new Date(item.dueAt).getTime() <= horizon)
     .sort((left, right) => new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime() || left.id.localeCompare(right.id));
 }
 export function buildWaterfall(required: Money, sources: readonly { source: LiquiditySource; available: Money }[]) {

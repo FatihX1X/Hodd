@@ -13,6 +13,7 @@ import { clearActiveWalletRuntime } from "@/lib/wallet/runtime";
 import { loadCloudWorkspace, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
+import { mergePaymentLedger } from "@/lib/payments/workspace";
 
 type Assessment = ReturnType<typeof assessTreasury>;
 type AllocationPlan = ReturnType<typeof previewAllocation>;
@@ -101,10 +102,11 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       catch { if (active && generation === requestGeneration) setCloudIssue("Cloud workspace unavailable. Changes remain on this device until sync succeeds."); }
       if (!active || generation !== requestGeneration) return;
       const local = result.status === "EMPTY" && workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : result.workspace;
-      const selected = cloud && (result.status === "EMPTY" || result.status === "CORRUPT" || Date.parse(cloud.updatedAt) >= Date.parse(result.workspace.updatedAt)) ? cloud : local;
-      if (result.status === "MIGRATED" || selected === cloud) repository.save(selected);
+      const candidate = cloud && (result.status === "EMPTY" || result.status === "CORRUPT" || Date.parse(cloud.updatedAt) >= Date.parse(result.workspace.updatedAt)) ? cloud : local;
+      const selected = cloud ? mergePaymentLedger(candidate, cloud) : candidate;
+      if (result.status === "MIGRATED" || cloud) repository.save(selected);
       setWorkspace(selected);
-      setStorageIssue(result.status === "CORRUPT" && selected !== cloud ? result.message : null);
+      setStorageIssue(result.status === "CORRUPT" && !cloud ? result.message : null);
       setEvaluatedAt(new Date().toISOString()); setHydrated(true);
     };
     const client = createSupabaseBrowserClient();
@@ -217,8 +219,14 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     const entry: ActivityEntry = { id: crypto.randomUUID(), occurredAt: now, actor: "SYSTEM", action: `Earn ${stage.toLowerCase().replaceAll("_", " ")}`, summary: hash ? `${stage} · ${hash}` : stage, reason: confirmed ? "The server verified the Arc receipt against the expected call or vault operation." : stage === "USER_OPERATION_SUBMITTED" ? "UserOperation hash only; this is not a transaction receipt." : "Local execution progress, not proof of onchain success.", policy: { status: confirmed ? "PASS" : "NOT_EVALUATED", label: confirmed ? "ONCHAIN RECEIPT" : "LOCAL AUDIT", reason: confirmed ? "Verified receipt" : "Observed execution stage" }, approval: "APPROVED", execution: confirmed ? "COMPLETE" : hash ? "SUBMITTED" : "NOT_STARTED", transactionHash: transaction, explorerUrl: transaction ? `https://testnet.arcscan.app/tx/${transaction}` : undefined };
     setWorkspace((current) => { const next = { ...current, updatedAt: now, activities: [entry, ...current.activities] }; persist(next); return next; });
   };
-  const createObligation = (input: ObligationInput) => { const now = new Date().toISOString(); const obligation: Obligation = { ...input, id: crypto.randomUUID() }; commit({ ...workspace, updatedAt: now, obligations: [...workspace.obligations, obligation], activities: [makeActivity("Obligation created", `${obligation.title} was added as ${obligation.status.toLowerCase()}.`, "The obligation was added to this browser's local treasury workspace.", now), ...workspace.activities] }); };
-  const updateObligation = (id: string, input: ObligationInput) => { if (!workspace.obligations.some((item) => item.id === id)) return; const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, obligations: workspace.obligations.map((item) => item.id === id ? { ...input, id } : item), activities: [makeActivity("Obligation updated", `${input.title} was updated.`, "The saved obligation changed and the Treasury Engine recalculated the workspace when verified funds were available.", now), ...workspace.activities] }); };
+  const createObligation = (input: ObligationInput) => { const now = new Date().toISOString(); const obligation: Obligation = { ...input, id: crypto.randomUUID(), revision: 1 }; commit({ ...workspace, updatedAt: now, obligations: [...workspace.obligations, obligation], activities: [makeActivity("Obligation created", `${obligation.title} was added as ${obligation.status.toLowerCase()}.`, "The obligation was added to this browser's local treasury workspace.", now), ...workspace.activities] }); };
+  const updateObligation = (id: string, input: ObligationInput) => {
+    const previous = workspace.obligations.find((item) => item.id === id);
+    if (!previous) return;
+    if (previous.status === "PAID" || workspace.paymentReservations?.some((item) => item.obligationId === id)) throw new Error("Paid or pending obligations cannot be edited.");
+    const now = new Date().toISOString();
+    commit({ ...workspace, updatedAt: now, obligations: workspace.obligations.map((item) => item.id === id ? { ...item, ...input, id, revision: (item.revision ?? 1) + 1 } : item), activities: [makeActivity("Obligation updated", `${input.title} was updated.`, "The saved obligation changed and the Treasury Engine recalculated the workspace when verified funds were available.", now), ...workspace.activities] });
+  };
   const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Safety buffer, coverage floor or allocation limits changed.", "The local policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
   const updateTargets = (targets: Record<StrategyKind, number>) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, targetAllocationsBps: targets, activities: [makeActivity("Allocation targets updated", "Investment targets were updated for preview.", "Targets affect deterministic previews only and cannot move funds.", now), ...workspace.activities] }); };
   const resetWorkspace = () => { clearActiveWalletRuntime(); const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId); const base = repository.reset(); const reset = workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : { ...base, updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
