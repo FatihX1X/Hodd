@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { walletApiResponseSchema } from "@/lib/arc/schemas";
 import { earnPortfolioApiSchema, type EarnExecutionResult, type EarnPortfolioResponse } from "@/lib/earn/models";
 import { assessTreasury, previewAllocation } from "@/lib/treasury/engine";
@@ -10,7 +10,7 @@ import { formatMoney } from "@/lib/treasury/format";
 import { addMoney, moneyLike } from "@/lib/treasury/money";
 import { walletConnectionSchema, type ActivityEntry, type Obligation, type ObligationInput, type StrategyKind, type TreasuryPolicy, type TreasuryWorkspace, type WalletConnection, type WalletReadState, type WalletSnapshot } from "@/lib/treasury/models";
 import { clearActiveWalletRuntime } from "@/lib/wallet/runtime";
-import { loadCloudWorkspace, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
+import { loadCloudWorkspace, refreshCloudLedger, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 import { mergePaymentLedger } from "@/lib/payments/workspace";
@@ -33,6 +33,8 @@ type WorkspaceContextValue = {
   refreshWallet(): void;
   refreshEarn(): void;
   syncForEarn(): Promise<void>;
+  refreshPaymentLedger(): Promise<void>;
+  paymentLedgerRevision: number;
   recordEarnEvent(stage: string, hash?: string): void;
   recordEarnActivity(action: string, summary: string, reason: string, result?: EarnExecutionResult, state?: Pick<ActivityEntry, "approval" | "execution">): void;
   createObligation(input: ObligationInput): void;
@@ -81,6 +83,8 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   const [userId, setUserId] = useState<string | undefined>();
   const [cloudIssue, setCloudIssue] = useState<string | null>(null);
   const [cloudReadable, setCloudReadable] = useState(false);
+  const [paymentLedgerRevision, setPaymentLedgerRevision] = useState(0);
+  const identityGeneration = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -91,6 +95,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       if (initialized && lastOwner === owner) return;
       initialized = true; lastOwner = owner;
       const requestGeneration = ++generation;
+      identityGeneration.current++;
       clearActiveWalletRuntime();
       setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" });
       setWorkspace(structuredClone(initialWorkspace)); setStorageIssue(null); setCloudReadable(false);
@@ -118,6 +123,11 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     });
     return () => { active = false; generation++; data.subscription.unsubscribe(); };
   }, [workspaceScope]);
+
+  // Canonical payment reads update the local cache, never re-upload its old facts.
+  useEffect(() => {
+    if (hydrated && paymentLedgerRevision) new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId).save(workspace);
+  }, [hydrated, paymentLedgerRevision, userId, workspace, workspaceScope]);
 
   const persist = useCallback((next: TreasuryWorkspace) => {
     new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId).save(next);
@@ -238,7 +248,16 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     if (!userId || !cloudReadable || storageIssue) throw new Error("Sign in and resolve workspace sync before reviewing an Earn quote.");
     await syncWorkspaceToCloud(workspace, userId, workspaceScope);
   };
-  const value = { workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
+  const refreshPaymentLedger = async () => {
+    if (!userId || !cloudReadable) throw new Error("Sign in to refresh the canonical payment ledger.");
+    const generation = identityGeneration.current;
+    const cloud = await refreshCloudLedger(userId, workspaceScope);
+    if (generation !== identityGeneration.current) throw new Error("Workspace session changed.");
+    setWorkspace((current) => mergePaymentLedger(current, cloud));
+    setPaymentLedgerRevision((current) => current + 1);
+    setEvaluatedAt(new Date().toISOString()); refreshWallet(); refreshEarn();
+  };
+  const value = { workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
   return <WorkspaceContext.Provider value={value}>{userId && <div role="note" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/15 bg-[#fff2d4] px-5 py-3 text-xs"><p>{workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST WORKSPACE · separate ledger, 1 USDC initial buffer, max 1 USDC deposit. Connect a different test wallet; your main treasury is unchanged." : "Main treasury workspace · isolated smoke tests do not change its obligations or policy."}</p><button disabled={!hydrated} onClick={() => { clearActiveWalletRuntime(); setWorkspaceScope(workspaceScope === "TREASURY" ? "SMOKE_TEST" : "TREASURY"); }} className="shrink-0 border border-black/20 px-3 py-2">{workspaceScope === "SMOKE_TEST" ? "Return to treasury" : "Open isolated smoke workspace"}</button></div>}{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 bg-[#fff2d4] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-black/15 px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 

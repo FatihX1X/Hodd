@@ -10,6 +10,7 @@ vi.mock("./server-context", () => ({ assertEarnContextCurrent: fake.current }));
 vi.mock("./server-policy", () => ({ assessEarnOperation: fake.policy }));
 vi.mock("./server-quotes", () => ({ freshEarnInputs: fake.live }));
 vi.mock("./receipts", () => ({ verifyEarnReceipt: fake.verify, verifyApprovalReceipt: fake.verify }));
+vi.mock("./provider-evidence", () => ({ recordEarnEvidence: vi.fn() }));
 vi.mock("@/lib/circle/user-wallet-server", () => ({ circleUserWalletClient: vi.fn() }));
 vi.mock("@circle-fin/adapter-circle-wallets/ucw/server", () => ({ createCircleUserWalletAdapter: vi.fn() }));
 vi.mock("@circle-fin/adapter-viem-v2/next", () => ({ externalSigning: (options: object) => options, createViemAdapter: (options: object) => options }));

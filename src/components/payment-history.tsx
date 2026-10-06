@@ -7,7 +7,7 @@ import { SectionCard, SectionHeading } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 export function PaymentHistory() {
-  const { workspaceScope, workspace } = useTreasuryWorkspace();
+  const { workspaceScope, workspace, paymentLedgerRevision, refreshPaymentLedger } = useTreasuryWorkspace();
   const [records, setRecords] = useState<PaymentRecord[]>([]); const [error, setError] = useState(""); const [refresh, setRefresh] = useState(0);
   const [candidateHashes, setCandidateHashes] = useState<Record<string, string>>({});
   const [events, setEvents] = useState<PaymentEvent[]>([]);
@@ -38,19 +38,20 @@ export function PaymentHistory() {
       catch { setEvents([]); setError("Payment audit failed validation."); }
     })().catch(() => { if (active) { setRecords([]); setEvents([]); setError("Payment ledger unavailable."); } });
     return () => { active = false; };
-  }, [workspaceScope, workspace.updatedAt, refresh]);
+  }, [workspaceScope, workspace.updatedAt, paymentLedgerRevision, refresh]);
   const recheck = async (record: PaymentRecord) => {
     setError("");
     try {
       const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: workspaceScope, action: "RECHECK", proposalId: record.id, txHash: record.txHash ? undefined : candidateHashes[record.id] || undefined }) });
       const result = paymentResponseSchema.parse(await response.json());
       if (result.status === "ERROR") throw new Error(result.message);
+      await refreshPaymentLedger();
       setRefresh((value) => value + 1);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Receipt unverified; do not retry payment."); }
   };
   return <SectionCard className="mt-6"><SectionHeading index="03.3" title="Server payment ledger" description="Owner-scoped records · only confirmed canonical USDC receipts establish payment" /><div className="space-y-3 p-5">
     {!records.length && <p className="text-xs text-black/55">No verified payment history loaded. Sign in to read your payment ledger.</p>}
-    {records.map((record) => <article key={record.id} className="space-y-2 border-b border-black/10 pb-3 text-xs"><p className="font-semibold">{record.state.replaceAll("_", " ")} · {formatMoney(record.proposal.amount)} · {record.proposal.recipientLabel ?? "Recipient"}</p><p className="break-all">Proposal {record.id}</p>{record.txHash && <a className="block break-all underline" href={`https://testnet.arcscan.app/tx/${record.txHash}`} target="_blank" rel="noreferrer">{record.state === "CONFIRMED" ? "Verified onchain receipt" : "Submitted hash · not verified"}: {record.txHash}</a>}{["SUBMITTED", "UNKNOWN"].includes(record.state) && <button onClick={() => void recheck(record)} className="min-h-10 border border-black/20 px-3">Recheck existing payment (no retry)</button>}</article>)}
+    {records.map((record) => <article key={record.id} className="space-y-2 border-b border-black/10 pb-3 text-xs"><p className="font-semibold">{record.state.replaceAll("_", " ")} · {formatMoney(record.proposal.amount)} · {record.proposal.recipientLabel ?? "Recipient"}</p><p className="break-all">Proposal {record.id}</p>{record.userOperationHash && <p className="break-all">UserOperation hash · not a transaction receipt: {record.userOperationHash}</p>}{record.txHash && <a className="block break-all underline" href={`https://testnet.arcscan.app/tx/${record.txHash}`} target="_blank" rel="noreferrer">{record.state === "CONFIRMED" ? "Verified onchain receipt" : record.state === "FAILED" ? "Verified reverted execution · obligation remains unpaid" : "Submitted hash · not verified"}: {record.txHash}</a>}{["SUBMITTED", "UNKNOWN"].includes(record.state) && <button onClick={() => void recheck(record)} className="min-h-10 border border-black/20 px-3">Recheck existing payment (no retry)</button>}</article>)}
     {records.filter((record) => record.state === "UNKNOWN" && !record.txHash).map((record) => <label key={`recover-${record.id}`} className="block text-xs">Existing transaction hash for proposal {record.id}<input aria-label={`Existing transaction hash ${record.id}`} value={candidateHashes[record.id] ?? ""} onChange={(event) => setCandidateHashes((current) => ({ ...current, [record.id]: event.target.value }))} placeholder="0x… (from your wallet or explorer)" className="mt-2 w-full border border-black/20 p-3" /><span className="mt-2 block">Recheck above only verifies this existing hash. It cannot submit another transaction.</span></label>)}
     {events.length > 0 && <ol aria-label="Server payment audit timeline" className="space-y-2">{events.map((event) => <li key={event.id} className="break-all border border-black/15 p-3 text-xs">{event.kind.replaceAll("_", " ")} · {event.stage.replaceAll("_", " ")} · {new Date(event.occurred_at).toLocaleString()}<span className="mt-1 block">Proposal {event.proposal_id}</span></li>)}</ol>}
     {error && <p role="status" className="text-xs text-[#7b332d]">{error}</p>}

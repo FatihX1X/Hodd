@@ -18,6 +18,7 @@ import { earnExecutionResultSchema, type EarnExecutionResult, type EarnQuote } f
 import { EarnAccessError } from "./security";
 import { nativeWeiToUsdcCeil } from "./money";
 import { boundedArcGasPrice } from "./gas";
+import { recordEarnEvidence } from "./provider-evidence";
 
 type Pending = { id: string; stage: "APPROVAL" | "EARN"; calls: WalletCall[]; gasBudgetWei: string; challengeId?: string };
 type Job = { id: string; binding: string; policyDigest: string; quote: EarnQuote; status: "AWAITING_SIGNATURE" | "SUBMITTED" | "COMPLETE" | "PARTIAL" | "FAILED" | "UNKNOWN"; events: { stage: string; hash?: string }[]; pending?: Pending; result?: EarnExecutionResult; controller: AbortController; resolve?: (hash: `0x${string}`) => void; reject?: (error: Error) => void; submitted: boolean; gasSpent: bigint; lease: string; startedBlock: bigint; embeddedCall?: { to: `0x${string}`; data: `0x${string}`; value: bigint }; receipts: Set<string> };
@@ -147,6 +148,8 @@ async function runEarnJob(job: Job, context: EarnContext) {
     const status = job.quote.operation === "REDEEM_ALL" && /[1-9]/.test(residual.shares) ? "PARTIAL" : "COMPLETE";
     job.result = earnExecutionResultSchema.parse({ executionId: job.id, operation: job.quote.operation, status, txHash: receipt.transactionHash, explorerUrl: `https://testnet.arcscan.app/tx/${receipt.transactionHash}`, vaultAddress: job.quote.vaultAddress, amount: job.quote.amount, residualPosition: residual });
     job.status = status; job.events.push({ stage: status, hash: receipt.transactionHash });
+    try { await recordEarnEvidence(context, job.quote, job.result, job.startedBlock, receipt.blockNumber); }
+    catch { job.events.push({ stage: "PROVIDER_EVIDENCE_NOT_SAVED" }); }
   } catch {
     job.status = job.submitted ? "UNKNOWN" : "FAILED"; job.events.push({ stage: job.status });
   } finally {

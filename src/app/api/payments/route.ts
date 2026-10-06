@@ -24,7 +24,7 @@ export async function POST(request: Request) {
         result = await startPayment(context, value.proposalId);
       } else if (value.action === "REPLY") {
         assertLocalPaymentRequest(request, true);
-        if (!value.requestId || (!value.txHash && !value.userOperationHash && !value.cancelled)) throw new EarnAccessError("INVALID_REQUEST", "A valid signature reply is required.", 400);
+        if (!value.requestId || (!value.txHash && !value.userOperationHash && !value.cancelled && !value.challengeApproved)) throw new EarnAccessError("INVALID_REQUEST", "A valid signature reply is required.", 400);
         result = await replyPayment(context, value.proposalId, { ...value, requestId: value.requestId });
       } else result = value.action === "RECHECK" ? await recheckPayment(context, value.proposalId, value.txHash) : await inspectPayment(context, value.proposalId);
     }

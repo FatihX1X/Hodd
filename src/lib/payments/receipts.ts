@@ -14,3 +14,9 @@ export function verifyPaymentReceipt(receipt: TransactionReceipt, proposal: Paym
   const networkFee = nativeWeiToUsdcCeil((receipt.gasUsed * receipt.effectiveGasPrice).toString());
   return { blockNumber: receipt.blockNumber.toString(), logIndex: log.logIndex, networkFee };
 }
+
+/** The caller must also prove the exact EOA sender/target/calldata/value. */
+export function verifyPaymentRevert(receipt: TransactionReceipt, proposal: PaymentProposal) {
+  if (receipt.status !== "reverted" || receipt.blockNumber <= BigInt(proposal.startBlock) || proposal.wallet.accountType !== "EOA") throw new Error("PAYMENT_REVERT_NOT_VERIFIED");
+  return { status: "REVERTED" as const, blockNumber: receipt.blockNumber.toString(), networkFee: nativeWeiToUsdcCeil((receipt.gasUsed * receipt.effectiveGasPrice).toString()) };
+}
