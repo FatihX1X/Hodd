@@ -33,6 +33,8 @@ export const walletConnectionSchema = z.object({
   custody: z.literal("USER_CONTROLLED"),
   accountType: z.enum(["EOA", "SCA", "MSCA"]),
   walletId: z.string().min(1).max(128).optional(),
+  // Public WebAuthn metadata only. No raw credential, signature or private key.
+  passkey: z.object({ id: z.string().min(1).max(2048), publicKey: z.string().regex(/^0x04[\da-fA-F]{128}$/) }).optional(),
   chain: z.literal("ARC-TESTNET"),
   chainId: z.literal(5_042_002),
   address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),

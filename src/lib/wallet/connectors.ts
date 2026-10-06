@@ -8,6 +8,7 @@ import { getAddress } from "viem";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { ActiveWalletRuntime } from "./runtime";
 import { boundedArcGasPrice } from "@/lib/earn/gas";
+import { ARC_GAS_STATION_PAYMASTER, walletFeeQuoteSchema } from "./fee-quote";
 
 export interface InjectedProvider {
   isMetaMask?: boolean; isRabby?: boolean; providers?: InjectedProvider[];
@@ -49,7 +50,7 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
     provider: provider as Parameters<typeof createViemAdapterFromProvider>[0]["provider"],
     capabilities: { addressContext: "user-controlled" },
   });
-  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei) => {
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei, _onUserOperation, feeQuote) => {
     if (calls.length !== 1) throw new Error("This browser wallet requires one transaction at a time.");
     const current = await provider.request({ method: "eth_accounts" });
     if (!Array.isArray(current) || String(current[0]).toLowerCase() !== walletConnection.address.toLowerCase() || String(await provider.request({ method: "eth_chainId" })).toLowerCase() !== ARC_CHAIN_HEX) throw new Error("The wallet account or network changed. Reconnect and request a new quote.");
@@ -59,6 +60,7 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
     const gas = await publicClient.estimateGas({ account, ...call, value: BigInt(call.value ?? "0") });
     const gasPrice = boundedArcGasPrice(await publicClient.getGasPrice());
     if (gas * gasPrice > BigInt(gasBudgetWei)) throw new Error("Current gas exceeds the approved fee reserve. Request a new quote.");
+    if (feeQuote && (feeQuote.provider !== walletConnection.provider || feeQuote.walletAddress.toLowerCase() !== account.toLowerCase() || Date.parse(feeQuote.expiresAt) <= Date.now() || gas > BigInt(feeQuote.gasLimit) || gasPrice > BigInt(feeQuote.maxFeePerGasWei) || feeQuote.maxNativeFeeWei !== gasBudgetWei)) throw new Error("The current fee or wallet exceeds the approved quote. Request a new quote.");
     const wallet = createWalletClient({ account, chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) });
     return wallet.sendTransaction({ ...call, value: BigInt(call.value ?? "0"), gas, gasPrice });
   };
@@ -78,20 +80,28 @@ export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<
   // The runtime objects are compatible even though the duplicated type identities are not.
   const account = await toCircleSmartAccount({ client: client as unknown as Parameters<typeof toCircleSmartAccount>[0]["client"], owner: toWebAuthnAccount({ credential }), name: "Hodd Treasury" });
   const bundler = createBundlerClient({ account: account as unknown as NonNullable<Parameters<typeof createBundlerClient>[0]["account"]>, chain: arcTestnet, transport: toModularTransport(`${clientUrl}/arcTestnet`, clientKey) as unknown as Transport });
-  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, _gasBudgetWei, onUserOperation) => {
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei, onUserOperation, feeQuote) => {
     // Circle paymaster sponsorship is required; no unsponsored UserOperation fallback.
     if (await client.getChainId() !== 5_042_002) throw new Error("The passkey RPC is not Arc Testnet.");
-    const prepared = await bundler.prepareUserOperation({ calls: calls.map((call) => ({ ...call, value: BigInt(call.value ?? "0") })), paymaster: true });
-    if (typeof prepared.paymaster !== "string" || /^0x0+$/.test(prepared.paymaster)) throw new Error("Verified gas sponsorship is unavailable. No unsponsored operation was submitted.");
+    const normalized = calls.map((call) => ({ ...call, value: BigInt(call.value ?? "0") }));
+    let prepared;
+    if (feeQuote) {
+      const checked = walletFeeQuoteSchema.parse(feeQuote); const op = checked.userOperation;
+      if (checked.source !== "CIRCLE_MSCA" || !op || checked.walletAddress.toLowerCase() !== account.address.toLowerCase() || checked.maxNativeFeeWei !== gasBudgetWei || Date.parse(checked.expiresAt) <= Date.now() || op.callData.toLowerCase() !== (await account.encodeCalls(normalized)).toLowerCase() || BigInt(op.nonce) !== await account.getNonce()) throw new Error("The approved UserOperation changed or expired. Request a new quote.");
+      prepared = { sender: op.sender as `0x${string}`, nonce: BigInt(op.nonce), callData: op.callData as `0x${string}`, ...(op.factory ? { factory: op.factory as `0x${string}`, factoryData: op.factoryData as `0x${string}` } : {}), callGasLimit: BigInt(op.callGasLimit), verificationGasLimit: BigInt(op.verificationGasLimit), preVerificationGas: BigInt(op.preVerificationGas), maxFeePerGas: BigInt(op.maxFeePerGas), maxPriorityFeePerGas: BigInt(op.maxPriorityFeePerGas), paymaster: op.paymaster as `0x${string}`, paymasterData: op.paymasterData as `0x${string}`, paymasterVerificationGasLimit: BigInt(op.paymasterVerificationGasLimit), paymasterPostOpGasLimit: BigInt(op.paymasterPostOpGasLimit) };
+    } else prepared = await bundler.prepareUserOperation({ calls: normalized, paymaster: true });
+    if (typeof prepared.paymaster !== "string" || prepared.paymaster.toLowerCase() !== ARC_GAS_STATION_PAYMASTER.toLowerCase()) throw new Error("Verified gas sponsorship is unavailable. No unsponsored operation was submitted.");
     // Viem's generic entry-point union keeps the request's `paymaster: true`
     // type although prepareUserOperation replaces it with the resolved address.
-    const hash = await bundler.sendUserOperation(prepared as unknown as Parameters<typeof bundler.sendUserOperation>[0]);
-    onUserOperation?.(hash);
+    // prepareUserOperation returns an estimation-only stub signature. NEVER
+    // submit that stub: omission makes Viem request the user's actual passkey.
+    const hash = await bundler.sendUserOperation({ ...prepared, signature: undefined } as unknown as Parameters<typeof bundler.sendUserOperation>[0]);
+    await onUserOperation?.(hash);
     const receipt = await bundler.waitForUserOperationReceipt({ hash, timeout: 120_000 });
     if (!receipt.success || receipt.receipt.status !== "success") throw new Error("The UserOperation did not succeed. Inspect its receipt before retrying.");
     return receipt.receipt.transactionHash;
   };
-  return { connection: connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
+  return { connection: { ...connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), passkey: { id: credential.id, publicKey: credential.publicKey } }, adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
 }
 
 type CircleSession = { status: "READY"; userToken: string; encryptionKey: string } | { status: "ERROR"; message: string };

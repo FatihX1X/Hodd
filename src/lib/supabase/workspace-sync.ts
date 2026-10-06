@@ -10,6 +10,8 @@ export async function loadCloudWorkspace(userId: string, scope: WorkspaceScope =
   const { data: auth } = await client.auth.getUser();
   if (auth.user?.id !== userId) throw new Error("Workspace session changed.");
   const { data, error } = await client.from(scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces").select("workspace").eq("user_id", auth.user.id).maybeSingle();
+  const { data: current } = await client.auth.getUser();
+  if (current.user?.id !== userId) throw new Error("Workspace session changed.");
   if (error) throw new Error("Cloud workspace could not be loaded.");
   if (!data) return null;
   const parsed = treasuryWorkspaceSchema.safeParse(data.workspace);
@@ -18,6 +20,14 @@ export async function loadCloudWorkspace(userId: string, scope: WorkspaceScope =
 }
 
 const pendingSyncs = new Map<string, Promise<void>>();
+
+/** Drain queued writes before a canonical read; never upload the stale read. */
+export async function refreshCloudLedger(userId: string, scope: WorkspaceScope) {
+  await pendingSyncs.get(`${userId}:${scope}`)?.catch(() => undefined);
+  const workspace = await loadCloudWorkspace(userId, scope);
+  if (!workspace) throw new Error("The canonical payment workspace is unavailable.");
+  return workspace;
+}
 
 export function syncWorkspaceToCloud(workspace: TreasuryWorkspace, userId?: string, scope: WorkspaceScope = "TREASURY"): Promise<void> {
   if (!userId) return Promise.resolve();

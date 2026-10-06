@@ -4,8 +4,9 @@ import { encodeFunctionData, erc20Abi, getAddress } from "viem";
 import { earnServerContext, assertEarnContextCurrent } from "@/lib/earn/server-context";
 import { arcClient, discoverAllowedVaults, getEarnPosition } from "@/lib/earn/gateway";
 import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
-import { addUsdc, nativeWeiToUsdcCeil } from "@/lib/earn/money";
-import { boundedArcGasPrice } from "@/lib/earn/gas";
+import { addUsdc } from "@/lib/earn/money";
+import { hasVerifiedEarnProvider } from "@/lib/earn/provider-evidence";
+import { quotePaymentFees } from "./fees";
 import { ViemArcTreasuryReader } from "@/lib/arc/reader";
 import { EarnAccessError } from "@/lib/earn/security";
 import { obligationSchema } from "@/lib/treasury/models";
@@ -39,18 +40,16 @@ export async function createPaymentProposal(scope: WorkspaceScope, obligationId:
   if (scope === "SMOKE_TEST" && BigInt(obligation.amount.minorUnits) > 1_000_000n) throw new EarnAccessError("SMOKE_AMOUNT_LIMIT", "Smoke payments are limited to 1 USDC.", 409);
   const workspace = await freshPaymentWorkspace(context);
   const call = transferCall({ recipientAddress: recipient, amount: addUsdc([obligation.amount]) });
-  // SCA estimates need their provider's fee surface; do not pretend a direct
-  // eth_estimateGas from an undeployed account includes deployment/bundler costs.
-  const [gas, price, block] = await Promise.all([arcClient.estimateGas({ account: getAddress(context.wallet.address), to: call.to, data: call.data }), arcClient.getGasPrice(), arcClient.getBlockNumber()]);
-  const budget = gas * boundedArcGasPrice(price) * 2n;
-  const feeReserve = nativeWeiToUsdcCeil(budget.toString());
+  const [feeQuote, block, verified] = await Promise.all([quotePaymentFees(context, call), arcClient.getBlockNumber(), hasVerifiedEarnProvider(context)]);
+  const budget = feeQuote?.maxNativeFeeWei ?? "0";
+  const feeReserve = feeQuote?.maxWalletDebit ?? addUsdc([]);
   let policy = assessPayment(workspace, obligation, feeReserve);
-  const { data: verified } = await context.client.from("wallet_provider_verifications").select("provider").eq("provider", context.wallet.provider).maybeSingle();
-  const executionEnabled = Boolean(verified) && context.wallet.accountType === "EOA" && process.env.HODD_PAYMENT_EXECUTION_ENABLED === "true";
-  const executionReason = !verified ? "Stage 4 live signing verification is still required for this provider." : context.wallet.accountType !== "EOA" ? "A provider-specific smart-account fee ceiling must be verified before payment execution." : "Local execution is available only with the payment feature flag and your separate approval.";
+  if (!feeQuote) policy = { status: "BLOCKED", label: "Provider fee quote", reason: "Server-verified deployment, verification and paymaster fee ceilings are not available. No zero-fee assumption is used." };
+  const executionEnabled = verified && Boolean(feeQuote) && process.env.HODD_PAYMENT_EXECUTION_ENABLED === "true";
+  const executionReason = !feeQuote ? "A provider-specific smart-account fee ceiling must be verified before payment execution." : !verified ? "Verified Stage 4 deposit, partial withdrawal and full redemption receipts are still required for this wallet/provider." : "Local execution is available only with the payment feature flag and your separate approval.";
   if (Date.now() - Date.parse(workspace.updatedAt) < -5000) policy = { status: "BLOCKED", label: "Workspace", reason: "Workspace timestamp is invalid." };
   const remaining = BigInt(workspace.liquidUsdc.minorUnits) - BigInt(obligation.amount.minorUnits) - BigInt(feeReserve.minorUnits);
-  const proposal = paymentProposalSchema.parse({ id: randomUUID(), obligationId, obligationRevision: row.revision, scope, wallet: context.wallet, recipientAddress: recipient, recipientLabel: obligation.recipient, amount: obligation.amount, feeReserve, gasBudgetWei: budget.toString(), balanceAfter: { ...workspace.liquidUsdc, minorUnits: (remaining > 0n ? remaining : 0n).toString() }, policy, expiresAt: new Date(Date.now()+300000).toISOString(), startBlock: block.toString(), executionEnabled, executionReason });
+  const proposal = paymentProposalSchema.parse({ id: randomUUID(), obligationId, obligationRevision: row.revision, scope, wallet: context.wallet, recipientAddress: recipient, recipientLabel: obligation.recipient, amount: obligation.amount, feeReserve, feeQuote, gasBudgetWei: budget, balanceAfter: { ...workspace.liquidUsdc, minorUnits: (remaining > 0n ? remaining : 0n).toString() }, policy, expiresAt: feeQuote?.expiresAt ?? new Date(Date.now()+300000).toISOString(), startBlock: block.toString(), executionEnabled, executionReason });
   const { error: insertError } = await admin.from("payment_proposals").insert({ id: proposal.id, user_id: context.userId, scope, obligation_id: obligationId, wallet_address: context.wallet.address.toLowerCase(), binding: context.binding, policy_digest: context.policyDigest, policy_snapshot: context.workspace.policy, obligation_snapshot: context.workspace.obligations, pending_snapshot: context.workspace.pendingTransactions, proposal, expires_at: proposal.expiresAt });
   if (insertError) throw new EarnAccessError("PAYMENT_STORE_UNAVAILABLE", "The payment proposal could not be saved. Nothing was submitted.", 503);
   return { status: "READY" as const, record: { id: proposal.id, state: "REVIEW_REQUIRED" as const, proposal, txHash: null, userOperationHash: null, receipt: null }, pending: null };
