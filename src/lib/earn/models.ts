@@ -106,7 +106,7 @@ export const earnJobSchema = z.object({
   events: z.array(z.object({ stage: z.string(), hash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional() })),
   pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).optional(), challengeId: z.string().optional() }).nullable(),
   result: earnExecutionResultSchema.nullable(),
-  failure: z.object({ code: z.string().regex(/^[A-Z_]+$/), stage: z.enum(["ADAPTER_SETUP", "EARN_SDK", "CHALLENGE_PREPARATION", "CHALLENGE_CREATION", "RECEIPT_VERIFICATION"]), providerCode: z.string().regex(/^\d{6}$/).optional() }).nullable().optional(),
+  failure: z.object({ code: z.string().regex(/^[A-Z_]+$/), stage: z.enum(["ADAPTER_SETUP", "EARN_SDK", "SIGNING_PREPARATION", "CHALLENGE_PREPARATION", "CHALLENGE_CREATION", "RECEIPT_VERIFICATION"]), providerCode: z.string().regex(/^\d{6}$/).optional() }).nullable().optional(),
 });
 export const earnJobApiSchema = z.union([earnJobSchema, earnErrorResponseSchema]);
 

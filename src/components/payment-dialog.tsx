@@ -5,7 +5,7 @@ import { X } from "lucide-react";
 import type { Obligation } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 import { paymentResponseSchema, type PaymentRecord } from "@/lib/payments/models";
-import { getActiveWalletRuntime } from "@/lib/wallet/runtime";
+import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 export function PaymentDialog({ obligation }: { obligation: Obligation }) {
@@ -25,7 +25,11 @@ export function PaymentDialog({ obligation }: { obligation: Obligation }) {
     finally { setBusy(false); }
   };
   const confirm = async () => {
-    if (!record) return; setBusy(true); setError("");
+    if (!record) return;
+    // Check before CONFIRM so a missing in-memory signer never claims the proposal.
+    const current = getActiveWalletRuntime();
+    if (!isSignerFor(current, record.proposal.wallet) || current.connection.provider !== record.proposal.wallet.provider) { setError("Signer session is not active. Reconnect the wallet in the wallet panel; the proposal was not claimed."); return; }
+    setBusy(true); setError("");
     try {
       let job = await request({ action: "CONFIRM", proposalId: record.id, confirmed: true });
       await refreshPaymentLedger();

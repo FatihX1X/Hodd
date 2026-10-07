@@ -70,8 +70,17 @@ function operationalInput(workspace: TreasuryWorkspace, walletState: WalletReadS
   return earnState?.status === "READY" ? applyEarnPortfolio(withWallet, earnState.portfolio) : withWallet;
 }
 
+// Per-tab memory: a reload must not silently drop a smoke test back into the
+// main treasury, where reconnecting would replace the main wallet.
+const SCOPE_KEY = "hodd:workspace-scope";
+function restoredScope(): WorkspaceScope {
+  try { return typeof window !== "undefined" && window.sessionStorage.getItem(SCOPE_KEY) === "SMOKE_TEST" ? "SMOKE_TEST" : "TREASURY"; } catch { return "TREASURY"; }
+}
+
 export function TreasuryWorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const [workspaceScope, setWorkspaceScope] = useState<WorkspaceScope>("TREASURY");
+  // Scope is not rendered before hydration (the banner needs a signed-in user).
+  const [workspaceScope, setWorkspaceScopeState] = useState<WorkspaceScope>(restoredScope);
+  const setWorkspaceScope = (scope: WorkspaceScope) => { try { window.sessionStorage.setItem(SCOPE_KEY, scope); } catch { /* scope still switches for this page */ } setWorkspaceScopeState(scope); };
   const [workspace, setWorkspace] = useState<TreasuryWorkspace>(initialWorkspace);
   const [evaluatedAt, setEvaluatedAt] = useState(initialWorkspace.updatedAt);
   const [walletState, setWalletState] = useState<WalletReadState>({ status: "IDLE" });

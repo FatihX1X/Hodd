@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { EarnContext } from "./server-quotes";
 import type { EarnQuote } from "./models";
-const fake = vi.hoisted(() => ({ leases: new Set<string>(), consumed: new Set<string>(), records: new Map(), policy: vi.fn(), current: vi.fn(), live: vi.fn(), position: vi.fn(), verify: vi.fn(), transaction: vi.fn(), receipt: vi.fn(), estimate: vi.fn(), gasPrice: vi.fn(), callData: "0x1234" }));
+const fake = vi.hoisted(() => ({ leases: new Set<string>(), consumed: new Set<string>(), records: new Map(), policy: vi.fn(), current: vi.fn(), live: vi.fn(), position: vi.fn(), verify: vi.fn(), transaction: vi.fn(), receipt: vi.fn(), estimate: vi.fn(), gasPrice: vi.fn(), callData: "0x1234", steps: null as string[] | null }));
 vi.mock("server-only", () => ({}));
 vi.mock("node:fs/promises", () => ({ mkdir: vi.fn(), writeFile: vi.fn(async (path: string) => { if (fake.leases.has(path)) throw new Error("EEXIST"); fake.leases.add(path); }), unlink: vi.fn(async (path: string) => { fake.leases.delete(path); }) }));
 vi.mock("./server-context", () => ({ assertEarnContextCurrent: fake.current }));
@@ -19,7 +19,11 @@ vi.mock("./durable-quotes", () => ({ digest: (value: string) => value, durableEa
   consume: vi.fn(async (id: string) => { if (fake.consumed.has(id)) throw new Error("CONSUMED"); fake.consumed.add(id); return fake.records.get(id); }),
 } }));
 vi.mock("./gateway", () => {
-  const operation = async ({ from }: { from: { adapter: { signing: { sign: (payload: object) => Promise<{ txHash: string }> } } } }) => from.adapter.signing.sign({ fromAddress: "0x0000000000000000000000000000000000000001", chain: { chainId: 5042002 }, calls: [{ to: "0x0000000000000000000000000000000000000002", data: fake.callData, value: 0n }] });
+  const operation = async ({ from }: { from: { adapter: { signing: { sign: (payload: object) => Promise<{ txHash: string }> } } } }) => {
+    let result = { txHash: "" };
+    for (const data of fake.steps ?? [fake.callData]) result = await from.adapter.signing.sign({ fromAddress: "0x0000000000000000000000000000000000000001", chain: { chainId: 5042002 }, calls: [{ to: "0x0000000000000000000000000000000000000002", data, value: 0n }] });
+    return result;
+  };
   return { arcClient: { getBlockNumber: vi.fn(async () => 10n), getGasPrice: fake.gasPrice, estimateGas: fake.estimate, getTransaction: fake.transaction, waitForTransactionReceipt: fake.receipt }, earnKit: { earn: { deposit: operation, withdraw: operation } }, getEarnPosition: fake.position, operationConfig: () => ({}) };
 });
 import { inspectEarnJob, replyToEarnJob, startEarnJob } from "./jobs";
@@ -33,7 +37,7 @@ function record(operation: EarnQuote["operation"] = "DEPOSIT") {
 }
 async function pending(id: string) { await vi.waitFor(() => expect(inspectEarnJob(context, id).pending).not.toBeNull()); return inspectEarnJob(context, id).pending!; }
 beforeEach(() => {
-  vi.clearAllMocks(); fake.leases.clear(); fake.consumed.clear(); fake.records.clear(); fake.callData = "0x1234"; fake.current.mockResolvedValue(undefined);
+  vi.clearAllMocks(); fake.leases.clear(); fake.consumed.clear(); fake.records.clear(); fake.callData = "0x1234"; fake.steps = null; fake.current.mockResolvedValue(undefined);
   fake.estimate.mockResolvedValue(21000n); fake.gasPrice.mockResolvedValue(10000000000n);
   fake.policy.mockReturnValue({ status: "PASS" }); fake.verify.mockReturnValue(undefined);
   fake.live.mockResolvedValue({ workspace: { liquidUsdc: money("10000000") }, positions: [], position: { redeemable: money("2000000") }, vault: { warnings: [], earnKitWarnings: [] } });
@@ -53,7 +57,7 @@ describe("user-approved Earn orchestration", () => {
     const id = record(); await startEarnJob(context, id, false);
     await vi.waitFor(() => expect(inspectEarnJob(context, id).state).toBe("FAILED"));
     const failed = inspectEarnJob(context, id);
-    expect(failed.failure).toEqual({ code: "SDK_FAILURE", stage: "EARN_SDK", providerCode: "155104" });
+    expect(failed.failure).toEqual({ code: "SDK_FAILURE", stage: "SIGNING_PREPARATION", providerCode: "155104" });
     expect(JSON.stringify(failed)).not.toContain("secret-");
     expect(fake.receipt).not.toHaveBeenCalled(); expect(fake.leases.size).toBe(0);
   });
@@ -75,6 +79,22 @@ describe("user-approved Earn orchestration", () => {
     expect(request.stage).toBe("APPROVAL"); expect(request.gasCeiling?.gasLimit).toBe("40000");
     await replyToEarnJob(context, id, { requestId: request.id, cancelled: true });
     await vi.waitFor(() => expect(inspectEarnJob(context, id).state).toBe("FAILED"));
+  });
+  it("fails closed and releases the lease when a step after a verified approval stops before signing", async () => {
+    // Live regression: fresh-wallet deposit needed more gas than Earn Kit quoted after the approval confirmed.
+    fake.steps = ["0x39509351", "0x1234"]; fake.estimate.mockResolvedValueOnce(21000n).mockResolvedValueOnce(50000n);
+    fake.transaction.mockResolvedValueOnce({ from: context.wallet.address, to: "0x0000000000000000000000000000000000000002", input: "0x39509351", value: 0n });
+    const id = record();
+    const bound = fake.records.get(id); bound.quote.gasFees.unshift({ name: "Approve", amount: money("1000"), gasLimit: "40000", maxGasPriceWei: "20000000000" });
+    await startEarnJob(context, id, false); const approval = await pending(id);
+    expect(approval.stage).toBe("APPROVAL");
+    await replyToEarnJob(context, id, { requestId: approval.id, txHash: hash });
+    await vi.waitFor(() => expect(inspectEarnJob(context, id).state).toBe("FAILED"));
+    const failed = inspectEarnJob(context, id);
+    expect(failed.events.map((event) => event.stage)).toContain("APPROVAL_CONFIRMED");
+    expect(failed.events.map((event) => event.stage)).not.toContain("EARN_SIGNATURE_REQUESTED");
+    expect(failed.failure).toEqual({ code: "FEE_RESERVE_EXCEEDED", stage: "SIGNING_PREPARATION" });
+    expect(fake.leases.size).toBe(0);
   });
   it("refuses a gas estimate above the quote before opening a wallet request", async () => {
     fake.estimate.mockResolvedValue(40000n);

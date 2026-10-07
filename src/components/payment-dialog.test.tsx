@@ -7,7 +7,7 @@ import { PaymentDialog } from "./payment-dialog";
 const fake = vi.hoisted(() => ({ sync: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined), runtime: vi.fn(), approve: vi.fn(async () => undefined) }));
 const wallet: WalletConnection = { provider: "INJECTED_METAMASK", custody: "USER_CONTROLLED", accountType: "EOA", chain: "ARC-TESTNET", chainId: 5042002, address: "0x0000000000000000000000000000000000000001", label: "Test", connectedAt: "2026-10-02T00:00:00Z" };
 vi.mock("./treasury-workspace-provider", () => ({ useTreasuryWorkspace: () => ({ workspace: { walletConnection: wallet }, workspaceScope: "TREASURY", syncForEarn: fake.sync, refreshPaymentLedger: fake.refresh }) }));
-vi.mock("@/lib/wallet/runtime", () => ({ getActiveWalletRuntime: fake.runtime }));
+vi.mock("@/lib/wallet/runtime", async (original) => ({ ...(await original<typeof import("@/lib/wallet/runtime")>()), getActiveWalletRuntime: fake.runtime, peekActiveWalletRuntime: () => fake.runtime() }));
 const obligation = { ...initialWorkspace.obligations[0], revision: 1, recipientAddress: "0x0000000000000000000000000000000000000002" };
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 describe("payment review UI", () => {

@@ -18,6 +18,7 @@ const erc4626PositionAbi = [
   { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
   { type: "function", name: "convertToAssets", stateMutability: "view", inputs: [{ name: "shares", type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "maxWithdraw", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "withdraw", stateMutability: "nonpayable", inputs: [{ name: "assets", type: "uint256" }, { name: "receiver", type: "address" }, { name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
 ] as const;
 
 export class EarnGatewayError extends Error {
@@ -57,10 +58,15 @@ export async function getEarnPosition(walletAddress: string, vault: EarnVault): 
       arcClient.readContract({ address: vault.address as `0x${string}`, abi: erc4626PositionAbi, functionName: "asset", blockNumber }),
     ]);
     if (getAddress(asset) !== ARC_TESTNET_USDC) throw new Error("Non-canonical vault asset");
-    const [assets, withdrawable] = await Promise.all([
+    const [assets, reportedMax] = await Promise.all([
       arcClient.readContract({ address: vault.address as `0x${string}`, abi: erc4626PositionAbi, functionName: "convertToAssets", args: [shareBalance], blockNumber }),
       arcClient.readContract({ address: vault.address as `0x${string}`, abi: erc4626PositionAbi, functionName: "maxWithdraw", args: [address], blockNumber }),
     ]);
+    // Morpho Vault V2 always reports maxWithdraw = 0. Prove the full position
+    // is withdrawable at the same block with an eth_call; failure stays at 0.
+    const withdrawable = reportedMax === 0n && assets > 0n
+      ? await arcClient.simulateContract({ address: vault.address as `0x${string}`, abi: erc4626PositionAbi, functionName: "withdraw", args: [assets, address, address], account: address, blockNumber }).then(() => assets, () => 0n)
+      : reportedMax;
     const currentBalance = { currency: "USDC", decimals: 6, minorUnits: assets.toString() } as const;
     const maxWithdrawable = { currency: "USDC", decimals: 6, minorUnits: withdrawable.toString() } as const;
     const redeemable = minUsdc(currentBalance, maxWithdrawable, vault.liquidity);
