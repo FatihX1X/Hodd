@@ -1,13 +1,13 @@
 import "server-only";
-import { evaluateEarnExecutionAccess } from "./access-policy";
+import { evaluateEarnExecutionAccess, requestHostOrigin } from "./access-policy";
 
 export class EarnAccessError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) { super(message); }
 }
 
 export function assertLocalEarnExecution(request: Request) {
-  const url = new URL(request.url);
-  const decision = evaluateEarnExecutionAccess({ nodeEnv: process.env.VERCEL ? "production" : process.env.NODE_ENV, enabled: process.env.HODD_EARN_EXECUTION_ENABLED, hostname: url.hostname, requestOrigin: request.headers.get("origin"), urlOrigin: url.origin, contentType: request.headers.get("content-type") });
+  const actual = requestHostOrigin(request);
+  const decision = evaluateEarnExecutionAccess({ nodeEnv: process.env.VERCEL ? "production" : process.env.NODE_ENV, enabled: process.env.HODD_EARN_EXECUTION_ENABLED, hostname: actual.hostname, requestOrigin: request.headers.get("origin"), urlOrigin: actual.origin, contentType: request.headers.get("content-type") });
   if (!decision.allowed) throw new EarnAccessError(decision.code, decision.message, decision.status);
 }
 
