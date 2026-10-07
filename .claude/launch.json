@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hodd-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--no-install", "next", "dev"],
+      "port": 3000
+    }
+  ]
+}
