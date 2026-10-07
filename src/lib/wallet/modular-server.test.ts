@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WalletConnection } from "@/lib/treasury/models";
 const fake = vi.hoisted(() => ({ chain: vi.fn(), account: vi.fn(), prepare: vi.fn(), sign: vi.fn(), send: vi.fn() }));
 vi.mock("server-only", () => ({}));
-vi.mock("viem", () => ({ createPublicClient: () => ({ getChainId: fake.chain }) }));
+vi.mock("viem", async (original) => ({ ...await original<typeof import("viem")>(), createPublicClient: () => ({ getChainId: fake.chain }) }));
 vi.mock("viem/account-abstraction", () => ({ toWebAuthnAccount: () => ({ sign: fake.sign }), createBundlerClient: () => ({ prepareUserOperation: fake.prepare, sendUserOperation: fake.send }) }));
 vi.mock("@circle-fin/modular-wallets-core", () => ({ toModularTransport: vi.fn(), toCircleSmartAccount: fake.account }));
 vi.mock("@/lib/earn/durable-quotes", () => ({ digest: () => "call" }));
