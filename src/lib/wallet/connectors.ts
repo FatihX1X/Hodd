@@ -7,8 +7,9 @@ import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { getAddress } from "viem";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { ActiveWalletRuntime } from "./runtime";
-import { boundedArcGasPrice } from "@/lib/earn/gas";
+import { ARC_MIN_GAS_PRICE_WEI, boundedArcGasPrice } from "@/lib/earn/gas";
 import { ARC_GAS_STATION_PAYMASTER, walletFeeQuoteSchema } from "./fee-quote";
+import { WalletPreflightError, walletPreflight } from "./preflight";
 
 export interface InjectedProvider {
   isMetaMask?: boolean; isRabby?: boolean; providers?: InjectedProvider[];
@@ -50,19 +51,29 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
     provider: provider as Parameters<typeof createViemAdapterFromProvider>[0]["provider"],
     capabilities: { addressContext: "user-controlled" },
   });
-  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei, _onUserOperation, feeQuote) => {
-    if (calls.length !== 1) throw new Error("This browser wallet requires one transaction at a time.");
-    const current = await provider.request({ method: "eth_accounts" });
-    if (!Array.isArray(current) || String(current[0]).toLowerCase() !== walletConnection.address.toLowerCase() || String(await provider.request({ method: "eth_chainId" })).toLowerCase() !== ARC_CHAIN_HEX) throw new Error("The wallet account or network changed. Reconnect and request a new quote.");
-    const publicClient = createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io", { retryCount: 0 }) });
-    const call = calls[0];
-    const account = getAddress(walletConnection.address);
-    const gas = await publicClient.estimateGas({ account, ...call, value: BigInt(call.value ?? "0") });
-    const gasPrice = boundedArcGasPrice(await publicClient.getGasPrice());
-    if (gas * gasPrice > BigInt(gasBudgetWei)) throw new Error("Current gas exceeds the approved fee reserve. Request a new quote.");
-    if (feeQuote && (feeQuote.provider !== walletConnection.provider || feeQuote.walletAddress.toLowerCase() !== account.toLowerCase() || Date.parse(feeQuote.expiresAt) <= Date.now() || gas > BigInt(feeQuote.gasLimit) || gasPrice > BigInt(feeQuote.maxFeePerGasWei) || feeQuote.maxNativeFeeWei !== gasBudgetWei)) throw new Error("The current fee or wallet exceeds the approved quote. Request a new quote.");
-    const wallet = createWalletClient({ account, chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) });
-    return wallet.sendTransaction({ ...call, value: BigInt(call.value ?? "0"), gas, gasPrice });
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, gasBudgetWei, _onUserOperation, feeQuote, earnGasCeiling) => {
+    const prepared = await walletPreflight(async () => {
+      if (calls.length !== 1) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "This browser wallet requires one transaction at a time.");
+      let current: unknown; let chain: unknown;
+      try { current = await provider.request({ method: "eth_accounts" }); chain = await provider.request({ method: "eth_chainId" }); }
+      catch { throw new WalletPreflightError("WALLET_PROVIDER_UNAVAILABLE", "The selected wallet could not confirm its account or network. Reconnect it and request a new quote."); }
+      if (!Array.isArray(current) || String(current[0]).toLowerCase() !== walletConnection.address.toLowerCase() || String(chain).toLowerCase() !== ARC_CHAIN_HEX) throw new WalletPreflightError("WALLET_SESSION_CHANGED", "The wallet account or network changed. Reconnect and request a new quote.");
+      if (feeQuote && earnGasCeiling) throw new WalletPreflightError("FEE_RESERVE_EXCEEDED", "Conflicting fee ceilings were supplied.");
+      const call = calls[0];
+      const account = getAddress(walletConnection.address);
+      // Earn supplies a fresh, server-simulated ceiling with the bound signing request.
+      // The browser does not need a second cross-origin RPC simulation before Rabby opens.
+      const publicClient = earnGasCeiling ? null : createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io", { retryCount: 0 }) });
+      const gas = earnGasCeiling ? BigInt(earnGasCeiling.gasLimit) : await publicClient!.estimateGas({ account, ...call, value: BigInt(call.value ?? "0") });
+      const gasPrice = earnGasCeiling ? BigInt(earnGasCeiling.gasPriceWei) : boundedArcGasPrice(await publicClient!.getGasPrice());
+      if (gas <= 0n || gasPrice < ARC_MIN_GAS_PRICE_WEI || gas * gasPrice > BigInt(gasBudgetWei)) throw new WalletPreflightError("FEE_RESERVE_EXCEEDED", "Current gas exceeds the approved fee reserve. Request a new quote.");
+      if (feeQuote && (feeQuote.provider !== walletConnection.provider || feeQuote.walletAddress.toLowerCase() !== account.toLowerCase() || Date.parse(feeQuote.expiresAt) <= Date.now() || gas > BigInt(feeQuote.gasLimit) || gasPrice > BigInt(feeQuote.maxFeePerGasWei) || feeQuote.maxNativeFeeWei !== gasBudgetWei)) throw new WalletPreflightError("FEE_RESERVE_EXCEEDED", "The current fee or wallet exceeds the approved quote. Request a new quote.");
+      const wallet = createWalletClient({ account, chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) });
+      return { wallet, call, gas, gasPrice };
+    });
+    // Anything from this boundary onwards can have reached the provider.
+    // Never relabel a lost wallet response as a preflight failure.
+    return prepared.wallet.sendTransaction({ ...prepared.call, value: BigInt(prepared.call.value ?? "0"), gas: prepared.gas, gasPrice: prepared.gasPrice });
   };
   return { runtime: { connection: walletConnection, adapter, sendCalls, expiresAt: Date.now() + 55 * 60_000 }, provider };
 }

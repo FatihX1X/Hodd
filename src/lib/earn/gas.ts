@@ -5,3 +5,9 @@ export function boundedArcGasPrice(price: bigint) {
   const buffered = price * 2n;
   return buffered < ARC_MIN_GAS_PRICE_WEI ? ARC_MIN_GAS_PRICE_WEI : buffered;
 }
+
+/** Reserve 20% above the provider's gas estimate, using exact integer units. */
+export function bufferedEarnGasLimit(estimate: bigint) {
+  if (estimate <= 0n) throw new Error("Invalid gas estimate");
+  return (estimate * 120n + 99n) / 100n;
+}

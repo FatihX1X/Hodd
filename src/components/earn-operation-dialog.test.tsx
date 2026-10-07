@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EarnOperationDialog } from "./earn-operation-dialog";
 import type { EarnQuote, EarnVault } from "@/lib/earn/models";
+import { WalletPreflightError } from "@/lib/wallet/preflight";
 const fake = vi.hoisted(() => ({ sync: vi.fn(), activity: vi.fn(), event: vi.fn(), runtime: vi.fn(), send: vi.fn(), pin: vi.fn() }));
 const money = { currency: "USDC" as const, decimals: 6 as const, minorUnits: "1000000" };
 const wallet = "0x0000000000000000000000000000000000000001";
@@ -12,7 +13,7 @@ const hash = `0x${"1".repeat(64)}`;
 vi.mock("./treasury-workspace-provider", () => ({ useTreasuryWorkspace: () => ({ workspaceScope: "SMOKE_TEST", workspace: { walletConnection: { address: wallet, connectedAt: "session" } }, syncForEarn: fake.sync, recordEarnActivity: fake.activity, recordEarnEvent: fake.event, refreshEarn: vi.fn(), refreshWallet: vi.fn() }) }));
 vi.mock("@/lib/wallet/runtime", () => ({ getActiveWalletRuntime: fake.runtime }));
 const quote: EarnQuote = { quoteId: id, operation: "DEPOSIT", walletAddress: wallet, vaultAddress: vault.address, vaultName: vault.name, amount: money, fees: { ...money, minorUnits: "1" }, gasFees: [], expectedShares: null, sharesToRedeem: null, maxWithdrawable: null, warnings: [], requiresWarningAcknowledgement: false, policy: { status: "PASS", label: "Policy", reason: "Server approved" }, expiresAt: "2099-01-01T00:05:00.000Z" };
-const pending = { id, stage: "EARN", calls: [{ to: vault.address, data: "0x1234" }], gasBudgetWei: "1000000000000000" };
+const pending = { id, stage: "EARN", calls: [{ to: vault.address, data: "0x1234" }], gasBudgetWei: "1000000000000000", gasCeiling: { gasLimit: "30000", gasPriceWei: "20000000000" } };
 const job = { status: "PENDING", executionId: id, state: "AWAITING_SIGNATURE", events: [{ stage: "USER_CONFIRMED" }], pending, result: null };
 const complete = { ...job, state: "COMPLETE", pending: null, events: [...job.events, { stage: "EARN_CONFIRMED", hash }], result: { executionId: id, operation: "DEPOSIT", status: "COMPLETE", txHash: hash, explorerUrl: `https://testnet.arcscan.app/tx/${hash}`, vaultAddress: vault.address, amount: money, residualPosition: null } };
 function fetchResponses(responses: unknown[]) { const fetcher = vi.fn(async (...args: [string, RequestInit]) => { void args; return { json: async () => responses.shift() }; }); vi.stubGlobal("fetch", fetcher); return fetcher; }
@@ -24,6 +25,29 @@ async function review() {
 beforeEach(() => { vi.clearAllMocks(); fake.sync.mockResolvedValue(undefined); fake.send.mockResolvedValue(hash); fake.pin.mockResolvedValue(undefined); fake.runtime.mockReturnValue({ connection: { address: wallet, connectedAt: "session" }, sendCalls: fake.send, approveChallenge: fake.pin }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("two-step Earn confirmation", () => {
+  it("cancels safely on proven pre-signature failure without retrying", async () => {
+    const fetcher = fetchResponses([{ status: "READY", quote }, job, { ...job, state: "FAILED", pending: null }]);
+    fake.send.mockRejectedValue(new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "Read-only checks failed."));
+    await review(); await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Wallet preflight (WALLET_PREFLIGHT_FAILED)");
+    expect(screen.getByRole("button", { name: "Confirm onchain deposit" })).toBeDisabled();
+    expect(JSON.parse(fetcher.mock.calls[2][1].body as string)).toMatchObject({ cancelled: true, uncertain: false });
+    expect(fake.send).toHaveBeenCalledTimes(1);
+  });
+  it("keeps an ambiguous wallet send failure UNKNOWN", async () => {
+    const fetcher = fetchResponses([{ status: "READY", quote }, job, { ...job, state: "UNKNOWN", pending: null }]);
+    fake.send.mockRejectedValue(new Error("Lost provider response"));
+    await review(); await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" }));
+    await screen.findByRole("alert");
+    expect(JSON.parse(fetcher.mock.calls[2][1].body as string)).toMatchObject({ cancelled: true, uncertain: true });
+    expect(fake.send).toHaveBeenCalledTimes(1);
+  });
+  it("shows safe pre-signature diagnostics without opening PIN or sending calls", async () => {
+    fetchResponses([{ status: "READY", quote }, { ...job, state: "FAILED", pending: null, failure: { code: "SDK_FAILURE", stage: "CHALLENGE_CREATION", providerCode: "155104" } }]);
+    await review(); await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("CHALLENGE_CREATION / SDK_FAILURE / Circle 155104");
+    expect(fake.pin).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
+  });
   it("does not sign on review and sends no client policy overrides", async () => {
     const fetcher = fetchResponses([{ status: "READY", quote }]); await review();
     expect(fake.send).not.toHaveBeenCalled(); expect(fake.sync).toHaveBeenCalled();
@@ -35,6 +59,7 @@ describe("two-step Earn confirmation", () => {
     fetchResponses([{ status: "READY", quote }, activeJob, complete]); await review();
     await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" })); await screen.findByText("Arc Testnet receipt returned.");
     expect(provider === "embedded" ? fake.pin : fake.send).toHaveBeenCalledTimes(1);
+    if (provider === "browser") expect(fake.send).toHaveBeenCalledWith(pending.calls, pending.gasBudgetWei, expect.any(Function), undefined, pending.gasCeiling);
     expect(fake.event).toHaveBeenCalledWith("EARN_CONFIRMED", hash);
   });
   it("blocks policy rejection without ever asking the signer", async () => {

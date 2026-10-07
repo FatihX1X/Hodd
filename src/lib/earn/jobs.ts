@@ -19,11 +19,14 @@ import { EarnAccessError } from "./security";
 import { nativeWeiToUsdcCeil } from "./money";
 import { boundedArcGasPrice } from "./gas";
 import { recordEarnEvidence } from "./provider-evidence";
+import { safeEarnFailure } from "./diagnostics";
+import { assertBoundedEarnFeeProvider, boundedCircleChallengeFee } from "./circle-fees";
 
-type Pending = { id: string; stage: "APPROVAL" | "EARN"; calls: WalletCall[]; gasBudgetWei: string; challengeId?: string };
+type Pending = { id: string; stage: "APPROVAL" | "EARN"; calls: WalletCall[]; gasBudgetWei: string; gasCeiling?: { gasLimit: string; gasPriceWei: string }; challengeId?: string };
 type Job = { id: string; binding: string; policyDigest: string; quote: EarnQuote; status: "AWAITING_SIGNATURE" | "SUBMITTED" | "COMPLETE" | "PARTIAL" | "FAILED" | "UNKNOWN"; events: { stage: string; hash?: string }[]; pending?: Pending; result?: EarnExecutionResult; controller: AbortController; resolve?: (hash: `0x${string}`) => void; reject?: (error: Error) => void; submitted: boolean; gasSpent: bigint; lease: string; startedBlock: bigint; embeddedCall?: { to: `0x${string}`; data: `0x${string}`; value: bigint }; receipts: Set<string> };
 const globalJobs = globalThis as typeof globalThis & { hoddEarnJobs?: Map<string, Job> };
 const jobs = globalJobs.hoddEarnJobs ??= new Map<string, Job>();
+const diagnostics = (job: Job) => job as Job & { diagnosticStage?: string; failure?: ReturnType<typeof safeEarnFailure> };
 const hashPattern = /^0x[\da-fA-F]{64}$/;
 const gasReserveWei = (quote: EarnQuote) => quote.gasFees.reduce((sum, item) => {
   if (!item.amount) throw new Error("GAS_RESERVE_UNAVAILABLE");
@@ -42,7 +45,7 @@ function checkedJob(context: EarnContext, id: string) {
 
 export function inspectEarnJob(context: EarnContext, id: string) {
   const job = checkedJob(context, id);
-  return { status: "PENDING" as const, executionId: job.id, state: job.status, events: job.events, pending: job.pending ?? null, result: job.result ?? null };
+  return { status: "PENDING" as const, executionId: job.id, state: job.status, events: job.events, pending: job.pending ?? null, result: job.result ?? null, failure: diagnostics(job).failure ?? null };
 }
 
 export async function replyToEarnJob(context: EarnContext, id: string, input: { requestId: string; txHash?: string; userOperationHash?: string; cancelled?: boolean; uncertain?: boolean }) {
@@ -65,10 +68,24 @@ async function waitForSignature(job: Job, payload: EvmCallsPayload, context: Ear
   if (job.controller.signal.aborted || Date.parse(job.quote.expiresAt!) <= Date.now()) throw new Error("QUOTE_EXPIRED_OR_CANCELLED");
   if (payload.fromAddress.toLowerCase() !== context.wallet.address.toLowerCase() || payload.chain.chainId !== 5_042_002 || payload.calls.length !== 1) throw new Error("UNSUPPORTED_SIGNING_PAYLOAD");
   const calls = payload.calls.map((call) => ({ to: call.to, data: call.data, value: (call.value ?? 0n).toString() }));
-  const stage = calls[0].data?.startsWith("0x095ea7b3") ? "APPROVAL" as const : "EARN" as const;
+  // Earn Kit uses increaseAllowance for Arc USDC and approve for vault shares.
+  const stage = /^(0x095ea7b3|0x39509351)/i.test(calls[0].data ?? "") ? "APPROVAL" as const : "EARN" as const;
   const remaining = gasReserveWei(job.quote) - job.gasSpent;
   if (remaining <= 0n) throw new Error("FEE_RESERVE_EXHAUSTED");
-  job.pending = { id: randomUUID(), stage, calls, gasBudgetWei: remaining.toString() };
+  let gasCeiling: Pending["gasCeiling"];
+  if (context.wallet.accountType === "EOA") {
+    const fee = job.quote.gasFees.find((item) => stage === "APPROVAL" ? /^approv/i.test(item.name) : item.name.toLowerCase() === (job.quote.operation === "DEPOSIT" ? "deposit" : "withdraw"));
+    if (!fee?.gasLimit || !fee.maxGasPriceWei) throw new Error("FEE_CEILING_UNAVAILABLE");
+    const gasLimit = BigInt(fee.gasLimit);
+    const maxGasPriceWei = BigInt(fee.maxGasPriceWei);
+    const [gasPriceWei, estimate] = await Promise.all([
+      arcClient.getGasPrice().then(boundedArcGasPrice).catch(() => { throw new Error("GAS_PRICE_UNAVAILABLE"); }),
+      arcClient.estimateGas({ account: getAddress(context.wallet.address), to: calls[0].to, data: calls[0].data, value: BigInt(calls[0].value ?? "0") }).catch(() => { throw new Error("GAS_ESTIMATE_UNAVAILABLE"); }),
+    ]);
+    if (estimate > gasLimit || gasPriceWei > maxGasPriceWei || gasLimit * gasPriceWei > remaining) throw new Error("FEE_RESERVE_EXCEEDED");
+    gasCeiling = { gasLimit: gasLimit.toString(), gasPriceWei: gasPriceWei.toString() };
+  }
+  job.pending = { id: randomUUID(), stage, calls, gasBudgetWei: remaining.toString(), ...(gasCeiling ? { gasCeiling } : {}) };
   job.status = "AWAITING_SIGNATURE"; job.events.push({ stage: `${stage}_SIGNATURE_REQUESTED` });
   const hash = await new Promise<`0x${string}`>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("SIGNATURE_TIMEOUT")), Math.max(1, Date.parse(job.quote.expiresAt!) - Date.now()));
@@ -102,6 +119,7 @@ async function embeddedEarnAdapter(job: Job, context: EarnContext) {
   if (!client || !context.userToken || !context.wallet.walletId) throw new Error("EMBEDDED_SESSION_REQUIRED");
   const cappedClient = new Proxy(client, { get(target, key) {
     if (key === "createUserTransactionContractExecutionChallenge") return async (input: Parameters<typeof client.createUserTransactionContractExecutionChallenge>[0]) => {
+      diagnostics(job).diagnosticStage = "CHALLENGE_PREPARATION";
       await assertEarnContextCurrent(context);
       await assertFreshJobPolicy(job, context);
       if (job.controller.signal.aborted || Date.parse(job.quote.expiresAt!) <= Date.now() || input.walletId !== context.wallet.walletId) throw new Error("EMBEDDED_SESSION_EXPIRED");
@@ -111,13 +129,20 @@ async function embeddedEarnAdapter(job: Job, context: EarnContext) {
       if (gasLimit < 21_000n) throw new Error("FEE_RESERVE_EXHAUSTED");
       if (!input.callData) throw new Error("ENCODED_CALL_REQUIRED");
       job.embeddedCall = { to: getAddress(input.contractAddress), data: input.callData, value: parseUnits(input.amount ?? "0", 18) };
-      // SDK supports absolute EIP-1559 fee ceilings; never use an unbounded feeLevel.
-      return target.createUserTransactionContractExecutionChallenge({ ...input, fee: { type: "absolute", config: { gasLimit: gasLimit.toString(), maxFee: formatUnits(gasPrice, 9), priorityFee: formatUnits(gasPrice / 10n, 9) } } });
+      const fee = boundedCircleChallengeFee(context.wallet.accountType, gasLimit, gasPrice);
+      diagnostics(job).diagnosticStage = "CHALLENGE_CREATION";
+      try {
+        return await target.createUserTransactionContractExecutionChallenge({ ...input, fee });
+      } catch (error) {
+        // Capture numeric provider code before App Kit translates the SDK error.
+        diagnostics(job).failure = safeEarnFailure(error, "CHALLENGE_CREATION");
+        throw error;
+      }
     };
     const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
   } });
   return createCircleUserWalletAdapter({ client: cappedClient, userToken: context.userToken, walletId: context.wallet.walletId, walletAddress: getAddress(context.wallet.address), chain: "Arc_Testnet", accountType: "SCA", timeoutMs: 300_000,
-    onChallenge: ({ challengeId }) => { const stage = job.embeddedCall?.data.startsWith("0x095ea7b3") ? "APPROVAL" : "EARN"; job.pending = { id: randomUUID(), stage, challengeId, calls: [], gasBudgetWei: "0" }; job.events.push({ stage: `${stage}_PIN_REQUESTED` }); job.status = "AWAITING_SIGNATURE"; },
+    onChallenge: ({ challengeId }) => { const stage = /^(0x095ea7b3|0x39509351)/i.test(job.embeddedCall?.data ?? "") ? "APPROVAL" : "EARN"; job.pending = { id: randomUUID(), stage, challengeId, calls: [], gasBudgetWei: "0" }; job.events.push({ stage: `${stage}_PIN_REQUESTED` }); job.status = "AWAITING_SIGNATURE"; },
     onProgress: async (progress) => {
       if (progress.stage === "transaction") { job.submitted = true; job.status = "SUBMITTED"; delete job.pending; }
       job.events.push({ stage: `CIRCLE_${progress.stage.toUpperCase()}_${progress.status}`, ...(progress.txHash ? { hash: progress.txHash } : {}) });
@@ -125,8 +150,8 @@ async function embeddedEarnAdapter(job: Job, context: EarnContext) {
         try {
           const receipt = await arcClient.getTransactionReceipt({ hash: progress.txHash });
           if (receipt.blockNumber <= job.startedBlock || !job.embeddedCall) throw new Error("STALE_RECEIPT");
-          if (job.embeddedCall.data.startsWith("0x095ea7b3")) verifyApprovalReceipt(receipt, job.embeddedCall, context.wallet.address); else verifyEarnReceipt(receipt, job.quote);
-          job.events.push({ stage: job.embeddedCall.data.startsWith("0x095ea7b3") ? "APPROVAL_CONFIRMED" : "EARN_CONFIRMED", hash: receipt.transactionHash });
+          if (/^(0x095ea7b3|0x39509351)/i.test(job.embeddedCall.data)) verifyApprovalReceipt(receipt, job.embeddedCall, context.wallet.address); else verifyEarnReceipt(receipt, job.quote);
+          job.events.push({ stage: /^(0x095ea7b3|0x39509351)/i.test(job.embeddedCall.data) ? "APPROVAL_CONFIRMED" : "EARN_CONFIRMED", hash: receipt.transactionHash });
           job.receipts.add(progress.txHash); job.gasSpent += receipt.gasUsed * receipt.effectiveGasPrice;
           if (job.gasSpent > gasReserveWei(job.quote)) throw new Error("FEE_RESERVE_EXCEEDED");
         } catch { job.controller.abort(); }
@@ -137,9 +162,12 @@ async function embeddedEarnAdapter(job: Job, context: EarnContext) {
 
 async function runEarnJob(job: Job, context: EarnContext) {
   try {
+    diagnostics(job).diagnosticStage = "ADAPTER_SETUP";
     const adapter = context.wallet.provider === "CIRCLE_USER_CONTROLLED" ? await embeddedEarnAdapter(job, context) : createViemAdapter({ capabilities: { addressContext: "user-controlled", supportedChains: [ArcTestnet] }, address: getAddress(context.wallet.address), getPublicClient: () => arcClient, signing: externalSigning({ sign: async (payload) => ({ txHash: await waitForSignature(job, payload, context) }) }) });
     const params = { from: { adapter, chain: "Arc_Testnet" as const }, vaultAddress: job.quote.vaultAddress, amount: formatUnits(BigInt(job.quote.amount.minorUnits), 6), config: { ...operationConfig(), batchTransactions: false } };
+    diagnostics(job).diagnosticStage = "EARN_SDK";
     const result = job.quote.operation === "DEPOSIT" ? await earnKit.earn.deposit(params) : await earnKit.earn.withdraw(params);
+    diagnostics(job).diagnosticStage = "RECEIPT_VERIFICATION";
     const receipt = await arcClient.waitForTransactionReceipt({ hash: result.txHash as `0x${string}`, timeout: 120_000 });
     if (job.controller.signal.aborted || receipt.blockNumber <= job.startedBlock) throw new Error("EXECUTION_REQUIRES_REVIEW");
     verifyEarnReceipt(receipt, job.quote);
@@ -150,16 +178,19 @@ async function runEarnJob(job: Job, context: EarnContext) {
     job.status = status; job.events.push({ stage: status, hash: receipt.transactionHash });
     try { await recordEarnEvidence(context, job.quote, job.result, job.startedBlock, receipt.blockNumber); }
     catch { job.events.push({ stage: "PROVIDER_EVIDENCE_NOT_SAVED" }); }
-  } catch {
+  } catch (error) {
+    diagnostics(job).failure ??= safeEarnFailure(error, diagnostics(job).diagnosticStage ?? "EARN_SDK");
     job.status = job.submitted ? "UNKNOWN" : "FAILED"; job.events.push({ stage: job.status });
   } finally {
     delete job.pending; delete job.resolve; delete job.reject;
+    delete diagnostics(job).diagnosticStage;
     // An uncertain submit deliberately keeps its lease across server restarts.
     if (job.status !== "UNKNOWN") await unlink(job.lease).catch(() => undefined);
   }
 }
 
 export async function startEarnJob(context: EarnContext, quoteId: string, acknowledged: boolean) {
+  assertBoundedEarnFeeProvider(context.wallet);
   const stored = await durableEarnQuotes.read(quoteId, context.binding);
   if (stored.policyDigest !== context.policyDigest) throw new EarnAccessError("WORKSPACE_CHANGED", "Request a new quote after changing your workspace.", 409);
   const live = await freshEarnInputs(context, stored.quote.vaultAddress);

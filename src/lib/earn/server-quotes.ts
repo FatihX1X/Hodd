@@ -11,7 +11,8 @@ import { assessEarnOperation } from "./server-policy";
 import { durableEarnQuotes } from "./durable-quotes";
 import { QUOTE_TTL_MS } from "./quote-store";
 import type { earnServerContext } from "./server-context";
-import { boundedArcGasPrice } from "./gas";
+import { boundedArcGasPrice, bufferedEarnGasLimit } from "./gas";
+import { assertBoundedEarnFeeProvider } from "./circle-fees";
 
 export type EarnContext = Awaited<ReturnType<typeof earnServerContext>>;
 export const readEarnAdapter = (address: string) => createViemAdapter({ capabilities: { addressContext: "user-controlled", supportedChains: [ArcTestnet] }, address: getAddress(address), getPublicClient: () => arcClient });
@@ -26,6 +27,7 @@ export async function freshEarnInputs(context: EarnContext, vaultAddress: string
 }
 
 export async function prepareServerQuote(context: EarnContext, intent: EarnOperationIntent) {
+  assertBoundedEarnFeeProvider(context.wallet);
   const live = await freshEarnInputs(context, intent.vaultAddress);
   const amount = intent.operation === "REDEEM_ALL" ? live.position.redeemable : decimalStringToMoney(intent.amount ?? "0");
   if (context.scope === "SMOKE_TEST" && intent.operation === "DEPOSIT" && BigInt(amount.minorUnits) > 1_000_000n) throw new EarnGatewayError("SMOKE_AMOUNT_LIMIT", "Smoke-test deposits are limited to 1 USDC.");
@@ -37,7 +39,12 @@ export async function prepareServerQuote(context: EarnContext, intent: EarnOpera
     if (value.symbol !== "USDC") throw new EarnGatewayError("INVALID_QUOTE_ASSET", "Quote fees must be canonical USDC.");
     return decimalStringToMoney(value.amount);
   };
-  const gasFees = (raw.gasFees ?? []).map((item) => ({ name: item.name, amount: item.fees ? nativeWeiToUsdcCeil((BigInt(item.fees.gas) * boundedArcGasPrice(BigInt(item.fees.gasPrice))).toString()) : null }));
+  const gasFees = (raw.gasFees ?? []).map((item) => {
+    if (!item.fees) return { name: item.name, amount: null };
+    const gasLimit = bufferedEarnGasLimit(BigInt(item.fees.gas));
+    const maxGasPriceWei = boundedArcGasPrice(BigInt(item.fees.gasPrice));
+    return { name: item.name, gasLimit: gasLimit.toString(), maxGasPriceWei: maxGasPriceWei.toString(), amount: nativeWeiToUsdcCeil((gasLimit * maxGasPriceWei).toString()) };
+  });
   const fees = addUsdc([...raw.fees.map(asset), ...gasFees.flatMap((item) => item.amount ? [item.amount] : [])]);
   const warnings = [...live.vault.earnKitWarnings, ...live.vault.warnings.map((item) => `${item.level}: ${item.type}`), ...("earnKitWarnings" in raw ? raw.earnKitWarnings ?? [] : [])];
   let policy = assessEarnOperation(live.workspace, live.positions, intent.operation, amount, fees);

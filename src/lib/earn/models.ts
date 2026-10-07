@@ -43,7 +43,7 @@ export const earnPositionSchema = z.object({
   observedAt: z.string().datetime(),
 });
 
-export const earnGasFeeSchema = z.object({ name: z.string(), amount: usdcMoneySchema.nullable(), error: z.string().optional() });
+export const earnGasFeeSchema = z.object({ name: z.string(), amount: usdcMoneySchema.nullable(), gasLimit: z.string().regex(/^\d+$/).optional(), maxGasPriceWei: z.string().regex(/^\d+$/).optional(), error: z.string().optional() });
 export const earnQuoteSchema = z.object({
   quoteId: z.string().uuid().nullable(),
   operation: earnOperationSchema,
@@ -104,8 +104,9 @@ export const earnJobSchema = z.object({
   status: z.literal("PENDING"), executionId: z.string().uuid(),
   state: z.enum(["AWAITING_SIGNATURE", "SUBMITTED", "COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"]),
   events: z.array(z.object({ stage: z.string(), hash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional() })),
-  pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), challengeId: z.string().optional() }).nullable(),
+  pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).optional(), challengeId: z.string().optional() }).nullable(),
   result: earnExecutionResultSchema.nullable(),
+  failure: z.object({ code: z.string().regex(/^[A-Z_]+$/), stage: z.enum(["ADAPTER_SETUP", "EARN_SDK", "CHALLENGE_PREPARATION", "CHALLENGE_CREATION", "RECEIPT_VERIFICATION"]), providerCode: z.string().regex(/^\d{6}$/).optional() }).nullable().optional(),
 });
 export const earnJobApiSchema = z.union([earnJobSchema, earnErrorResponseSchema]);
 

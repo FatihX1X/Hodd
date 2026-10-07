@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUpRight, LoaderCircle, X } from "lucide-react";
 import { earnJobApiSchema, earnQuoteApiSchema, type EarnOperation, type EarnPosition, type EarnQuote, type EarnVault } from "@/lib/earn/models";
 import { getActiveWalletRuntime } from "@/lib/wallet/runtime";
+import { WalletPreflightError } from "@/lib/wallet/preflight";
 import type { Money } from "@/lib/treasury/models";
 import { formatMoney as formatTreasuryMoney } from "@/lib/treasury/format";
 import { StatusPill } from "./primitives";
@@ -44,7 +45,10 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
         for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
         recordedEvents = job.events.length;
         setTimeline(job.events.map((event) => `${event.stage.replaceAll("_", " ")}${event.hash ? ` · ${event.hash}` : ""}`));
-        if (job.state === "FAILED" || job.state === "UNKNOWN") throw new Error(job.state === "FAILED" ? "The operation did not complete. Review any approvals before creating a new quote." : "Submission outcome is unknown. Check the explorer; Hodd will not retry automatically.");
+        if (job.state === "FAILED" || job.state === "UNKNOWN") {
+          const details = job.failure ? ` Diagnostic: ${job.failure.stage} / ${job.failure.code}${job.failure.providerCode ? ` / Circle ${job.failure.providerCode}` : ""}.` : "";
+          throw new Error((job.state === "FAILED" ? "The operation did not complete. Review any approvals before creating a new quote." : "Submission outcome is unknown. Check the explorer; Hodd will not retry automatically.") + details);
+        }
         if (job.pending && !answered.has(job.pending.id)) {
           const pending = job.pending; answered.add(pending.id);
           const signer = getActiveWalletRuntime();
@@ -55,10 +59,12 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
             job = await status({}); continue;
           }
           let hash: string;
-          try { hash = await signer.sendCalls!(pending.calls, pending.gasBudgetWei, (userOperationHash) => { void status({ requestId: pending.id, userOperationHash }).catch(() => undefined); }); }
+          try { hash = await signer.sendCalls!(pending.calls, pending.gasBudgetWei, (userOperationHash) => { void status({ requestId: pending.id, userOperationHash }).catch(() => undefined); }, undefined, pending.gasCeiling); }
           catch (caught) {
             const denied = typeof caught === "object" && caught !== null && "code" in caught && caught.code === 4001;
-            await status({ requestId: pending.id, cancelled: true, uncertain: !denied });
+            const preflight = caught instanceof WalletPreflightError;
+            await status({ requestId: pending.id, cancelled: true, uncertain: !denied && !preflight });
+            if (preflight) throw new Error(`Wallet preflight (${caught.code}): ${caught.message}`);
             throw new Error("Wallet approval was cancelled or could not be verified. Inspect the wallet before retrying.");
           }
           job = await status({ requestId: pending.id, txHash: hash });
@@ -67,7 +73,7 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
       if (!job.result) throw new Error("Receipt verification timed out. Check the explorer; do not resubmit automatically.");
       for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
       const execution = job.result; setResult(execution); recordEarnActivity(`Earn ${labels[operation].toLowerCase()} confirmed`, `${formatMoney(execution.amount)} completed with status ${execution.status}.`, "A successful Arc receipt was checked against the selected vault, operation, amount and receiving wallet.", execution); refreshEarn(); refreshWallet();
-    } catch (caught) { const message = caught instanceof Error ? caught.message : "Execution status is unknown. Check the explorer before retrying."; setError(message); recordEarnActivity("Earn execution requires review", `${labels[operation]} did not return a confirmed receipt.`, message, undefined, { approval: "APPROVED", execution: "UNKNOWN" }); } finally { setBusy(false); }
+    } catch (caught) { const message = caught instanceof Error ? caught.message : "Execution status is unknown. Check the explorer before retrying."; setError(message); setQuote((current) => current ? { ...current, quoteId: null } : current); recordEarnActivity("Earn execution requires review", `${labels[operation]} did not return a confirmed receipt.`, message, undefined, { approval: "APPROVED", execution: "UNKNOWN" }); } finally { setBusy(false); }
   };
   const unavailable = !enabled || !walletAddress || (operation !== "DEPOSIT" && (!position || BigInt(position.currentBalance.minorUnits) === 0n));
   return <Dialog.Root open={open} onOpenChange={(next) => { if (busy && !next) return; setOpen(next); if (!next) reset(); }}><Dialog.Trigger asChild><button disabled={unavailable} className="border border-black/20 px-3 py-2 text-xs font-semibold hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-35">{labels[operation]}</button></Dialog.Trigger><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" /><Dialog.Content aria-describedby="earn-operation-description" className="fixed inset-y-0 right-0 z-50 w-full max-w-lg overflow-y-auto bg-[#fffdf7] shadow-2xl focus:outline-none"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/15 bg-[#fffdf7] px-5 py-4"><div><p className="mono text-[9px] uppercase text-black/40">Arc Testnet · two-step confirmation</p><Dialog.Title className="mt-1 text-lg font-semibold">{labels[operation]} USDC</Dialog.Title></div><Dialog.Close disabled={busy} aria-label={`Close ${labels[operation]} dialog`} className="grid size-10 place-items-center border border-black/15 disabled:opacity-35"><X className="size-4" /></Dialog.Close></div><Dialog.Description id="earn-operation-description" className="px-5 pt-5 text-sm leading-6 text-black/55">Review a fresh Circle App Kit quote before separately confirming the onchain operation. The wallet may submit an approval and an Earn transaction. Keep this dialog open while signing; reject an unwanted request in your wallet.</Dialog.Description>
