@@ -6,20 +6,23 @@ import { ArrowUpRight, Fingerprint, LoaderCircle, LogIn, RefreshCw, ShieldCheck,
 import { ARC_TESTNET_EXPLORER_URL } from "@/lib/arc/constants";
 import { formatDate } from "@/lib/treasury/format";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { connectCircleEmbeddedWallet, connectInjectedWallet, connectModularWallet, type InjectedProvider } from "@/lib/wallet/connectors";
+import { connectCircleEmbeddedWallet, connectInjectedWallet, connectModularWallet, connectTestSigner, testSignerAvailable, type InjectedProvider } from "@/lib/wallet/connectors";
 import { setActiveWalletRuntime, type ActiveWalletRuntime } from "@/lib/wallet/runtime";
 import { useHasActiveSigner } from "@/lib/wallet/use-active-signer";
 import { MoneyValue, SectionCard, SectionHeading, StatusPill } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 const shortAddress = (address: string) => `${address.slice(0, 8)}…${address.slice(-6)}`;
-const providerLabels = { CIRCLE_USER_CONTROLLED: "Circle Embedded", CIRCLE_MODULAR: "Circle Passkey", INJECTED_METAMASK: "MetaMask", INJECTED_RABBY: "Rabby" } as const;
+const providerLabels = { CIRCLE_USER_CONTROLLED: "Circle Embedded", CIRCLE_MODULAR: "Circle Passkey", INJECTED_METAMASK: "MetaMask", INJECTED_RABBY: "Rabby", TEST_SIGNER: "Test signer (dev)" } as const;
 
 export function WalletPanel() {
   const { workspaceScope, workspace, walletState, disconnectWallet, connectWallet, refreshWallet, refreshEarn, storageIssue } = useTreasuryWorkspace();
   const [open, setOpen] = useState(false); const [busy, setBusy] = useState<string | null>(null); const [error, setError] = useState(""); const [progress, setProgress] = useState(""); const [signedIn, setSignedIn] = useState(false);
   const connection = workspace.walletConnection;
   const [injectedProvider, setInjectedProvider] = useState<InjectedProvider | null>(null);
+  // Dev-only: the server answers 404 unless its local test signer is fully enabled.
+  const [testSignerAddress, setTestSignerAddress] = useState<string | null>(null);
+  useEffect(() => { let active = true; void testSignerAvailable().then((address) => { if (active) setTestSignerAddress(address); }); return () => { active = false; }; }, []);
   const signingSession = useHasActiveSigner(connection);
   const scopeLabel = workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST workspace" : "MAIN treasury";
   const snapshot = walletState.status === "READY" ? walletState.snapshot : walletState.status === "ERROR" ? walletState.staleSnapshot : undefined;
@@ -59,6 +62,7 @@ export function WalletPanel() {
     if (!connection) return;
     if (connection.provider === "INJECTED_METAMASK" || connection.provider === "INJECTED_RABBY") return void injected(connection.provider === "INJECTED_RABBY" ? "RABBY" : "METAMASK");
     if (connection.provider === "CIRCLE_MODULAR") return void run("PASSKEY_LOGIN", () => connectModularWallet("LOGIN"));
+    if (connection.provider === "TEST_SIGNER") return void run("TEST_SIGNER", connectTestSigner);
     return void run("CIRCLE", () => connectCircleEmbeddedWallet(setProgress));
   };
 
@@ -77,6 +81,7 @@ export function WalletPanel() {
           <div className="grid gap-3 p-5 md:grid-cols-3"><div className={choiceClass}><Fingerprint className="size-5 text-[#164b32]" /><h3 className="mt-4 text-sm font-semibold">Circle Passkey</h3><p className="mt-2 text-xs leading-5 text-black/50">Use Windows Hello, Face ID or a security key. No browser extension.</p><div className="mt-auto flex w-full gap-2 pt-4"><button disabled={Boolean(busy)} onClick={() => void run("PASSKEY_REGISTER", () => connectModularWallet("REGISTER"))} className="flex-1 bg-black px-3 py-2 text-xs text-white">Create</button><button disabled={Boolean(busy)} onClick={() => void run("PASSKEY_LOGIN", () => connectModularWallet("LOGIN"))} className="flex-1 border border-black/20 px-3 py-2 text-xs">Sign in</button></div></div>
             <div className={choiceClass}><ShieldCheck className="size-5 text-[#164b32]" /><h3 className="mt-4 text-sm font-semibold">Circle Embedded</h3><p className="mt-2 text-xs leading-5 text-black/50">Sign in with Hodd, then approve wallet actions with Circle PIN.</p>{signedIn ? <button disabled={Boolean(busy)} onClick={() => void run("CIRCLE", () => connectCircleEmbeddedWallet(setProgress))} className="mt-auto w-full bg-black px-3 py-2 text-xs text-white">Connect embedded wallet</button> : <a href="/login" className="mt-auto inline-flex w-full items-center justify-center gap-2 border border-black/20 px-3 py-2 text-xs"><LogIn className="size-3.5" />Sign in first</a>}</div>
             <div className={choiceClass}><WalletCards className="size-5 text-[#164b32]" /><h3 className="mt-4 text-sm font-semibold">Browser wallet</h3><p className="mt-2 text-xs leading-5 text-black/50">Use an existing MetaMask or Rabby account and approve in the extension.</p><div className="mt-auto flex w-full gap-2 pt-4"><button disabled={Boolean(busy)} onClick={() => void injected("METAMASK")} className="flex-1 bg-black px-3 py-2 text-xs text-white">MetaMask</button><button disabled={Boolean(busy)} onClick={() => void injected("RABBY")} className="flex-1 border border-black/20 px-3 py-2 text-xs">Rabby</button></div></div></div>
+          {testSignerAddress && <div className="mx-5 mb-5 flex flex-wrap items-center justify-between gap-3 border border-dashed border-[#906a2f]/40 bg-[#f3e8ce] p-4 text-xs text-[#694813]"><div><p className="font-semibold">Test signer (local development only)</p><p className="mono mt-1 break-all">{testSignerAddress}</p><p className="mt-1">Key held by this dev server. Earn only. Evidence is recorded as TEST_SIGNER and never counts for MetaMask, Rabby or Circle.</p></div><button disabled={Boolean(busy)} onClick={() => void run("TEST_SIGNER", connectTestSigner)} className="shrink-0 border border-black/20 bg-white px-3 py-2 font-semibold">Use test signer</button></div>}
           {(busy || progress) && <div role="status" className="mx-5 mb-5 flex items-center gap-2 border border-[#456c9c]/20 bg-[#dfe9f5] p-3 text-xs text-[#294e7c]">{busy && <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />}{progress || "Waiting for wallet approval…"}</div>}{error && <p role="alert" className="mx-5 mb-5 border border-[#9a433c]/20 bg-[#f5dedb] p-3 text-xs text-[#7b332d]">{error}</p>}<p className="mx-5 mb-5 text-[10px] leading-4 text-black/40">Never enter an API key, entity secret, recovery file, seed phrase or private key into Hodd.</p>
         </Dialog.Content></Dialog.Portal></Dialog.Root></div></SectionCard>;
 }

@@ -24,6 +24,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     CIRCLE_MODULAR: "Circle Passkey",
     INJECTED_METAMASK: "MetaMask",
     INJECTED_RABBY: "Rabby",
+    TEST_SIGNER: "Test signer (dev)",
   } as const;
   const walletLabel = workspace.walletConnection ? walletLabels[workspace.walletConnection.provider] : "User wallet";
 
