@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EarnOperationDialog } from "./earn-operation-dialog";
 import type { EarnQuote, EarnVault } from "@/lib/earn/models";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
+import { setActiveWalletRuntime } from "@/lib/wallet/runtime";
 const fake = vi.hoisted(() => ({ sync: vi.fn(), activity: vi.fn(), event: vi.fn(), runtime: vi.fn(), send: vi.fn(), pin: vi.fn() }));
 const money = { currency: "USDC" as const, decimals: 6 as const, minorUnits: "1000000" };
 const wallet = "0x0000000000000000000000000000000000000001";
@@ -11,7 +12,7 @@ const vault = { address: "0x0000000000000000000000000000000000000002", name: "Al
 const id = "12345678-1234-4123-8123-123456789abc";
 const hash = `0x${"1".repeat(64)}`;
 vi.mock("./treasury-workspace-provider", () => ({ useTreasuryWorkspace: () => ({ workspaceScope: "SMOKE_TEST", workspace: { walletConnection: { address: wallet, connectedAt: "session" } }, syncForEarn: fake.sync, recordEarnActivity: fake.activity, recordEarnEvent: fake.event, refreshEarn: vi.fn(), refreshWallet: vi.fn() }) }));
-vi.mock("@/lib/wallet/runtime", () => ({ getActiveWalletRuntime: fake.runtime }));
+vi.mock("@/lib/wallet/runtime", async (original) => ({ ...(await original<typeof import("@/lib/wallet/runtime")>()), getActiveWalletRuntime: fake.runtime, peekActiveWalletRuntime: () => fake.runtime() }));
 const quote: EarnQuote = { quoteId: id, operation: "DEPOSIT", walletAddress: wallet, vaultAddress: vault.address, vaultName: vault.name, amount: money, fees: { ...money, minorUnits: "1" }, gasFees: [], expectedShares: null, sharesToRedeem: null, maxWithdrawable: null, warnings: [], requiresWarningAcknowledgement: false, policy: { status: "PASS", label: "Policy", reason: "Server approved" }, expiresAt: "2099-01-01T00:05:00.000Z" };
 const pending = { id, stage: "EARN", calls: [{ to: vault.address, data: "0x1234" }], gasBudgetWei: "1000000000000000", gasCeiling: { gasLimit: "30000", gasPriceWei: "20000000000" } };
 const job = { status: "PENDING", executionId: id, state: "AWAITING_SIGNATURE", events: [{ stage: "USER_CONFIRMED" }], pending, result: null };
@@ -25,6 +26,22 @@ async function review() {
 beforeEach(() => { vi.clearAllMocks(); fake.sync.mockResolvedValue(undefined); fake.send.mockResolvedValue(hash); fake.pin.mockResolvedValue(undefined); fake.runtime.mockReturnValue({ connection: { address: wallet, connectedAt: "session" }, sendCalls: fake.send, approveChallenge: fake.pin }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("two-step Earn confirmation", () => {
+  it("refuses to quote without an in-memory signer and asks to reconnect", async () => {
+    fake.runtime.mockReturnValue(null); const fetcher = fetchResponses([]);
+    render(<EarnOperationDialog operation="DEPOSIT" vault={vault} policyLimit={money} enabled />);
+    await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.type(screen.getByLabelText("Deposit amount"), "1");
+    await userEvent.click(screen.getByRole("button", { name: "Review fresh quote" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Signer session is not active");
+    expect(fetcher).not.toHaveBeenCalled(); expect(fake.sync).not.toHaveBeenCalled();
+  });
+  it("does not consume the quote when the signer is lost after review", async () => {
+    const fetcher = fetchResponses([{ status: "READY", quote }]); await review();
+    fake.runtime.mockReturnValue({ connection: { address: wallet, connectedAt: "older-session" }, sendCalls: fake.send });
+    act(() => setActiveWalletRuntime(fake.runtime())); // notify subscribers of the signer change
+    expect(await screen.findByRole("button", { name: "Confirm onchain deposit" })).toBeDisabled();
+    expect(screen.getByRole("note")).toHaveTextContent("Reconnect signer");
+    expect(fetcher).toHaveBeenCalledTimes(1); expect(fake.send).not.toHaveBeenCalled();
+  });
   it("cancels safely on proven pre-signature failure without retrying", async () => {
     const fetcher = fetchResponses([{ status: "READY", quote }, job, { ...job, state: "FAILED", pending: null }]);
     fake.send.mockRejectedValue(new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "Read-only checks failed."));
@@ -75,8 +92,12 @@ describe("two-step Earn confirmation", () => {
     expect(JSON.parse(fetcher.mock.calls[2][1].body as string)).toMatchObject({ cancelled: true, uncertain: provider === "embedded" });
   });
   it("rejects a changed signer and preserves UNKNOWN rather than retrying", async () => {
-    const fetcher = fetchResponses([{ status: "READY", quote }, job, { ...job, pending: null, state: "FAILED" }]); await review(); fake.runtime.mockReturnValue(null);
-    await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" })); await screen.findByRole("alert");
+    const fetcher = fetchResponses([{ status: "READY", quote }, job, { ...job, pending: null, state: "FAILED" }]); await review();
+    // The signer disappears after /execute started the job (e.g. expiry while waiting).
+    const base = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (...args) => { const reply = await base(...args); if (String(args[0]).endsWith("/api/earn/execute")) fake.runtime.mockReturnValue(null); return reply; });
+    await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" })); expect(await screen.findByRole("alert")).toHaveTextContent("signer session changed");
+    expect(JSON.parse(fetcher.mock.calls[2][1].body as string)).toMatchObject({ cancelled: true });
     expect(fake.send).not.toHaveBeenCalled(); await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
   });
 });

@@ -17,7 +17,7 @@ import { verifyApprovalReceipt, verifyEarnReceipt } from "./receipts";
 import { earnExecutionResultSchema, type EarnExecutionResult, type EarnQuote } from "./models";
 import { EarnAccessError } from "./security";
 import { nativeWeiToUsdcCeil } from "./money";
-import { boundedArcGasPrice } from "./gas";
+import { boundedArcGasPrice, quotedSigningGasPrice } from "./gas";
 import { recordEarnEvidence } from "./provider-evidence";
 import { safeEarnFailure } from "./diagnostics";
 import { assertBoundedEarnFeeProvider, boundedCircleChallengeFee } from "./circle-fees";
@@ -79,10 +79,10 @@ async function waitForSignature(job: Job, payload: EvmCallsPayload, context: Ear
     const gasLimit = BigInt(fee.gasLimit);
     const maxGasPriceWei = BigInt(fee.maxGasPriceWei);
     const [gasPriceWei, estimate] = await Promise.all([
-      arcClient.getGasPrice().then(boundedArcGasPrice).catch(() => { throw new Error("GAS_PRICE_UNAVAILABLE"); }),
+      arcClient.getGasPrice().catch(() => { throw new Error("GAS_PRICE_UNAVAILABLE"); }).then((price) => quotedSigningGasPrice(price, maxGasPriceWei)),
       arcClient.estimateGas({ account: getAddress(context.wallet.address), to: calls[0].to, data: calls[0].data, value: BigInt(calls[0].value ?? "0") }).catch(() => { throw new Error("GAS_ESTIMATE_UNAVAILABLE"); }),
     ]);
-    if (estimate > gasLimit || gasPriceWei > maxGasPriceWei || gasLimit * gasPriceWei > remaining) throw new Error("FEE_RESERVE_EXCEEDED");
+    if (estimate > gasLimit || gasLimit * gasPriceWei > remaining) throw new Error("FEE_RESERVE_EXCEEDED");
     gasCeiling = { gasLimit: gasLimit.toString(), gasPriceWei: gasPriceWei.toString() };
   }
   job.pending = { id: randomUUID(), stage, calls, gasBudgetWei: remaining.toString(), ...(gasCeiling ? { gasCeiling } : {}) };
@@ -103,6 +103,8 @@ async function waitForSignature(job: Job, payload: EvmCallsPayload, context: Ear
   } else if (stage === "EARN") verifyEarnReceipt(receipt, job.quote);
   else verifyApprovalReceipt(receipt, payload.calls[0], context.wallet.address);
   job.events.push({ stage: `${stage}_CONFIRMED`, hash });
+  // A verified approval leaves nothing in flight; a later pre-signature failure is FAILED, not UNKNOWN.
+  if (stage === "APPROVAL") job.submitted = false;
   await assertEarnContextCurrent(context);
   return hash;
 }
@@ -163,7 +165,11 @@ async function embeddedEarnAdapter(job: Job, context: EarnContext) {
 async function runEarnJob(job: Job, context: EarnContext) {
   try {
     diagnostics(job).diagnosticStage = "ADAPTER_SETUP";
-    const adapter = context.wallet.provider === "CIRCLE_USER_CONTROLLED" ? await embeddedEarnAdapter(job, context) : createViemAdapter({ capabilities: { addressContext: "user-controlled", supportedChains: [ArcTestnet] }, address: getAddress(context.wallet.address), getPublicClient: () => arcClient, signing: externalSigning({ sign: async (payload) => ({ txHash: await waitForSignature(job, payload, context) }) }) });
+    const adapter = context.wallet.provider === "CIRCLE_USER_CONTROLLED" ? await embeddedEarnAdapter(job, context) : createViemAdapter({ capabilities: { addressContext: "user-controlled", supportedChains: [ArcTestnet] }, address: getAddress(context.wallet.address), getPublicClient: () => arcClient, signing: externalSigning({ sign: async (payload) => {
+      // Earn Kit rewraps signer errors as RPC_ENDPOINT_ERROR; keep Hodd's own code.
+      try { return { txHash: await waitForSignature(job, payload, context) }; }
+      catch (error) { diagnostics(job).failure ??= safeEarnFailure(error, "SIGNING_PREPARATION"); throw error; }
+    } }) });
     const params = { from: { adapter, chain: "Arc_Testnet" as const }, vaultAddress: job.quote.vaultAddress, amount: formatUnits(BigInt(job.quote.amount.minorUnits), 6), config: { ...operationConfig(), batchTransactions: false } };
     diagnostics(job).diagnosticStage = "EARN_SDK";
     const result = job.quote.operation === "DEPOSIT" ? await earnKit.earn.deposit(params) : await earnKit.earn.withdraw(params);

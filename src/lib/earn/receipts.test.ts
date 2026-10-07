@@ -23,6 +23,26 @@ describe("Arc Earn receipt evidence", () => {
   it("rejects unrelated receipts, wrong amounts, wallets and vaults", () => {
     for (const value of [receipt(stranger), receipt(wallet, 1n), receipt(wallet, 1_000_000n, stranger), { ...receipt(), status: "reverted" as const }, { ...receipt(), logs: [] }]) expect(() => verifyEarnReceipt(value, quote)).toThrow();
   });
+  it("binds Earn Kit router deposits from wallet funding to forwarded shares", () => {
+    const router = "0x0000000000000000000000000000000000000004"; const usdc = "0x3600000000000000000000000000000000000000";
+    const transfer = (address: `0x${string}`, from: `0x${string}`, to: `0x${string}`, value: bigint) => ({ address, topics: encodeEventTopics({ abi, eventName: "Transfer", args: { from, to } }), data: encodeAbiParameters([{ type: "uint256" }], [value]) });
+    const deposit = { address: vault, topics: encodeEventTopics({ abi, eventName: "Deposit", args: { sender: router, owner: router } }), data: encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [1_000_000n, 999n]) };
+    const routed = (...logs: unknown[]) => ({ status: "success", logs }) as unknown as TransactionReceipt;
+    const funded = transfer(usdc, wallet, router, 1_000_000n); const forwarded = transfer(vault, router, wallet, 999n);
+    expect(() => verifyEarnReceipt(routed(funded, deposit, forwarded), quote)).not.toThrow();
+    for (const value of [routed(deposit, forwarded), routed(funded, deposit), routed(funded, deposit, transfer(vault, router, wallet, 998n)), routed(funded, deposit, transfer(vault, router, stranger, 999n)), routed(transfer(usdc, stranger, router, 1_000_000n), deposit, forwarded), routed(transfer(usdc, wallet, router, 1n), deposit, forwarded)]) expect(() => verifyEarnReceipt(value, quote)).toThrow();
+  });
+  it("binds Earn Kit router withdrawals to the wallet's exact share transfer", () => {
+    const router = "0x0000000000000000000000000000000000000004"; const usdc = "0x3600000000000000000000000000000000000000";
+    const withdrawal = { ...quote, operation: "WITHDRAW" as const, amount: { minorUnits: "500000" } } as EarnQuote;
+    const transfer = (address: `0x${string}`, from: `0x${string}`, to: `0x${string}`, value: bigint) => ({ address, topics: encodeEventTopics({ abi, eventName: "Transfer", args: { from, to } }), data: encodeAbiParameters([{ type: "uint256" }], [value]) });
+    const withdraw = (receiver: `0x${string}`, owner: `0x${string}` = router) => ({ address: vault, topics: encodeEventTopics({ abi, eventName: "Withdraw", args: { sender: router, receiver, owner } }), data: encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [500_000n, 499n]) });
+    const routed = (...logs: unknown[]) => ({ status: "success", logs }) as unknown as TransactionReceipt;
+    const pulled = transfer(vault, wallet, router, 499n);
+    expect(() => verifyEarnReceipt(routed(pulled, withdraw(wallet)), withdrawal)).not.toThrow();
+    expect(() => verifyEarnReceipt(routed(pulled, withdraw(router), transfer(usdc, router, wallet, 500_000n)), withdrawal)).not.toThrow();
+    for (const value of [routed(withdraw(wallet)), routed(transfer(vault, wallet, router, 498n), withdraw(wallet)), routed(transfer(vault, stranger, router, 499n), withdraw(wallet)), routed(pulled, withdraw(stranger)), routed(pulled, withdraw(router), transfer(usdc, router, stranger, 500_000n))]) expect(() => verifyEarnReceipt(value, withdrawal)).toThrow();
+  });
   it("correlates smart-account approval receipts to owner, spender and exact allowance", () => {
     const call = { to: vault, data: encodeFunctionData({ abi, functionName: "approve", args: [stranger, 100n] }) } as const;
     const value = { status: "success", logs: [{ address: vault, topics: encodeEventTopics({ abi, eventName: "Approval", args: { owner: wallet, spender: stranger } }), data: encodeAbiParameters([{ type: "uint256" }], [100n]) }] } as unknown as TransactionReceipt;

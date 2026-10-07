@@ -16,7 +16,7 @@ The wallet ownership update adds user choice: Circle Embedded (Hodd email/Google
 
 Stage 4 adds local-only, user-approved Earn execution. The server loads the authenticated owner's persisted policy and obligations, reads fresh wallet balances and vault positions, and creates a five-minute quote. Client-supplied policy limits and wallet overrides are rejected. Quote confirmation is separate from the provider signature. Approval, UserOperation submission and verified Arc receipts are distinct events.
 
-**Live signing verification is still pending for every provider. Stage 4 is not declared complete.** Automated mocks do not prove that Circle sponsorship, PIN challenges or browser-wallet execution are configured correctly. Unsupported/unavailable providers fail closed. Legacy developer-wallet signing code is not used.
+**Rabby (EOA) live Earn verification passed on 2026-10-07; Circle Passkey and MetaMask are still pending, and Circle PIN/SCA Earn fails closed. Stage 4 is not declared complete.** Automated mocks do not prove that Circle sponsorship, PIN challenges or browser-wallet execution are configured correctly. Unsupported/unavailable providers fail closed. Legacy developer-wallet signing code is not used.
 
 ## Setup
 
@@ -96,9 +96,21 @@ Supabase security advisor reports the existing [leaked-password protection setti
 
 Live preflight exposed a browser-only SDK transport (`window is not defined`) on the server. The server now uses a Node-safe Circle RPC transport with fixed localhost application metadata, an explicit read/estimation method allowlist, no redirects and no automatic retries. Signing, submission and recovery writes are denied by the transport. A real read-only preflight returned HTTP 200 and Arc Testnet chain ID 5042002. This verifies server connectivity, not user signing or payment execution; those acceptance tests still require the user-owned test wallet.
 
+## Live Earn findings (2026-10-07)
+
+Rabby smoke evidence for a fresh test wallet: deposit 0.5 USDC (block 66009558), withdraw 0.25 USDC (66009751) and redeem-all with zero residual shares (66009872), each server-verified and stored in `earn_provider_evidence`. Fixes found during the live run:
+
+- Earn Kit routes deposits and withdrawals through a router contract. Receipts are accepted only when the wallet's exact USDC/share transfer to the router, the router's exact-amount vault event and the forwarded shares/assets to the wallet all match.
+- The allowlisted vault is a Morpho Vault V2, whose `maxWithdraw` always returns 0. Redeemable liquidity is proven with a same-block `withdraw` simulation instead.
+- The quote's gas price ceiling already includes the 2x buffer; signing compares the raw network price against it and never signs above it.
+- Earn Kit cannot simulate a deposit before its approval exists and quotes ~265k gas; a fresh wallet's first routed deposit needs ~447k. Unsimulated deposits reserve at least 500k gas before buffering.
+- Earn Kit rewraps signer errors as `RPC_ENDPOINT_ERROR`; Hodd records its own `SIGNING_PREPARATION` code first. A verified approval followed by a pre-signature failure ends FAILED and releases the lease.
+- Signers are memory-only. The wallet panel shows signer state live with **Reconnect signer**; quotes and confirmations require an active matching signer, and the workspace scope survives reloads per tab.
+- Rabby may raise the gas limit it was given; the signed gas price is still the bounded one. Circle's Earn position index can lag the chain by several minutes after a withdrawal, temporarily rejecting withdrawal quotes.
+
 ## Next work
 
-Complete the three-provider live testnet verification before declaring Stage 4 complete. Stage 5 is in progress; it is not a completed payment product. Deployment remains out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
+Complete live testnet verification for Circle Passkey and MetaMask before declaring Stage 4 complete. Stage 5 is in progress; it is not a completed payment product. Deployment remains out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
 
 ## Stage 5 payment implementation status
 

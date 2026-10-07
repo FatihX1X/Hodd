@@ -11,7 +11,7 @@ import { assessEarnOperation } from "./server-policy";
 import { durableEarnQuotes } from "./durable-quotes";
 import { QUOTE_TTL_MS } from "./quote-store";
 import type { earnServerContext } from "./server-context";
-import { boundedArcGasPrice, bufferedEarnGasLimit } from "./gas";
+import { boundedArcGasPrice, earnStepGasLimit } from "./gas";
 import { assertBoundedEarnFeeProvider } from "./circle-fees";
 
 export type EarnContext = Awaited<ReturnType<typeof earnServerContext>>;
@@ -39,9 +39,11 @@ export async function prepareServerQuote(context: EarnContext, intent: EarnOpera
     if (value.symbol !== "USDC") throw new EarnGatewayError("INVALID_QUOTE_ASSET", "Quote fees must be canonical USDC.");
     return decimalStringToMoney(value.amount);
   };
+  // A deposit quoted behind a pending approval was not simulated against real allowance.
+  const unsimulatedDeposit = intent.operation === "DEPOSIT" && (raw.gasFees ?? []).some((item) => /^approv/i.test(item.name));
   const gasFees = (raw.gasFees ?? []).map((item) => {
     if (!item.fees) return { name: item.name, amount: null };
-    const gasLimit = bufferedEarnGasLimit(BigInt(item.fees.gas));
+    const gasLimit = earnStepGasLimit(item.name, BigInt(item.fees.gas), unsimulatedDeposit);
     const maxGasPriceWei = boundedArcGasPrice(BigInt(item.fees.gasPrice));
     return { name: item.name, gasLimit: gasLimit.toString(), maxGasPriceWei: maxGasPriceWei.toString(), amount: nativeWeiToUsdcCeil((gasLimit * maxGasPriceWei).toString()) };
   });
