@@ -2,6 +2,7 @@ import "server-only";
 import { createPublicClient, createWalletClient, http, keccak256, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arcTestnet } from "viem/chains";
+import { quotedSigningGasPrice } from "@/lib/earn/gas";
 
 const LOOPBACK = ["localhost", "127.0.0.1", "[::1]", "::1"];
 const RPC = "https://rpc.testnet.arc.io";
@@ -17,6 +18,13 @@ export function testSignerAccount(hostname: string) {
   const key = process.env.HODD_TEST_SIGNER_PRIVATE_KEY?.trim();
   if (!key || !/^0x[\da-fA-F]{64}$/.test(key)) return null;
   return privateKeyToAccount(key as Hex);
+}
+
+/** Payment fee quotes carry a buffered max fee; sign at the bounded network price, never above it. */
+export async function paymentGasCeiling(fee: { gasLimit: string; maxFeePerGasWei: string; maxNativeFeeWei: string }) {
+  const price = quotedSigningGasPrice(await createPublicClient({ chain: arcTestnet, transport: http(RPC, { timeout: 15_000, retryCount: 0 }) }).getGasPrice(), BigInt(fee.maxFeePerGasWei));
+  if (BigInt(fee.gasLimit) * price > BigInt(fee.maxNativeFeeWei)) throw new Error("FEE_RESERVE_EXCEEDED");
+  return { gasLimit: fee.gasLimit, gasPriceWei: price.toString() };
 }
 
 /** Signs locally, then broadcasts. The hash is known before broadcast so an ambiguous send stays reviewable. */

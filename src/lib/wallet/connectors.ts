@@ -162,9 +162,11 @@ export async function connectTestSigner(): Promise<ActiveWalletRuntime> {
   if (!address) throw new Error("The local test signer is not enabled on this dev server.");
   const walletConnection = connection("TEST_SIGNER", address, "Test signer (dev)", "EOA");
   const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, _gasBudgetWei, _onUserOperation, feeQuote, earnGasCeiling) => {
-    if (feeQuote || !earnGasCeiling) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "The test signer supports Earn requests with a server-bound gas ceiling only.");
+    // Earn sends its server-bound ceiling; payments are bound to the server-held fee quote.
+    if (Boolean(feeQuote) === Boolean(earnGasCeiling) || (feeQuote && (feeQuote.provider !== "TEST_SIGNER" || feeQuote.walletAddress.toLowerCase() !== address.toLowerCase()))) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "The test signer needs exactly one server-bound Earn ceiling or payment fee quote for this wallet.");
+    const request = feeQuote ? { kind: "PAYMENT", calls } : { kind: "EARN", calls, gasCeiling: earnGasCeiling };
     let response: Response;
-    try { response = await fetch("/api/dev/test-signer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ calls, gasCeiling: earnGasCeiling }) }); }
+    try { response = await fetch("/api/dev/test-signer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }); }
     catch { throw new Error("The test signer response was lost; the outcome is unknown."); }
     const body = await response.json().catch(() => null) as { status?: string; txHash?: string; submitted?: boolean; code?: string; message?: string } | null;
     if (body?.status === "SIGNED" && body.txHash && /^0x[\da-fA-F]{64}$/.test(body.txHash)) return body.txHash as `0x${string}`;

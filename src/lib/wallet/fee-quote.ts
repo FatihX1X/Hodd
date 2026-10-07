@@ -16,7 +16,7 @@ export const sponsoredUserOperationSchema = z.object({
   paymasterVerificationGasLimit: integer, paymasterPostOpGasLimit: integer,
 }).strict();
 export const walletFeeQuoteSchema = z.object({
-  provider: z.enum(["INJECTED_METAMASK", "INJECTED_RABBY", "CIRCLE_USER_CONTROLLED", "CIRCLE_MODULAR"]),
+  provider: z.enum(["INJECTED_METAMASK", "INJECTED_RABBY", "CIRCLE_USER_CONTROLLED", "CIRCLE_MODULAR", "TEST_SIGNER"]),
   walletAddress: arcAddressSchema, chainId: z.literal(5042002), operationDigest: z.string(),
   observedAt: z.string().datetime(), expiresAt: z.string().datetime(),
   sponsorship: z.enum(["NOT_ASSUMED", "VERIFIED"]),
@@ -29,7 +29,8 @@ export const walletFeeQuoteSchema = z.object({
   if (cap <= 0n || cap !== BigInt(quote.maxNativeFeeWei) || BigInt(quote.priorityFeePerGasWei) > BigInt(quote.maxFeePerGasWei)) context.addIssue({ code: "custom", message: "Invalid fee ceiling" });
   if (quote.source !== "CIRCLE_MSCA" && (quote.sponsorship !== "NOT_ASSUMED" || quote.userOperation || quote.maxWalletDebit.minorUnits !== nativeWeiToUsdcCeil(cap.toString()).minorUnits)) context.addIssue({ code: "custom", message: "Unsupported sponsorship or wallet debit" });
   if (Date.parse(quote.expiresAt) <= Date.parse(quote.observedAt) || Date.parse(quote.expiresAt) - Date.parse(quote.observedAt) > 300_000) context.addIssue({ code: "custom", message: "Invalid fee validity" });
-  if ((quote.source === "ARC_EOA") !== quote.provider.startsWith("INJECTED_")) context.addIssue({ code: "custom", message: "Fee source/provider mismatch" });
+  // The dev TEST_SIGNER is a plain EOA, quoted exactly like a browser wallet.
+  if ((quote.source === "ARC_EOA") !== (quote.provider.startsWith("INJECTED_") || quote.provider === "TEST_SIGNER")) context.addIssue({ code: "custom", message: "Fee source/provider mismatch" });
   if (quote.source === "CIRCLE_UCW" && quote.provider !== "CIRCLE_USER_CONTROLLED") context.addIssue({ code: "custom", message: "Unsupported smart-account fee source" });
   if (quote.source === "CIRCLE_MSCA") {
     const op = quote.userOperation;

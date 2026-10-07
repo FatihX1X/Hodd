@@ -1,15 +1,18 @@
 import { z } from "zod";
 import { earnServerContext } from "@/lib/earn/server-context";
 import { claimTestSignerRequest } from "@/lib/earn/jobs";
+import { claimTestSignerPayment } from "@/lib/payments/jobs";
 import { assertLocalEarnExecution, EarnAccessError } from "@/lib/earn/security";
 import { requestHostOrigin } from "@/lib/earn/access-policy";
-import { sendTestSignerTransaction, testSignerAccount } from "@/lib/wallet/test-signer";
+import { paymentGasCeiling, sendTestSignerTransaction, testSignerAccount } from "@/lib/wallet/test-signer";
 
 const address = z.string().regex(/^0x[\da-fA-F]{40}$/).transform((value) => value as `0x${string}`);
-const schema = z.object({
-  calls: z.array(z.object({ to: address, data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() }).strict()).length(1),
-  gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).strict(),
-}).strict();
+const calls = z.array(z.object({ to: address, data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() }).strict()).length(1);
+const schema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("EARN"), calls, gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).strict() }).strict(),
+  // Payments are bound to the server-held proposal fee quote, never a client value.
+  z.object({ kind: z.literal("PAYMENT"), calls }).strict(),
+]);
 const headers = { "Cache-Control": "no-store" };
 export const runtime = "nodejs";
 
@@ -34,8 +37,14 @@ export async function POST(request: Request) {
       if (candidate?.wallet.provider === "TEST_SIGNER" && candidate.wallet.address.toLowerCase() === account.address.toLowerCase()) { context = candidate; break; }
     }
     if (!context) throw new EarnAccessError("TEST_SIGNER_NOT_SELECTED", "No signed-in workspace has selected the local test signer.", 409);
-    const claimed = claimTestSignerRequest(context.binding, input.data.calls, input.data.gasCeiling);
-    const txHash = await sendTestSignerTransaction(account, claimed.call, claimed.gasCeiling);
+    let txHash: `0x${string}`;
+    if (input.data.kind === "EARN") {
+      const claimed = claimTestSignerRequest(context.binding, input.data.calls, input.data.gasCeiling);
+      txHash = await sendTestSignerTransaction(account, claimed.call, claimed.gasCeiling);
+    } else {
+      const claimed = claimTestSignerPayment(context.binding, input.data.calls);
+      txHash = await sendTestSignerTransaction(account, claimed.call, await paymentGasCeiling(claimed.feeQuote));
+    }
     return Response.json({ status: "SIGNED", txHash }, { headers });
   } catch (error) {
     // Every refusal here happens before signing, so nothing was submitted.
