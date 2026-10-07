@@ -7,6 +7,8 @@ insert into auth.users(id, aud, role) values
   (current_setting('hodd.test_owner')::uuid, 'authenticated', 'authenticated'),
   (current_setting('hodd.test_other')::uuid, 'authenticated', 'authenticated');
 insert into auth.sessions(id, user_id) values (current_setting('hodd.test_session')::uuid, current_setting('hodd.test_owner')::uuid);
+-- Workspace writes are owner- or server-only (payment obligation sync trigger); seed fixtures as the server.
+select set_config('request.jwt.claims', jsonb_build_object('role', 'service_role')::text, true);
 insert into public.earn_smoke_workspaces(user_id, schema_version, workspace) values
   (current_setting('hodd.test_owner')::uuid, 4, '{"test":"owner"}'),
   (current_setting('hodd.test_other')::uuid, 4, '{"test":"other"}');
@@ -22,7 +24,10 @@ do $$ begin
   begin
     insert into public.earn_smoke_workspaces(user_id, schema_version, workspace) values (current_setting('hodd.test_other')::uuid, 4, '{}');
     raise exception 'Cross-owner insert unexpectedly succeeded';
-  exception when insufficient_privilege then null;
+  -- RLS or the earlier owner-sync trigger may reject it; either proves isolation.
+  exception
+    when insufficient_privilege then null;
+    when raise_exception then if sqlerrm <> 'owner required' then raise; end if;
   end;
 end $$;
 select set_config('request.jwt.claims', jsonb_build_object('sub', current_setting('hodd.test_other'), 'session_id', current_setting('hodd.test_session'), 'role', 'authenticated', 'exp', 9999999999)::text, true);
