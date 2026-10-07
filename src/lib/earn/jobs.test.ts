@@ -26,7 +26,7 @@ vi.mock("./gateway", () => {
   };
   return { arcClient: { getBlockNumber: vi.fn(async () => 10n), getGasPrice: fake.gasPrice, estimateGas: fake.estimate, getTransaction: fake.transaction, waitForTransactionReceipt: fake.receipt }, earnKit: { earn: { deposit: operation, withdraw: operation } }, getEarnPosition: fake.position, operationConfig: () => ({}) };
 });
-import { inspectEarnJob, replyToEarnJob, startEarnJob } from "./jobs";
+import { claimTestSignerRequest, inspectEarnJob, replyToEarnJob, startEarnJob } from "./jobs";
 const hash = `0x${"1".repeat(64)}`;
 const money = (minorUnits: string) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits });
 const context = { binding: "alice-session-wallet", policyDigest: "policy", wallet: { address: "0x0000000000000000000000000000000000000001", provider: "INJECTED_METAMASK", accountType: "EOA" } } as unknown as EarnContext;
@@ -95,6 +95,17 @@ describe("user-approved Earn orchestration", () => {
     expect(failed.events.map((event) => event.stage)).not.toContain("EARN_SIGNATURE_REQUESTED");
     expect(failed.failure).toEqual({ code: "FEE_RESERVE_EXCEEDED", stage: "SIGNING_PREPARATION" });
     expect(fake.leases.size).toBe(0);
+  });
+  it("lets the dev test signer claim only this session's exact pending request, once", async () => {
+    const id = record(); await startEarnJob(context, id, false); const request = await pending(id);
+    const ceiling = request.gasCeiling!;
+    expect(() => claimTestSignerRequest("bob", request.calls, ceiling)).toThrow("No matching");
+    expect(() => claimTestSignerRequest(context.binding, [{ ...request.calls[0], data: "0xdeadbeef" }], ceiling)).toThrow("No matching");
+    expect(() => claimTestSignerRequest(context.binding, request.calls, { ...ceiling, gasPriceWei: "1" })).toThrow("No matching");
+    expect(claimTestSignerRequest(context.binding, request.calls, ceiling)).toEqual({ call: request.calls[0], gasCeiling: ceiling });
+    expect(() => claimTestSignerRequest(context.binding, request.calls, ceiling)).toThrow("No matching");
+    await replyToEarnJob(context, id, { requestId: request.id, cancelled: true });
+    await vi.waitFor(() => expect(inspectEarnJob(context, id).state).toBe("FAILED"));
   });
   it("refuses a gas estimate above the quote before opening a wallet request", async () => {
     fake.estimate.mockResolvedValue(40000n);

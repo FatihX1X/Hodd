@@ -146,3 +146,31 @@ export async function connectCircleEmbeddedWallet(onProgress?: (message: string)
   // Circle's UCW adapter is server-only. Never import it into the browser bundle.
   return { connection: walletConnection, adapter: null, approveChallenge: approve, expiresAt: Date.now() + 55 * 60_000 };
 }
+
+/** Dev-only server-held test signer; the browser only ever learns its public address. */
+export async function testSignerAvailable(): Promise<string | null> {
+  try {
+    const response = await fetch("/api/dev/test-signer", { cache: "no-store" });
+    if (!response.ok) return null;
+    const body = await response.json() as { status?: string; address?: string };
+    return body.status === "READY" && typeof body.address === "string" && /^0x[\da-fA-F]{40}$/.test(body.address) ? body.address : null;
+  } catch { return null; }
+}
+
+export async function connectTestSigner(): Promise<ActiveWalletRuntime> {
+  const address = await testSignerAvailable();
+  if (!address) throw new Error("The local test signer is not enabled on this dev server.");
+  const walletConnection = connection("TEST_SIGNER", address, "Test signer (dev)", "EOA");
+  const sendCalls: NonNullable<ActiveWalletRuntime["sendCalls"]> = async (calls, _gasBudgetWei, _onUserOperation, feeQuote, earnGasCeiling) => {
+    if (feeQuote || !earnGasCeiling) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", "The test signer supports Earn requests with a server-bound gas ceiling only.");
+    let response: Response;
+    try { response = await fetch("/api/dev/test-signer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ calls, gasCeiling: earnGasCeiling }) }); }
+    catch { throw new Error("The test signer response was lost; the outcome is unknown."); }
+    const body = await response.json().catch(() => null) as { status?: string; txHash?: string; submitted?: boolean; code?: string; message?: string } | null;
+    if (body?.status === "SIGNED" && body.txHash && /^0x[\da-fA-F]{64}$/.test(body.txHash)) return body.txHash as `0x${string}`;
+    // The server reports refusals before signing as not submitted; anything else stays ambiguous.
+    if (body?.status === "ERROR" && body.submitted === false) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", `Test signer refused (${body.code ?? "UNKNOWN"}): ${body.message ?? ""}`.trim());
+    throw new Error("The test signer outcome is unknown.");
+  };
+  return { connection: walletConnection, adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
+}

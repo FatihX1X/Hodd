@@ -29,7 +29,8 @@ export const activityEntrySchema = z.object({
 export const agentDecisionSchema = z.object({ id: z.string(), createdAt: z.string().datetime(), title: z.string(), summary: z.string(), rationale: z.string(), policy: policyResultSchema });
 export const integrationStatusSchema = z.object({ name: z.string(), status: z.enum(["DEMO", "NOT_CONNECTED", "UNAVAILABLE", "FUTURE"]), message: z.string() });
 export const walletConnectionSchema = z.object({
-  provider: z.enum(["CIRCLE_USER_CONTROLLED", "CIRCLE_MODULAR", "INJECTED_METAMASK", "INJECTED_RABBY"]),
+  // TEST_SIGNER is a local-development key held by the dev server; never a user provider.
+  provider: z.enum(["CIRCLE_USER_CONTROLLED", "CIRCLE_MODULAR", "INJECTED_METAMASK", "INJECTED_RABBY", "TEST_SIGNER"]),
   custody: z.literal("USER_CONTROLLED"),
   accountType: z.enum(["EOA", "SCA", "MSCA"]),
   walletId: z.string().min(1).max(128).optional(),

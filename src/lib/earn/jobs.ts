@@ -43,6 +43,23 @@ function checkedJob(context: EarnContext, id: string) {
   return job;
 }
 
+const testSignerAnswered = new Set<string>();
+/**
+ * Dev-only test signer: returns the exact call and server-bound gas ceiling of
+ * this session's pending Earn request, once. Arbitrary calldata is never signed.
+ */
+export function claimTestSignerRequest(binding: string, calls: readonly WalletCall[], ceiling: { gasLimit: string; gasPriceWei: string }) {
+  const same = (a: WalletCall, b: WalletCall) => a.to.toLowerCase() === b.to.toLowerCase() && (a.data ?? "0x").toLowerCase() === (b.data ?? "0x").toLowerCase() && (a.value ?? "0") === (b.value ?? "0");
+  for (const job of jobs.values()) {
+    const pending = job.pending;
+    if (job.binding !== binding || !pending || pending.challengeId || !pending.gasCeiling || testSignerAnswered.has(pending.id)) continue;
+    if (pending.calls.length !== 1 || calls.length !== 1 || !same(pending.calls[0], calls[0]) || pending.gasCeiling.gasLimit !== ceiling.gasLimit || pending.gasCeiling.gasPriceWei !== ceiling.gasPriceWei) continue;
+    testSignerAnswered.add(pending.id);
+    return { call: pending.calls[0], gasCeiling: pending.gasCeiling };
+  }
+  throw new EarnAccessError("TEST_SIGNER_REQUEST_NOT_FOUND", "No matching pending Earn signature request for this session.", 409);
+}
+
 export function inspectEarnJob(context: EarnContext, id: string) {
   const job = checkedJob(context, id);
   return { status: "PENDING" as const, executionId: job.id, state: job.status, events: job.events, pending: job.pending ?? null, result: job.result ?? null, failure: diagnostics(job).failure ?? null };

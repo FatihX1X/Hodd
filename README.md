@@ -108,6 +108,10 @@ Rabby smoke evidence for a fresh test wallet: deposit 0.5 USDC (block 66009558),
 - Signers are memory-only. The wallet panel shows signer state live with **Reconnect signer**; quotes and confirmations require an active matching signer, and the workspace scope survives reloads per tab.
 - Rabby may raise the gas limit it was given; the signed gas price is still the bounded one. Circle's Earn position index can lag the chain by several minutes after a withdrawal, temporarily rejecting withdrawal quotes.
 
+## Local test signer (development only)
+
+For repeatable Arc Testnet regression runs, `next dev` can expose a server-held test signer. Put `HODD_TEST_SIGNER_ENABLED=true` and `HODD_TEST_SIGNER_PRIVATE_KEY` (a dedicated, testnet-only key) in git-ignored `.env.development.local`; production builds never load that file. The signer exists only under `next dev` on loopback, and `POST /api/dev/test-signer` additionally requires the Earn execution guard (flag, loopback, same origin, JSON) and a signed-in workspace that selected this signer. It signs only the exact call and server-bound gas ceiling of that session's pending Earn request, once; arbitrary calldata and payments are refused. The browser learns only the public address. Evidence is stored as `TEST_SIGNER` and never counts for MetaMask, Rabby or Circle acceptance.
+
 ## Next work
 
 Complete live testnet verification for Circle Passkey and MetaMask before declaring Stage 4 complete. Stage 5 is in progress; it is not a completed payment product. Deployment remains out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
