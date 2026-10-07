@@ -9,3 +9,16 @@ export function evaluateEarnExecutionAccess(input: EarnAccessInput): EarnAccessD
   if (!input.contentType?.toLowerCase().startsWith("application/json")) return { allowed: false, code: "JSON_REQUIRED", message: "Earn execution accepts same-origin JSON requests only.", status: 415 };
   return { allowed: true };
 }
+
+/**
+ * Origin the browser actually used. `next dev` reports request.url as localhost
+ * even for 127.0.0.1 pages, so derive it from the Host header. Rebinding stays
+ * blocked: a foreign site's Host is not loopback and fails the hostname gate.
+ */
+export function requestHostOrigin(request: Request) {
+  const url = new URL(request.url);
+  const host = request.headers.get("host");
+  if (!host) return { hostname: url.hostname, origin: url.origin };
+  try { const actual = new URL(`${url.protocol}//${host}`); return { hostname: actual.hostname, origin: actual.origin }; }
+  catch { return { hostname: "", origin: "" }; }
+}

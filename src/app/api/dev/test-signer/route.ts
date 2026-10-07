@@ -2,6 +2,7 @@ import { z } from "zod";
 import { earnServerContext } from "@/lib/earn/server-context";
 import { claimTestSignerRequest } from "@/lib/earn/jobs";
 import { assertLocalEarnExecution, EarnAccessError } from "@/lib/earn/security";
+import { requestHostOrigin } from "@/lib/earn/access-policy";
 import { sendTestSignerTransaction, testSignerAccount } from "@/lib/wallet/test-signer";
 
 const address = z.string().regex(/^0x[\da-fA-F]{40}$/).transform((value) => value as `0x${string}`);
@@ -14,7 +15,7 @@ export const runtime = "nodejs";
 
 /** Public address only; 404 whenever the dev test signer is not fully enabled. */
 export async function GET(request: Request) {
-  const account = testSignerAccount(new URL(request.url).hostname);
+  const account = testSignerAccount(requestHostOrigin(request).hostname);
   if (!account) return Response.json({ status: "UNAVAILABLE" }, { status: 404, headers });
   return Response.json({ status: "READY", address: account.address }, { headers });
 }
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     assertLocalEarnExecution(request);
-    const account = testSignerAccount(new URL(request.url).hostname);
+    const account = testSignerAccount(requestHostOrigin(request).hostname);
     if (!account) throw new EarnAccessError("TEST_SIGNER_DISABLED", "The local test signer is not enabled.", 404);
     const input = schema.safeParse(await request.json());
     if (!input.success) throw new EarnAccessError("INVALID_REQUEST", "The test signer request is invalid.", 400);

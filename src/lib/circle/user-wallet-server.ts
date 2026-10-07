@@ -1,4 +1,5 @@
 import "server-only";
+import { requestHostOrigin } from "@/lib/earn/access-policy";
 
 import { initiateUserControlledWalletsClient } from "@circle-fin/user-controlled-wallets";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -24,7 +25,7 @@ export async function boundUserToken(userId: string) {
 }
 
 export function isSameOrigin(request: Request) {
-  return request.headers.get("origin") === new URL(request.url).origin;
+  return request.headers.get("origin") === requestHostOrigin(request).origin;
 }
 
 export function circleUserWalletClient() {
