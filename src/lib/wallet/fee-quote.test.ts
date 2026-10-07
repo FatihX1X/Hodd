@@ -19,3 +19,12 @@ describe("provider-bound fee ceiling", () => {
     for (const changed of [{ ...binding, digest: "different" }, { ...binding, provider: "CIRCLE_USER_CONTROLLED" }, { ...binding, address: "0x0000000000000000000000000000000000000002" }]) expect(() => assertFeeBinding(value, changed, Date.parse(value.observedAt))).toThrow();
   });
 });
+
+describe("dev test signer fee quotes", () => {
+  it("quotes TEST_SIGNER exactly like an EOA and never as a smart account", () => {
+    const now = Date.now(); const cap = 21_000n * 20_000_000_000n;
+    const base = { provider: "TEST_SIGNER", walletAddress: "0x0000000000000000000000000000000000000001", chainId: 5042002, operationDigest: "d", observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), sponsorship: "NOT_ASSUMED", gasLimit: "21000", maxFeePerGasWei: "20000000000", priorityFeePerGasWei: "0", maxNativeFeeWei: cap.toString(), maxWalletDebit: { currency: "USDC", decimals: 6, minorUnits: "420" }, source: "ARC_EOA" };
+    expect(walletFeeQuoteSchema.safeParse(base).success).toBe(true);
+    expect(walletFeeQuoteSchema.safeParse({ ...base, source: "CIRCLE_UCW" }).success).toBe(false);
+  });
+});

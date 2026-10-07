@@ -22,7 +22,7 @@ import type { PaymentProposal } from "./models";
 import { verifyPaymentUserOperation, resolvePaymentUserOperation } from "./user-operation";
 
 type Pending = { id: string; calls: { to: `0x${string}`; data: `0x${string}`; value: string }[]; gasBudgetWei: string; challengeId?: string };
-type Job = { binding: string; lease: string; proposal: PaymentProposal; pending?: Pending; resolve?: (hash: `0x${string}`) => void; reject?: (error: Error) => void; exposed: boolean; cancelled: boolean; writes: Promise<void>; userOperationReported?: boolean };
+type Job = { binding: string; lease: string; proposal: PaymentProposal; pending?: Pending; resolve?: (hash: `0x${string}`) => void; reject?: (error: Error) => void; exposed: boolean; cancelled: boolean; writes: Promise<void>; userOperationReported?: boolean; testSignerClaimed?: boolean };
 const globalJobs = globalThis as typeof globalThis & { hoddPaymentJobs?: Map<string, Job> };
 const jobs = globalJobs.hoddPaymentJobs ??= new Map<string, Job>();
 
@@ -148,7 +148,9 @@ async function runPayment(job: Job, context: PaymentContext) {
   } catch {
     await job.writes.catch(() => undefined);
     const admin = paymentAdmin();
-    if (job.exposed) {
+    // The dev test signer is the server itself: an unclaimed request was provably never signed.
+    const neverSigned = context.wallet.provider === "TEST_SIGNER" && !job.testSignerClaimed;
+    if (job.exposed && !neverSigned) {
       await admin.from("payment_proposals").update({ state: "UNKNOWN", updated_at: new Date().toISOString() }).eq("id", job.proposal.id).eq("user_id", context.userId).in("state", ["AWAITING_SIGNATURE", "SUBMITTED"]);
     } else {
       const { error } = await admin.rpc("hodd_cancel_payment", { p_user: context.userId, p_scope: context.scope, p_id: job.proposal.id, p_binding: job.binding, p_state: "FAILED" }); finished = !error;
@@ -183,6 +185,23 @@ export async function startPayment(context: PaymentContext, id: string) {
   try { const claimed = await earnServerContext(context.scope); void runPayment(job, claimed); }
   catch { const { error } = await paymentAdmin().rpc("hodd_cancel_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_binding: context.binding, p_state: "FAILED" }); if (!error) await unlink(lease).catch(() => undefined); throw new Error("CLAIMED_SESSION_UNAVAILABLE"); }
   return inspectPayment(context, id);
+}
+
+const testSignerAnswered = new Set<string>();
+/**
+ * Dev-only test signer: returns this session's exact pending USDC transfer and
+ * its approved fee quote, once. Smart-account and PIN requests are never claimed.
+ */
+export function claimTestSignerPayment(binding: string, calls: readonly { to: string; data?: string; value?: string }[]) {
+  for (const job of jobs.values()) {
+    const pending = job.pending; const fee = job.proposal.feeQuote;
+    if (job.binding !== binding || !pending || pending.challengeId || testSignerAnswered.has(pending.id) || !fee || fee.source !== "ARC_EOA" || Date.parse(fee.expiresAt) <= Date.now()) continue;
+    const expected = pending.calls[0];
+    if (pending.calls.length !== 1 || calls.length !== 1 || calls[0].to.toLowerCase() !== expected.to.toLowerCase() || (calls[0].data ?? "0x").toLowerCase() !== expected.data.toLowerCase() || (calls[0].value ?? "0") !== "0") continue;
+    testSignerAnswered.add(pending.id); job.testSignerClaimed = true;
+    return { call: expected, feeQuote: fee };
+  }
+  throw new EarnAccessError("TEST_SIGNER_REQUEST_NOT_FOUND", "No matching pending payment signature request for this session.", 409);
 }
 
 export async function inspectPayment(context: PaymentContext, id: string) {

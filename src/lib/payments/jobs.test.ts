@@ -42,7 +42,7 @@ vi.mock("./admin", () => ({ paymentAdmin: () => ({ rpc: async (name: string, par
   const query = { eq: (key: string, value: string) => { if (key === "id") id = value; return query; }, in: () => query, is: () => query, then: (resolve: (value: object) => void) => { const record = fake.records.get(id)!; Object.assign(record, values, values.tx_hash ? { txHash: values.tx_hash } : {}, values.user_operation_hash ? { userOperationHash: values.user_operation_hash } : {}); resolve({ error: null }); } };
   return query;
 } }) }) }));
-import { inspectPayment, replyPayment, startPayment, recheckPayment } from "./jobs";
+import { inspectPayment, replyPayment, startPayment, recheckPayment, claimTestSignerPayment } from "./jobs";
 import { ARC_GAS_STATION_PAYMASTER } from "@/lib/wallet/fee-quote";
 const hash = `0x${"1".repeat(64)}`;
 const context = { binding: "alice", policyDigest: "policy", scope: "TREASURY", userId: "alice", wallet: { provider: "INJECTED_METAMASK", accountType: "EOA", address: "0x0000000000000000000000000000000000000001" } } as PaymentContext;
@@ -62,6 +62,29 @@ describe("payment signing orchestration", () => {
     await vi.waitFor(async () => expect((await inspectPayment(context, id)).record.state).toBe("CONFIRMED"));
     expect(fake.proof).toHaveBeenCalled(); await vi.waitFor(() => expect(fake.leases.size).toBe(0));
     await expect(replyPayment(context, id, { requestId: request.id, txHash: hash })).rejects.toThrow("already answered");
+  });
+  it("lets the dev test signer claim only this session's exact pending transfer and fee quote, once", async () => {
+    const id = record(); await startPayment(context, id); const request = await pending(id);
+    const call = request.calls[0];
+    expect(() => claimTestSignerPayment("bob", [call])).toThrow("No matching");
+    expect(() => claimTestSignerPayment(context.binding, [{ ...call, data: "0xdeadbeef" }])).toThrow("No matching");
+    expect(() => claimTestSignerPayment(context.binding, [{ ...call, value: "1" }])).toThrow("No matching");
+    expect(claimTestSignerPayment(context.binding, [call])).toEqual({ call, feeQuote: fake.records.get(id)!.proposal.feeQuote });
+    expect(() => claimTestSignerPayment(context.binding, [call])).toThrow("No matching");
+    await replyPayment(context, id, { requestId: request.id, cancelled: true });
+    await vi.waitFor(async () => expect((await inspectPayment(context, id)).record.state).toBe("UNKNOWN"));
+  });
+  it.each([[false, "FAILED", 0], [true, "UNKNOWN", 1]] as const)("treats a test signer request the server never signed as FAILED (claimed=%s -> %s)", async (claimed, state, leases) => {
+    // The dev TEST_SIGNER key is held by this server, so an unclaimed request was provably never signed.
+    const signer = { ...context, wallet: { ...context.wallet, provider: "TEST_SIGNER" } } as PaymentContext; fake.current = signer;
+    const testFee = () => ({ ...fee(), provider: "TEST_SIGNER" as const });
+    fake.fee.mockImplementation(async () => testFee());
+    const id = record(); Object.assign(fake.records.get(id)!.proposal, { wallet: signer.wallet, feeQuote: testFee() });
+    await startPayment(signer, id); const request = await pending(id);
+    if (claimed) claimTestSignerPayment(signer.binding, request.calls);
+    await replyPayment(signer, id, { requestId: request.id, cancelled: true });
+    await vi.waitFor(async () => expect((await inspectPayment(signer, id)).record.state).toBe(state));
+    await vi.waitFor(() => expect(fake.leases.size).toBe(leases));
   });
   it("keeps uncertain signing locked and rejects a parallel Earn/payment wallet lease", async () => {
     const id = record(); await startPayment(context, id); const request = await pending(id);
