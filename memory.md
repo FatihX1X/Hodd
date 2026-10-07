@@ -37,7 +37,7 @@ Hodd: Arc Testnet üzerinde bireyler/küçük işletmeler için likidite önceli
 
 ## Test wallet
 
-Henüz oluşturulmadı. Oluşturulunca public adres buraya yazılır (key yalnızca git-ignored `.env.test.local`).
+Public adres: `0x62dCe01b1a7B9a6f592f148d305E0D5751478386` (Arc Testnet, 2026-10-07). Key yalnızca git-ignored `.env.test.local` içinde. Bakiye 0 USDC (RPC ile okundu, chain id 5042002 doğrulandı) — faucet bekliyor.
 
 ## Aşama doğrulama durumu
 
@@ -53,8 +53,13 @@ Henüz oluşturulmadı. Oluşturulunca public adres buraya yazılır (key yalnı
 
 ## İnsan adımları (atla, listede tut)
 
-Henüz boş. Faucet fonlaması, Circle Console ayarı ve PIN/passkey/MetaMask onayları burada senaryoyla listelenir.
+1. **Faucet:** Arc Testnet faucet'inden test wallet'a (`0x62dC…8386`) ve smoke yapacağın cüzdanlara test USDC al. Bakiye gelince `wallet-smoke` skill'i devam eder.
+2. **Rabby/MetaMask Earn+Send smoke (en fazla 1 USDC):** `.env.local`'e `HODD_EARN_EXECUTION_ENABLED=true` ve `HODD_PAYMENT_EXECUTION_ENABLED=true` yaz (yalnızca yerelde), `corepack pnpm dev` ile aç, `http://localhost:3000` → giriş → cüzdan paneli → MetaMask'ı bağla → Earn: 0.5 USDC yatır → tarayıcı penceresinde Onayla → 0.25 USDC çek → hepsini çek (redeem-all). Sonra Send: en fazla 1 USDC kendi test alıcına gönder. Her işlemin hash'ini ArcScan'de bul ve buraya yaz.
+3. **Circle Passkey:** aynı akış, cüzdan olarak "Circle Passkey" seç; tarayıcının passkey istemini Onayla. Önce Circle Console'da Gas Station'ın Arc Testnet için açık olduğunu kontrol et.
+4. **Circle PIN:** Circle Console'da App ID / Client Key doğru mu bak; PIN penceresinde PIN'i kendin gir. SCA fee ceiling desteği doğrulanana kadar Earn fail-closed kalır.
+5. Production/Vercel'de bayrakları AÇMA (bu zaten kodda kapalı).
 
 ## Oturum günlüğü
 
-- 2026-10-07: skill'ler (.claude/skills), memory.md, skills.md ve izinler kuruldu. Temel doğrulama yeşil.
+- 2026-10-07: skill'ler (.claude/skills), memory.md, skills.md ve izinler kuruldu (commit c9baddd, main'e push). Temel doğrulama yeşil (typecheck, lint, test). Test wallet oluşturuldu, bakiye 0. Vercel main'den otomatik deploy ediyor (proje `hodd`, hodd.vercel.app HTTP 200).
+- Kalan Stage 4/5 kabul işleri tamamen canlı tarayıcı/cüzdan onayı gerektiriyor; kodda mock ile kapatılabilecek açık bulunmadı. Bir sonraki adım: faucet sonrası wallet-smoke.
