@@ -6,6 +6,7 @@ export const ARC_USDC_SYSTEM_EMITTER = "0xffffffffffffffffffffffffffffffffffffff
 
 const abi = parseAbi([
   "function approve(address spender,uint256 amount) returns (bool)",
+  "function increaseAllowance(address spender,uint256 addedValue) returns (bool)",
   "event Approval(address indexed owner,address indexed spender,uint256 value)",
   "event Deposit(address indexed sender,address indexed owner,uint256 assets,uint256 shares)",
   "event Withdraw(address indexed sender,address indexed receiver,address indexed owner,uint256 assets,uint256 shares)",
@@ -14,10 +15,10 @@ const abi = parseAbi([
 export function verifyApprovalReceipt(receipt: TransactionReceipt, call: EvmCall, walletAddress: string) {
   if (receipt.status !== "success" || !call.data) throw new Error("APPROVAL_NOT_VERIFIED");
   const expected = decodeFunctionData({ abi, data: call.data });
-  if (expected.functionName !== "approve") throw new Error("APPROVAL_NOT_VERIFIED");
+  if (expected.functionName !== "approve" && expected.functionName !== "increaseAllowance") throw new Error("APPROVAL_NOT_VERIFIED");
   const valid = receipt.logs.some((log) => {
     if (log.address.toLowerCase() !== call.to.toLowerCase()) return false;
-    try { const event = decodeEventLog({ abi, data: log.data, topics: log.topics }); return event.eventName === "Approval" && event.args.owner.toLowerCase() === walletAddress.toLowerCase() && event.args.spender.toLowerCase() === expected.args[0].toLowerCase() && event.args.value === expected.args[1]; }
+    try { const event = decodeEventLog({ abi, data: log.data, topics: log.topics }); return event.eventName === "Approval" && event.args.owner.toLowerCase() === walletAddress.toLowerCase() && event.args.spender.toLowerCase() === expected.args[0].toLowerCase() && (expected.functionName === "approve" ? event.args.value === expected.args[1] : event.args.value >= expected.args[1]); }
     catch { return false; }
   });
   if (!valid) throw new Error("APPROVAL_NOT_VERIFIED");

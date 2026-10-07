@@ -5,7 +5,7 @@ import type { EarnQuote } from "./models";
 const wallet = "0x0000000000000000000000000000000000000001";
 const vault = "0x0000000000000000000000000000000000000002";
 const stranger = "0x0000000000000000000000000000000000000003";
-const abi = parseAbi(["event Deposit(address indexed sender,address indexed owner,uint256 assets,uint256 shares)", "event Withdraw(address indexed sender,address indexed receiver,address indexed owner,uint256 assets,uint256 shares)", "event Transfer(address indexed from,address indexed to,uint256 value)", "event Approval(address indexed owner,address indexed spender,uint256 value)", "function approve(address spender,uint256 amount) returns (bool)"]);
+const abi = parseAbi(["event Deposit(address indexed sender,address indexed owner,uint256 assets,uint256 shares)", "event Withdraw(address indexed sender,address indexed receiver,address indexed owner,uint256 assets,uint256 shares)", "event Transfer(address indexed from,address indexed to,uint256 value)", "event Approval(address indexed owner,address indexed spender,uint256 value)", "function approve(address spender,uint256 amount) returns (bool)", "function increaseAllowance(address spender,uint256 addedValue) returns (bool)"]);
 const quote = { walletAddress: wallet, vaultAddress: vault, operation: "DEPOSIT", amount: { minorUnits: "1000000" } } as EarnQuote;
 function receipt(owner: `0x${string}` = wallet, amount = 1_000_000n, address: `0x${string}` = vault) {
   return { status: "success", logs: [{ address, topics: encodeEventTopics({ abi, eventName: "Deposit", args: { sender: wallet, owner } }), data: encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [amount, 100n]) }] } as unknown as TransactionReceipt;
@@ -27,5 +27,12 @@ describe("Arc Earn receipt evidence", () => {
     const call = { to: vault, data: encodeFunctionData({ abi, functionName: "approve", args: [stranger, 100n] }) } as const;
     const value = { status: "success", logs: [{ address: vault, topics: encodeEventTopics({ abi, eventName: "Approval", args: { owner: wallet, spender: stranger } }), data: encodeAbiParameters([{ type: "uint256" }], [100n]) }] } as unknown as TransactionReceipt;
     expect(() => verifyApprovalReceipt(value, call, wallet)).not.toThrow(); expect(() => verifyApprovalReceipt(value, call, stranger)).toThrow();
+  });
+  it("recognizes a USDC increaseAllowance receipt with the resulting allowance", () => {
+    const call = { to: vault, data: encodeFunctionData({ abi, functionName: "increaseAllowance", args: [stranger, 100n] }) } as const;
+    const value = { status: "success", logs: [{ address: vault, topics: encodeEventTopics({ abi, eventName: "Approval", args: { owner: wallet, spender: stranger } }), data: encodeAbiParameters([{ type: "uint256" }], [101n]) }] } as unknown as TransactionReceipt;
+    expect(() => verifyApprovalReceipt(value, call, wallet)).not.toThrow();
+    value.logs[0].data = encodeAbiParameters([{ type: "uint256" }], [99n]);
+    expect(() => verifyApprovalReceipt(value, call, wallet)).toThrow();
   });
 });
