@@ -10,8 +10,9 @@ export const metadata: Metadata = {
   title: { absolute: "Hodd Finance — Autonomous treasury systems" },
   description: "Hodd keeps idle capital working, liquidity ready and obligations funded before they are due. Built on Arc.",
   alternates: { canonical: "/" },
-  openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc.", url: "/", siteName: "Hodd Finance", type: "website" },
-  twitter: { card: "summary_large_image", title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc." },
+  // Page-level openGraph replaces the root one, so the share image is repeated here.
+  openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc.", url: "/", siteName: "Hodd Finance", type: "website", images: [{ url: "/opengraph-image.png", width: 1200, height: 630, alt: "Hodd Finance" }] },
+  twitter: { card: "summary_large_image", title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc.", images: ["/opengraph-image.png"] },
 };
 
 const wrap = "mx-auto max-w-[1360px] px-[clamp(16px,4vw,56px)]";
