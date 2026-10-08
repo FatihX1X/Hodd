@@ -6,6 +6,7 @@ import { DemoNotice, MoneyValue, PageHeader, SectionCard, SectionHeading, Status
 import { PolicyPanel } from "@/components/policy-panel";
 import { useTreasuryWorkspace } from "@/components/treasury-workspace-provider";
 import { WalletPanel } from "@/components/wallet-panel";
+import { AgentRequests } from "@/components/agent-requests";
 import { formatDate, formatPercentFromBps } from "@/lib/treasury/format";
 
 export default function PortfolioPage() {
@@ -13,7 +14,7 @@ export default function PortfolioPage() {
   if (!assessment || !operationalWorkspace) return <>
     <PageHeader eyebrow="01 · Portfolio" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/40">Treasury Engine</p><p className="mt-2 text-lg text-[#f1c7c2]">Awaiting verified balance</p><div className="mt-2"><StatusPill label="PAUSED" tone="danger" /></div></div>} />
     <DemoNotice>Arc Testnet live mode is fail-closed. Demo and stale balances are excluded until the RPC adapter returns a verified USDC snapshot.</DemoNotice>
-    <div className="metric-grid mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-10 lg:py-10"><WalletPanel /><div role="status" className="mt-6 border border-[#9a433c]/20 bg-[#f5dedb] p-5 text-sm text-[#7b332d]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></div>
+    <div className="metric-grid mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-10 lg:py-10"><WalletPanel /><AgentRequests /><div role="status" className="mt-6 border border-[#9a433c]/20 bg-[#f5dedb] p-5 text-sm text-[#7b332d]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></div>
   </>;
   const next = assessment.nextPayment;
   const metrics = [
@@ -37,7 +38,7 @@ export default function PortfolioPage() {
     <PageHeader eyebrow="01 · Portfolio" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="space-y-3"><div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/40">Liquidity coverage</p><p className="mono mt-2 text-3xl text-[#b9ccff]">{assessment.liquidityCoverageBps === null ? "No obligations" : formatPercentFromBps(assessment.liquidityCoverageBps)}</p><div className="mt-2"><StatusPill label={assessment.coverageStatus.replace("_", " ")} tone={assessment.coverageStatus === "SAFE" ? "success" : assessment.coverageStatus === "AT_RISK" ? "danger" : "warning"} /></div></div><PolicyPanel /></div>} />
     <DemoNotice>{hydrated ? workspace.treasuryMode === "ARC_TESTNET_WALLET" ? "One user-owned Arc Testnet wallet is authoritative at a time. Balances are never pooled; every future write must be approved by that wallet." : "Local demo workspace. Choose Circle Embedded, Circle Passkey, MetaMask or Rabby to inspect live wallet data." : "Loading the local treasury workspace…"}</DemoNotice>
     <div className="metric-grid mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-10 lg:py-10">
-      <WalletPanel />
+      <WalletPanel /><AgentRequests />
       <section aria-label="Treasury overview" className="mt-6 grid border-l border-t border-black/15 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label, value, detail]) => <article key={label} className="min-h-36 border-b border-r border-black/15 bg-[#f4f1e8] p-5"><p className="mono text-[9px] uppercase tracking-[0.16em] text-black/45">{label}</p><MoneyValue money={value} compact className="mt-5 block text-3xl font-medium tracking-[-0.05em]" /><p className="mt-3 text-xs text-black/45">{detail}</p></article>)}</section>
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <SectionCard><SectionHeading index="01.1" title="Next payment" description="Nearest protected obligation" action={next && <StatusPill label={assessment.nextPaymentFeasibility?.status ?? "REVIEW"} tone={assessment.nextPaymentFeasibility?.status === "SAFE" ? "success" : "danger"} />} />

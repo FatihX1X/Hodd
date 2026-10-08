@@ -4,18 +4,40 @@ import { treasuryWorkspaceSchema, type TreasuryWorkspace } from "@/lib/treasury/
 import { createSupabaseBrowserClient } from "./client";
 import type { WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 
+// Last workspace revision this tab saw, per user and scope. Writes send it back so the
+// database can refuse an update based on a stale copy (for example after Claude changed it).
+const knownRevisions = new Map<string, number>();
+const tableFor = (scope: WorkspaceScope) => scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces";
+
+export function isRevisionConflict(error: unknown) {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  return value?.code === "40001" || (typeof value?.message === "string" && value.message.includes("workspace revision conflict"));
+}
+
+export function knownWorkspaceRevision(userId: string, scope: WorkspaceScope) { return knownRevisions.get(`${userId}:${scope}`); }
+
+/** Cheap check used on focus: has the cloud copy moved past what this tab saw? */
+export async function cloudWorkspaceRevision(userId: string, scope: WorkspaceScope): Promise<number | null> {
+  const client = createSupabaseBrowserClient();
+  if (!client) return null;
+  const { data, error } = await client.from(tableFor(scope)).select("revision").eq("user_id", userId).maybeSingle();
+  if (error || !data) return null;
+  return Number(data.revision);
+}
+
 export async function loadCloudWorkspace(userId: string, scope: WorkspaceScope = "TREASURY"): Promise<TreasuryWorkspace | null> {
   const client = createSupabaseBrowserClient();
   if (!client) return null;
   const { data: auth } = await client.auth.getUser();
   if (auth.user?.id !== userId) throw new Error("Workspace session changed.");
-  const { data, error } = await client.from(scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces").select("workspace").eq("user_id", auth.user.id).maybeSingle();
+  const { data, error } = await client.from(tableFor(scope)).select("workspace, revision").eq("user_id", auth.user.id).maybeSingle();
   const { data: current } = await client.auth.getUser();
   if (current.user?.id !== userId) throw new Error("Workspace session changed.");
   if (error) throw new Error("Cloud workspace could not be loaded.");
   if (!data) return null;
   const parsed = treasuryWorkspaceSchema.safeParse(data.workspace);
   if (!parsed.success) throw new Error("Cloud workspace failed validation.");
+  knownRevisions.set(`${userId}:${scope}`, Number(data.revision));
   return parsed.data;
 }
 
@@ -45,13 +67,18 @@ async function writeCloudWorkspace(workspace: TreasuryWorkspace, userId: string,
   const { data: auth } = await client.auth.getUser();
   if (auth.user?.id !== userId) throw new Error("Workspace session changed.");
 
-  const { error: workspaceError } = await client.from(scope === "SMOKE_TEST" ? "earn_smoke_workspaces" : "treasury_workspaces").upsert({
+  const key = `${userId}:${scope}`;
+  const base = knownRevisions.get(key);
+  const { data: written, error: workspaceError } = await client.from(tableFor(scope)).upsert({
     user_id: auth.user.id,
     schema_version: workspace.schemaVersion,
     workspace,
     updated_at: workspace.updatedAt,
-  }, { onConflict: "user_id" });
+    // Without a known base (first write of a new row) the row starts at revision 0.
+    revision: base ?? 0,
+  }, { onConflict: "user_id" }).select("revision").single();
   if (workspaceError) throw workspaceError;
+  knownRevisions.set(key, Number(written.revision));
   if (scope === "SMOKE_TEST") return;
 
   if (!workspace.walletConnection) {

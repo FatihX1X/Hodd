@@ -3,7 +3,7 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUpRight, LoaderCircle, X } from "lucide-react";
-import { earnJobApiSchema, earnQuoteApiSchema, type EarnOperation, type EarnPosition, type EarnQuote, type EarnVault } from "@/lib/earn/models";
+import { earnJobApiSchema, earnQuoteApiSchema, type EarnExecutionResult, type EarnOperation, type EarnPosition, type EarnQuote, type EarnVault } from "@/lib/earn/models";
 import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
 import { useHasActiveSigner } from "@/lib/wallet/use-active-signer";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
@@ -16,15 +16,15 @@ const inputClass = "mt-2 w-full border border-black/20 bg-white px-3 py-3 text-s
 const labels: Record<EarnOperation, string> = { DEPOSIT: "Deposit", WITHDRAW: "Withdraw", REDEEM_ALL: "Redeem all" };
 const formatMoney = (money: Money) => formatTreasuryMoney(money, { fractionDigits: 6 });
 
-export function EarnOperationDialog({ operation, vault, position, policyLimit, enabled }: { operation: EarnOperation; vault: EarnVault; position?: EarnPosition; policyLimit: Money; enabled: boolean }) {
+export function EarnOperationDialog({ operation, vault, position, policyLimit, enabled, initialAmount = "", onComplete }: { operation: EarnOperation; vault: EarnVault; position?: EarnPosition; policyLimit: Money; enabled: boolean; initialAmount?: string; onComplete?: (result: EarnExecutionResult) => void }) {
   const { workspaceScope, workspace, syncForEarn, recordEarnActivity, recordEarnEvent, refreshEarn, refreshWallet } = useTreasuryWorkspace();
   const [timeline, setTimeline] = useState<string[]>([]);
-  const [open, setOpen] = useState(false); const [amount, setAmount] = useState(""); const [quote, setQuote] = useState<EarnQuote | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [acknowledged, setAcknowledged] = useState(false); const [result, setResult] = useState<{ txHash: string; explorerUrl: string; status: string } | null>(null);
+  const [open, setOpen] = useState(false); const [amount, setAmount] = useState(initialAmount); const [quote, setQuote] = useState<EarnQuote | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [acknowledged, setAcknowledged] = useState(false); const [result, setResult] = useState<{ txHash: string; explorerUrl: string; status: string } | null>(null);
   const walletAddress = workspace.walletConnection?.address;
   // The signer lives only in memory; a persisted connection alone cannot sign.
   const hasSigner = useHasActiveSigner(workspace.walletConnection);
   const signerMissing = "Signer session is not active (page reload, expiry or workspace switch). Reconnect the wallet, then request a fresh quote. No quote was used.";
-  const reset = () => { setAmount(""); setQuote(null); setError(""); setBusy(false); setAcknowledged(false); setResult(null); setTimeline([]); };
+  const reset = () => { setAmount(initialAmount); setQuote(null); setError(""); setBusy(false); setAcknowledged(false); setResult(null); setTimeline([]); };
   const requestQuote = async (event: React.FormEvent) => {
     event.preventDefault(); if (!walletAddress) return; if (!hasSigner) { setError(signerMissing); return; } setBusy(true); setError(""); setQuote(null); setResult(null);
     try {
@@ -80,7 +80,7 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
       }
       if (!job.result) throw new Error("Receipt verification timed out. Check the explorer; do not resubmit automatically.");
       for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
-      const execution = job.result; setResult(execution); recordEarnActivity(`Earn ${labels[operation].toLowerCase()} confirmed`, `${formatMoney(execution.amount)} completed with status ${execution.status}.`, "A successful Arc receipt was checked against the selected vault, operation, amount and receiving wallet.", execution); refreshEarn(); refreshWallet();
+      const execution = job.result; setResult(execution); recordEarnActivity(`Earn ${labels[operation].toLowerCase()} confirmed`, `${formatMoney(execution.amount)} completed with status ${execution.status}.`, "A successful Arc receipt was checked against the selected vault, operation, amount and receiving wallet.", execution); refreshEarn(); refreshWallet(); onComplete?.(execution);
     } catch (caught) { const message = caught instanceof Error ? caught.message : "Execution status is unknown. Check the explorer before retrying."; setError(message); setQuote((current) => current ? { ...current, quoteId: null } : current); recordEarnActivity("Earn execution requires review", `${labels[operation]} did not return a confirmed receipt.`, message, undefined, { approval: "APPROVED", execution: "UNKNOWN" }); } finally { setBusy(false); }
   };
   const unavailable = !enabled || !walletAddress || (operation !== "DEPOSIT" && (!position || BigInt(position.currentBalance.minorUnits) === 0n));

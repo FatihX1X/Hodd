@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, ArrowUpRight, BriefcaseBusiness, Landmark, ListChecks } from "lucide-react";
+import { Activity, ArrowUpRight, BriefcaseBusiness, Landmark, ListChecks, Plug } from "lucide-react";
 import clsx from "clsx";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { formatDate } from "@/lib/treasury/format";
@@ -14,6 +14,7 @@ const navigation = [
   { href: "/invest", label: "Invest", icon: BriefcaseBusiness },
   { href: "/obligations", label: "Obligations", icon: ListChecks },
   { href: "/activity", label: "Activity", icon: Activity },
+  { href: "/connections", label: "Connections", icon: Plug },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -84,7 +85,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0b0d] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 text-white lg:hidden">
-        <ul className="grid grid-cols-4">
+        <ul className="grid grid-cols-5">
           {navigation.map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (

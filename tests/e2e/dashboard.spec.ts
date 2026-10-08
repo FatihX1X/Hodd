@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
 test.beforeEach(async ({ page }) => { await page.route("**/api/earn/portfolio*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(earnReadOnlyResponse) })); });
 
-const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/activity", "Every decision leaves a trace."]] as const;
+const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/activity", "Every decision leaves a trace."], ["/connections", "Ask Hodd from Claude."]] as const;
 for (const [route, heading] of routes) {
   test(`${route} renders without console errors or horizontal overflow`, async ({ page }) => {
     const errors: string[] = []; page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(route); await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|quotes and approvals/i);
+    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|quotes and approvals|connector uses your hodd sign-in/i);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false); expect(errors).toEqual([]);
   });
 }
@@ -71,4 +71,20 @@ test("browser wallet connection uses its account balance and survives refresh as
   await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask" }).click();
   await expect(page.getByText("Custody: user")).toBeVisible(); await expect(page.getByText("20.00 USDC").first()).toBeVisible();
   await page.reload(); await expect(page.getByText("20.00 USDC").first()).toBeVisible(); await expect(page.getByText("Signer session: reconnect required")).toBeVisible();
+});
+
+test("Claude connector endpoint requires OAuth and advertises its exact resource", async ({ request }) => {
+  const unauthenticated = await request.post("/api/mcp", { data: { jsonrpc: "2.0", id: 1, method: "tools/list" } });
+  expect(unauthenticated.status()).toBe(401);
+  expect(unauthenticated.headers()["www-authenticate"]).toContain("/.well-known/oauth-protected-resource/api/mcp");
+  const metadata = await (await request.get("/.well-known/oauth-protected-resource/api/mcp")).json();
+  expect(metadata.resource).toMatch(/\/api\/mcp$/);
+  expect(metadata.authorization_servers[0]).toMatch(/\/auth\/v1$/);
+});
+
+test("OAuth consent keeps the request across sign-in", async ({ page }) => {
+  await page.goto("/oauth/consent?authorization_id=test-authorization-123");
+  await expect(page).toHaveURL(/\/login$/);
+  const cookie = (await page.context().cookies()).find((item) => item.name === "hodd_after_login");
+  expect(decodeURIComponent(cookie?.value ?? "")).toBe("/oauth/consent?authorization_id=test-authorization-123");
 });
