@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, hkdfSync, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { AgentError } from "./auth";
 
@@ -16,11 +16,22 @@ const payloadSchema = z.object({
 }).strict();
 export type HandlePayload = z.infer<typeof payloadSchema>;
 
-function secret() {
-  const value = process.env.HODD_MCP_HANDLE_SECRET?.trim();
-  if (!value || value.length < 32) throw new AgentError("UNCONFIGURED", "The connector confirmation secret is not configured.");
-  return value;
+/**
+ * Prefer a dedicated HODD_MCP_HANDLE_SECRET. Otherwise derive a separate key with
+ * HKDF from an existing server-only secret (domain-separated by the label), so
+ * the connector works without one more host variable. Never a public value.
+ */
+export function handleSecret(env: Record<string, string | undefined> = process.env): Buffer | string {
+  const dedicated = env.HODD_MCP_HANDLE_SECRET?.trim();
+  if (dedicated) {
+    if (dedicated.length < 32) throw new AgentError("UNCONFIGURED", "The connector confirmation secret is too short.");
+    return dedicated;
+  }
+  const root = [env.SUPABASE_SECRET_KEY, env.CIRCLE_API_KEY].map((value) => value?.trim()).find((value) => value && value.length >= 32);
+  if (!root) throw new AgentError("UNCONFIGURED", "The connector confirmation secret is not configured.");
+  return Buffer.from(hkdfSync("sha256", root, "hodd", "hodd-mcp-confirmation-v1", 32));
 }
+const secret = () => handleSecret();
 
 /** Order-independent digest of a JSON change, so equal changes always match. */
 export function changeDigest(value: unknown) {
