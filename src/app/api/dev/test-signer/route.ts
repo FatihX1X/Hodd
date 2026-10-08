@@ -16,10 +16,11 @@ const schema = z.discriminatedUnion("kind", [
 const headers = { "Cache-Control": "no-store" };
 export const runtime = "nodejs";
 
-/** Public address only; 404 whenever the dev test signer is not fully enabled. */
+/** Public address only; UNAVAILABLE whenever the dev test signer is not fully enabled. */
 export async function GET(request: Request) {
   const account = testSignerAccount(requestHostOrigin(request).hostname);
-  if (!account) return Response.json({ status: "UNAVAILABLE" }, { status: 404, headers });
+  // 200, not 404: the wallet panel probes this on every page and must not log console errors.
+  if (!account) return Response.json({ status: "UNAVAILABLE" }, { headers });
   return Response.json({ status: "READY", address: account.address }, { headers });
 }
 
