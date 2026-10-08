@@ -66,34 +66,34 @@ export function AgentRequests() {
 
   return <SectionCard className="mt-6">
     <SectionHeading index="00" title="Claude requests" description="Approved in Claude · finish here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
-    <div className="divide-y divide-black/10">
+    <div className="divide-y divide-white/10">
       {requests.map((request) => {
         const expired = request.expires_at !== null && Date.parse(request.expires_at) <= loadedAt;
         let action: React.ReactNode = null;
         if (!expired && request.kind === "PAYMENT_REQUEST") {
           const obligation = workspace.obligations.find((item) => item.id === request.change.obligationId);
-          action = obligation ? <PaymentDialog obligation={obligation} /> : <span className="text-xs text-black/50">Obligation not found in this workspace.</span>;
+          action = obligation ? <PaymentDialog obligation={obligation} /> : <span className="text-xs text-white/60">Obligation not found in this workspace.</span>;
         }
         if (!expired && request.kind === "EARN_REQUEST") {
           const operation = request.change.operation as "DEPOSIT" | "WITHDRAW" | "REDEEM_ALL";
           const vault = portfolio?.vaults.find((item) => item.address.toLowerCase() === String(request.change.vaultAddress ?? "").toLowerCase()) ?? portfolio?.vaults[0];
           const position = vault ? portfolio?.positions.find((item) => item.vaultAddress.toLowerCase() === vault.address.toLowerCase()) : undefined;
           const limit = operation === "DEPOSIT" ? depositLimit : position?.liquidityStatus === "READY" ? position.redeemable : null;
-          action = vault && limit ? <EarnOperationDialog operation={operation} vault={vault} position={position} policyLimit={limit} enabled={localExecution} initialAmount={typeof request.change.amount === "string" ? request.change.amount : ""} onComplete={() => void resolve(request.id, "DONE")} /> : <span className="text-xs text-black/50">Waiting for live Morpho data…</span>;
+          action = vault && limit ? <EarnOperationDialog operation={operation} vault={vault} position={position} policyLimit={limit} enabled={localExecution} initialAmount={typeof request.change.amount === "string" ? request.change.amount : ""} onComplete={() => void resolve(request.id, "DONE")} /> : <span className="text-xs text-white/60">Waiting for live Morpho data…</span>;
         }
         return <article key={request.id} className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#0a52e8]" /><div>
+          <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#8fb0ff]" /><div>
             <p className="text-sm font-semibold">{request.summary}</p>
-            <p className="mono mt-1 text-[10px] uppercase tracking-[0.1em] text-black/45">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"} · requested {new Date(request.created_at).toLocaleString()}{expired ? " · expired" : request.expires_at ? ` · expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
-            {!expired && !localExecution && <p className="mt-1 text-xs text-black/55">Signing runs only in local Hodd for now; open this request there to finish it.</p>}
+            <p className="mono mt-1 text-[10px] uppercase tracking-[0.1em] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"} · requested {new Date(request.created_at).toLocaleString()}{expired ? " · expired" : request.expires_at ? ` · expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
+            {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Signing runs only in local Hodd for now; open this request there to finish it.</p>}
           </div></div>
           <div className="flex flex-wrap items-center gap-2">{action}
-            {!expired && <button onClick={() => void resolve(request.id, "DONE")} className="border border-black/20 px-3 py-2 text-xs">Mark done</button>}
-            <button onClick={() => void resolve(request.id, "DISMISSED")} className="border border-black/20 px-3 py-2 text-xs text-[#7b332d]">Dismiss</button>
+            {!expired && <button onClick={() => void resolve(request.id, "DONE")} className="border border-white/20 px-3 py-2 text-xs">Mark done</button>}
+            <button onClick={() => void resolve(request.id, "DISMISSED")} className="border border-white/20 px-3 py-2 text-xs text-[#ff9a92]">Dismiss</button>
           </div>
         </article>;
       })}
     </div>
-    {error && <p role="alert" className="border-t border-[#9a433c]/20 bg-[#f5dedb] px-5 py-3 text-xs text-[#7b332d]">{error}</p>}
+    {error && <p role="alert" className="border-t border-[#ff9a92]/30 bg-[#d03b3b]/15 px-5 py-3 text-xs text-[#ff9a92]">{error}</p>}
   </SectionCard>;
 }
