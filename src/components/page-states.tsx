@@ -1,7 +1,7 @@
 export function PageSkeleton() {
   return (
     <div aria-label="Loading sample treasury" role="status" className="animate-pulse">
-      <div className="h-56 bg-[#151816]" />
+      <div className="ink-grid h-56" />
       <div className="mx-auto grid max-w-[1440px] gap-4 px-5 py-8 md:grid-cols-2 md:px-8 xl:grid-cols-4 lg:px-10">
         {Array.from({ length: 8 }, (_, index) => <div key={index} className="h-36 border border-black/10 bg-black/[0.05]" />)}
       </div>

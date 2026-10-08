@@ -4,12 +4,12 @@ import { formatMoney } from "@/lib/treasury/format";
 
 export function PageHeader({ eyebrow, title, description, aside }: { eyebrow: string; title: string; description: string; aside?: React.ReactNode }) {
   return (
-    <header className="border-b border-black/15 bg-[#0b0d0c] px-5 py-10 text-white md:px-8 md:py-14 lg:px-10">
+    <header className="ink-grid border-b border-black/15 px-5 py-10 text-white md:px-8 md:py-14 lg:px-10">
       <div className="mx-auto flex max-w-[1440px] flex-col gap-7 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="mono text-[10px] uppercase tracking-[0.22em] text-[#8be0b1]">{eyebrow}</p>
-          <h1 className="mt-3 text-4xl font-medium tracking-[-0.055em] sm:text-5xl">{title}</h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-white/55 md:text-base">{description}</p>
+          <p className="mono text-[10px] uppercase tracking-[0.22em] text-[#7fa6ff]">{eyebrow}</p>
+          <h1 className="disp mt-4 text-[clamp(1.75rem,5.4vw,3.25rem)]">{title}</h1>
+          <p className="mt-5 max-w-2xl text-sm leading-6 text-white/60 md:text-base">{description}</p>
         </div>
         {aside}
       </div>
@@ -19,9 +19,9 @@ export function PageHeader({ eyebrow, title, description, aside }: { eyebrow: st
 
 export function DemoNotice({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="border-b border-black/15 bg-[#dff5e8] px-5 py-3 md:px-8 lg:px-10" role="note">
-      <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#164b32]">
-        <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#164b32]" />
+    <div className="border-b border-black/15 bg-[#e3dfd2] px-5 py-3 md:px-8 lg:px-10" role="note">
+      <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#2b2a27]">
+        <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#0a52e8]" />
         {children ?? "Choose your own wallet. Planning previews do not move funds; wallet transaction execution is currently paused."}
       </div>
     </div>
@@ -29,7 +29,7 @@ export function DemoNotice({ children }: { children?: React.ReactNode }) {
 }
 
 export function SectionCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <section className={clsx("border border-black/15 bg-[#fffdf7]", className)}>{children}</section>;
+  return <section className={clsx("border border-black/15 bg-[#f4f1e8]", className)}>{children}</section>;
 }
 
 export function SectionHeading({ index, title, description, action }: { index: string; title: string; description?: string; action?: React.ReactNode }) {

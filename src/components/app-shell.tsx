@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, ArrowUpRight, BriefcaseBusiness, Landmark, ListChecks } from "lucide-react";
@@ -29,14 +30,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const walletLabel = workspace.walletConnection ? walletLabels[workspace.walletConnection.provider] : "User wallet";
 
   return (
-    <div className="min-h-screen bg-[#f3f0e8] lg:grid lg:grid-cols-[244px_1fr]">
-      <aside className="hidden min-h-screen border-r border-white/10 bg-[#0b0d0c] text-white lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
+    <div className="min-h-screen bg-[#ece8dd] lg:grid lg:grid-cols-[244px_1fr]">
+      <aside className="hidden min-h-screen border-r border-white/10 bg-[#0b0b0d] text-white lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
         <div className="border-b border-white/10 px-6 py-7">
-          <Link href="/" className="inline-flex items-center gap-3" aria-label="Hodd portfolio home">
-            <span className="grid size-9 place-items-center border border-[#8be0b1]/60 text-sm font-bold text-[#8be0b1]">H</span>
-            <span className="text-xl font-semibold tracking-[-0.04em]">Hodd</span>
+          <Link href="/" className="inline-block" aria-label="Hodd portfolio home">
+            <Image src="/brand/hodd-lockup-dark.png" alt="" width={1000} height={318} priority className="h-auto w-[168px]" />
           </Link>
-          <p className="mono mt-3 text-[9px] uppercase tracking-[0.18em] text-white/40">Treasury operations</p>
+          <p className="mono mt-4 text-[9px] uppercase tracking-[0.18em] text-white/40">Treasury operations</p>
         </div>
         <nav aria-label="Primary navigation" className="px-3 py-5">
           <ul className="space-y-1">
@@ -44,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
               return (
                 <li key={href}>
-                  <Link href={href} aria-current={active ? "page" : undefined} className={clsx("flex items-center gap-3 border px-3 py-3 text-sm transition-colors", active ? "border-[#8be0b1]/30 bg-[#8be0b1]/10 text-[#b7f3cf]" : "border-transparent text-white/55 hover:border-white/10 hover:text-white")}>
+                  <Link href={href} aria-current={active ? "page" : undefined} className={clsx("mono flex items-center gap-3 border px-3 py-3 text-[11px] uppercase tracking-[0.09em] transition-colors", active ? "border-[#7fa6ff]/30 bg-[#7fa6ff]/10 text-[#b9ccff]" : "border-transparent text-white/55 hover:border-white/10 hover:text-white")}>
                     <Icon aria-hidden="true" className="size-4" />
                     {label}
                   </Link>
@@ -55,7 +55,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="mt-auto border-t border-white/10 p-5">
           <div className="border border-white/10 bg-white/[0.03] p-4">
-            <div className="flex items-center gap-2 text-xs text-[#b7f3cf]"><span className="size-1.5 bg-[#8be0b1]" />{liveMode ? "Arc Testnet · user-owned wallet" : "Local demo workspace"}</div>
+            <div className="flex items-center gap-2 text-xs text-[#b9ccff]"><span className="size-1.5 bg-[#7fa6ff]" />{liveMode ? "Arc Testnet · user-owned wallet" : "Local demo workspace"}</div>
             <p className="mt-2 text-xs leading-5 text-white/45">{liveMode ? walletState.status === "READY" ? "Live balances · wallet approval required for writes" : "Live balance unavailable · engine paused" : "Treasury Engine · no funds can move"}</p>
           </div>
           <a href="https://docs.arc.io/" target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-between text-xs text-white/45 hover:text-white">
@@ -65,10 +65,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="min-w-0">
-        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-black/10 bg-[#f3f0e8]/95 px-4 backdrop-blur md:px-8 lg:px-10">
-          <Link href="/" className="flex items-center gap-2 lg:hidden" aria-label="Hodd portfolio home">
-            <span className="grid size-8 place-items-center bg-[#0b0d0c] text-xs font-bold text-[#8be0b1]">H</span>
-            <span className="font-semibold tracking-[-0.03em]">Hodd</span>
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-black/10 bg-[#ece8dd]/95 px-4 backdrop-blur md:px-8 lg:px-10">
+          <Link href="/" className="flex items-center lg:hidden" aria-label="Hodd portfolio home">
+            <Image src="/brand/hodd-lockup-light.png" alt="" width={1912} height={608} priority className="h-auto w-[116px]" />
           </Link>
           <div className="hidden items-center gap-3 lg:flex">
             <span className="mono text-[10px] uppercase tracking-[0.18em] text-black/45">{liveMode ? walletLabel : "Local workspace"}</span>
@@ -78,19 +77,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2">
             <AccountMenu />
             <span className="hidden text-xs text-black/45 sm:inline">Updated {formatDate(workspace.updatedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-            <span className="border border-black/15 bg-[#fffdf7] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]">Arc Testnet</span>
+            <span className="mono border border-black/15 bg-[#f4f1e8] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]">Arc Testnet</span>
           </div>
         </header>
         <main className="pb-24 lg:pb-0">{children}</main>
       </div>
 
-      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0d0c] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 text-white lg:hidden">
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0b0d] px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 text-white lg:hidden">
         <ul className="grid grid-cols-4">
           {navigation.map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (
               <li key={href}>
-                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("flex min-h-12 flex-col items-center justify-center gap-1 text-[10px]", active ? "text-[#8be0b1]" : "text-white/45")}>
+                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("flex min-h-12 flex-col items-center justify-center gap-1 text-[10px]", active ? "text-[#7fa6ff]" : "text-white/45")}>
                   <Icon aria-hidden="true" className="size-4" />{label}
                 </Link>
               </li>

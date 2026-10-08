@@ -20,9 +20,9 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
     <div className="metric-grid mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-10 lg:py-10">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <div role="group" aria-label="Filter activity by actor" className="flex flex-wrap gap-2">
-          {filters.map((item) => <button key={item} onClick={() => setFilter(item)} aria-pressed={filter === item} className={clsx("border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em]", filter === item ? "border-[#164b32] bg-[#164b32] text-white" : "border-black/15 bg-[#fffdf7] text-black/55 hover:border-black/40")}>{item}</button>)}
+          {filters.map((item) => <button key={item} onClick={() => setFilter(item)} aria-pressed={filter === item} className={clsx("border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em]", filter === item ? "border-[#0b0b0d] bg-[#0b0b0d] text-white" : "border-black/15 bg-[#f4f1e8] text-black/55 hover:border-black/40")}>{item}</button>)}
         </div>
-        <div className="flex items-center gap-2"><span className="size-1.5 bg-[#8be0b1]" /><span className="mono text-[10px] uppercase tracking-[0.14em] text-black/45">Local audit trail</span></div>
+        <div className="flex items-center gap-2"><span className="size-1.5 bg-[#7fa6ff]" /><span className="mono text-[10px] uppercase tracking-[0.14em] text-black/45">Local audit trail</span></div>
       </div>
 
       <SectionCard>
@@ -40,9 +40,9 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
                     <div className="flex items-center gap-3"><StatusPill label={entry.execution.replace("_", " ")} /><ChevronDown aria-hidden="true" className="size-4 text-black/35 transition-transform group-open:rotate-180" /></div>
                   </summary>
                   <div className="grid gap-px border-t border-black/10 bg-black/10 sm:grid-cols-3">
-                    <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Why this record exists</p><p className="mt-3 text-xs leading-5 text-black/60">{entry.reason}</p></div>
-                    <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Policy state</p><div className="mt-3"><PolicyPill policy={entry.policy} /></div><p className="mt-3 text-xs leading-5 text-black/60">{entry.policy.reason}</p></div>
-                    <div className="bg-[#f8f5ed] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p>{entry.transactionHash && entry.explorerUrl ? <><p className="mono mt-3 break-all text-[10px] text-black/60">{entry.transactionHash}</p><a href={entry.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-semibold text-[#164b32] underline">Open onchain receipt</a></> : <p className="mt-3 text-xs leading-5 text-black/60">Local audit record only. No onchain receipt is attached.</p>}</div>
+                    <div className="bg-[#f4f1e8] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Why this record exists</p><p className="mt-3 text-xs leading-5 text-black/60">{entry.reason}</p></div>
+                    <div className="bg-[#f4f1e8] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Policy state</p><div className="mt-3"><PolicyPill policy={entry.policy} /></div><p className="mt-3 text-xs leading-5 text-black/60">{entry.policy.reason}</p></div>
+                    <div className="bg-[#f4f1e8] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-black/40">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p>{entry.transactionHash && entry.explorerUrl ? <><p className="mono mt-3 break-all text-[10px] text-black/60">{entry.transactionHash}</p><a href={entry.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-semibold text-[#0a52e8] underline">Open onchain receipt</a></> : <p className="mt-3 text-xs leading-5 text-black/60">Local audit record only. No onchain receipt is attached.</p>}</div>
                   </div>
                 </details>
               );
@@ -51,8 +51,8 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
         )}
       </SectionCard>
 
-      <div className="mt-6 border border-black/15 bg-[#0b0d0c] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
-        <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#8be0b1]">Stage boundary</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
+      <div className="mt-6 border border-black/15 bg-[#0b0b0d] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
+        <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#7fa6ff]">Stage boundary</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
         <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Stage 4 attaches a real hash and explorer URL only after App Kit returns a confirmed result. Quotes, approvals and failures remain clearly labeled local audit records.</p>
       </div>
     </div>

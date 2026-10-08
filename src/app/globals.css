@@ -1,17 +1,23 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+/* Hodd design language: paper and ink, one blue, chrome used sparingly. */
 :root {
-  --ink: #0b0d0c;
-  --ink-soft: #151816;
-  --paper: #f3f0e8;
-  --paper-strong: #fffdf7;
-  --line-dark: rgba(255, 255, 255, 0.12);
-  --line-light: rgba(11, 13, 12, 0.14);
-  --muted: #777b75;
-  --mint: #8be0b1;
-  --mint-dark: #164b32;
-  --blue: #87a8d8;
-  --sand: #d8bc87;
+  --ink: #0b0b0d;
+  --ink-soft: #101319;
+  --paper: #ece8dd;
+  --paper-strong: #f4f1e8;
+  --stone: #e3dfd2;
+  --line-dark: rgba(244, 241, 232, 0.14);
+  --line-light: rgba(11, 11, 13, 0.15);
+  --muted: #5a5953;
+  --blue: #0a52e8;
+  --blue-soft: #7fa6ff;
+  --blue-pale: #b9ccff;
   --danger: #dc7d71;
 }
 
@@ -20,35 +26,60 @@
 html {
   background: var(--ink);
   color: var(--ink);
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
   background: var(--paper);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
 button, a, input, select { -webkit-tap-highlight-color: transparent; }
 
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
-  outline: 2px solid var(--mint-dark);
+  outline: 2px solid var(--blue);
   outline-offset: 3px;
 }
 
-::selection { background: var(--mint); color: var(--ink); }
+::selection { background: var(--blue-soft); color: var(--ink); }
 
-.mono {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-variant-numeric: tabular-nums;
-}
+@layer components {
+  /* Labels, figures and ticker copy. */
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
 
-.metric-grid {
-  background-image:
-    linear-gradient(to right, rgba(11, 13, 12, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(11, 13, 12, 0.045) 1px, transparent 1px);
-  background-size: 48px 48px;
+  /* Display type: Archivo at 125% width, heavy, tight, uppercase. */
+  .disp {
+    font-family: var(--font-sans);
+    font-stretch: 125%;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 0.92;
+    text-transform: uppercase;
+  }
+
+  /* 120px ruled grid used on paper surfaces. */
+  .metric-grid {
+    background-image:
+      linear-gradient(to right, rgba(11, 11, 13, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(11, 11, 13, 0.06) 1px, transparent 1px);
+    background-size: 120px 120px;
+  }
+
+  /* Dark surfaces get the same grid in light ink plus a blue glow in the corner. */
+  .ink-grid {
+    background-color: var(--ink);
+    background-image:
+      radial-gradient(ellipse 55% 90% at 92% 0%, rgba(40, 90, 255, 0.28), rgba(40, 90, 255, 0) 70%),
+      linear-gradient(to right, rgba(244, 241, 232, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(244, 241, 232, 0.05) 1px, transparent 1px);
+    background-size: auto, 120px 120px, 120px 120px;
+  }
 }
 
 .hairline { border-color: var(--line-light); }
