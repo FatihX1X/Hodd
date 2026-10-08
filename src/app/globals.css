@@ -46,6 +46,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 ::selection { background: var(--blue-soft); color: var(--ink); }
 
+/* Console pages are dark end to end, including overscroll. The landing page stays on paper. */
+body:has([data-theme="dark"]) { background: var(--ink); color: var(--paper-strong); color-scheme: dark; }
+[data-theme="dark"] { color-scheme: dark; }
+
 @layer components {
   /* Labels, figures and ticker copy. */
   .mono {
