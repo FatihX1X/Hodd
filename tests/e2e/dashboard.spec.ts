@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
 test.beforeEach(async ({ page }) => { await page.route("**/api/earn/portfolio*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(earnReadOnlyResponse) })); });
 
-const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/activity", "Every decision leaves a trace."], ["/connections", "Ask Hodd from Claude."]] as const;
+const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/policy", "The rules behind every number."], ["/activity", "Every decision leaves a trace."], ["/connections", "Ask Hodd from Claude."]] as const;
 for (const [route, heading] of routes) {
   test(`${route} renders without console errors or horizontal overflow`, async ({ page }) => {
     const errors: string[] = []; page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(route); await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|quotes and approvals|connector uses your hodd sign-in/i);
+    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|policy values change|quotes and approvals|connector uses your hodd sign-in/i);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false); expect(errors).toEqual([]);
   });
 }
@@ -87,4 +87,18 @@ test("OAuth consent keeps the request across sign-in", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
   const cookie = (await page.context().cookies()).find((item) => item.name === "hodd_after_login");
   expect(decodeURIComponent(cookie?.value ?? "")).toBe("/oauth/consent?authorization_id=test-authorization-123");
+});
+
+test("policy page states the rules and edits the same persisted policy", async ({ page }) => {
+  await page.goto("/policy");
+  await expect(page.getByText(/place at most 60% in morpho/i)).toBeVisible();
+  await page.getByLabel("Safety buffer").fill("1500"); await page.getByRole("button", { name: /save policy and recalculate/i }).click();
+  await expect(page.getByText(/1,500.00 USDC safety buffer/)).toBeVisible(); await page.reload(); await expect(page.getByText(/1,500.00 USDC safety buffer/)).toBeVisible();
+});
+
+test("obligation detail follows the selected row and charts reveal values only on hover", async ({ page }) => {
+  await page.goto("/obligations");
+  const plan = page.getByRole("complementary", { name: "Payment plan" }); await expect(plan).toContainText(/plan for october payroll/i);
+  await page.getByRole("button", { name: "AWS infrastructure", exact: true }).click(); await expect(plan).toContainText(/plan for aws infrastructure/i);
+  await expect(page.getByRole("status")).toHaveCount(0);
 });

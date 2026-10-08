@@ -49,6 +49,12 @@ export function assessTreasury(workspace: TreasuryWorkspace, evaluatedAt = new D
   const coverageStatus = coverage === null ? "NO_OBLIGATIONS" : violations.some((item) => item.severity === "BLOCKED") ? "AT_RISK" : coverage < workspace.policy.minimumLiquidityCoverageBps ? "REVIEW" : "SAFE";
   return { evaluatedAt: evaluatedAt.toISOString(), upcomingObligations: upcoming, protectedCapital, deployableCapital, safelyAvailableLiquidity: safeLiquidity, liquidityCoverageBps: coverage, coverageStatus, nextPayment, nextPaymentFeasibility: nextPayment ? paymentFeasibility(workspace, nextPayment, obligations) : null, violations };
 }
+/** Funding plan for one protected obligation (earlier obligations, the buffer and pending transactions are reserved first). */
+export function assessPayment(workspace: TreasuryWorkspace, obligationId: string, evaluatedAt = new Date()): PaymentFeasibility | null {
+  const protectedObligations = getProtectedObligations(workspace, evaluatedAt);
+  const obligation = protectedObligations.find((item) => item.id === obligationId);
+  return obligation ? paymentFeasibility(workspace, obligation, protectedObligations) : null;
+}
 export function previewAllocation(workspace: TreasuryWorkspace, assessment = assessTreasury(workspace)): AllocationPlan {
   const deployable = assessment.deployableCapital; const violations: PolicyViolation[] = [];
   const lines = strategyOrder.map((strategy) => {
