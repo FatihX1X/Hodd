@@ -7,13 +7,13 @@ import { assessTreasury, previewAllocation } from "@/lib/treasury/engine";
 import { initialWorkspace } from "@/lib/treasury/fixtures";
 import { LocalTreasuryRepository } from "@/lib/treasury/repository";
 import { formatMoney } from "@/lib/treasury/format";
-import { addMoney, moneyLike } from "@/lib/treasury/money";
-import { walletConnectionSchema, type ActivityEntry, type Obligation, type ObligationInput, type StrategyKind, type TreasuryPolicy, type TreasuryWorkspace, type WalletConnection, type WalletReadState, type WalletSnapshot } from "@/lib/treasury/models";
+import { walletConnectionSchema, type ActivityEntry, type Obligation, type ObligationInput, type StrategyKind, type TreasuryPolicy, type TreasuryWorkspace, type WalletConnection, type WalletReadState } from "@/lib/treasury/models";
 import { clearActiveWalletRuntime } from "@/lib/wallet/runtime";
-import { loadCloudWorkspace, refreshCloudLedger, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
+import { cloudWorkspaceRevision, isRevisionConflict, knownWorkspaceRevision, loadCloudWorkspace, refreshCloudLedger, syncWorkspaceToCloud } from "@/lib/supabase/workspace-sync";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 import { mergePaymentLedger } from "@/lib/payments/workspace";
+import { applyEarnPortfolio, applyWalletSnapshot, makeActivity } from "@/lib/treasury/live";
 
 type Assessment = ReturnType<typeof assessTreasury>;
 type AllocationPlan = ReturnType<typeof previewAllocation>;
@@ -46,22 +46,8 @@ type WorkspaceContextValue = {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
-function makeActivity(action: string, summary: string, reason: string, occurredAt: string): ActivityEntry {
-  return { id: crypto.randomUUID(), occurredAt, actor: "HUMAN", action, summary, reason, policy: { status: "PASS", label: "Local validation", reason: "The change passed schema and deterministic policy input validation." }, approval: "NOT_REQUIRED", execution: "LOCAL_ONLY" };
-}
-
-export function applyWalletSnapshot(workspace: TreasuryWorkspace, snapshot: WalletSnapshot): TreasuryWorkspace {
-  const strategies = workspace.strategies.map((strategy) => strategy.kind === "LIQUID" ? { ...strategy, balance: snapshot.balance, redeemable: snapshot.balance, integration: "LIVE" as const } : strategy);
-  return { ...workspace, totalTreasury: snapshot.balance, liquidUsdc: snapshot.balance, strategies };
-}
-
-export function applyEarnPortfolio(workspace: TreasuryWorkspace, portfolio: EarnPortfolioResponse): TreasuryWorkspace {
-  const zero = moneyLike(workspace.liquidUsdc, 0n);
-  const morphoBalance = addMoney(zero, ...portfolio.positions.map((position) => position.currentBalance));
-  const redeemable = addMoney(zero, ...portfolio.positions.map((position) => position.liquidityStatus === "READY" ? position.redeemable : zero));
-  const strategies = workspace.strategies.map((strategy) => strategy.kind === "MORPHO" ? { ...strategy, name: portfolio.vaults[0]?.name ?? strategy.name, balance: morphoBalance, redeemable, apyBps: portfolio.positions[0]?.apyBps ?? portfolio.vaults[0]?.apyBps ?? null, integration: portfolio.integration.positionAccess === "READY" ? "LIVE" as const : "UNAVAILABLE" as const } : strategy);
-  return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, morphoBalance), strategies };
-}
+// Pure helpers live in src/lib/treasury/live.ts so the server-side Claude connector can reuse them.
+export { applyEarnPortfolio, applyWalletSnapshot };
 
 function operationalInput(workspace: TreasuryWorkspace, walletState: WalletReadState, earnState?: EarnReadState): TreasuryWorkspace | null {
   if (workspace.treasuryMode === "LOCAL_DEMO") return workspace;
@@ -138,11 +124,40 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     if (hydrated && paymentLedgerRevision) new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId).save(workspace);
   }, [hydrated, paymentLedgerRevision, userId, workspace, workspaceScope]);
 
+  // The cloud copy moved on (another tab, or a change approved in Claude): load it
+  // instead of overwriting it with this tab's older copy.
+  const adoptCloud = useCallback(async (message: string | null) => {
+    if (!userId) return;
+    const generation = identityGeneration.current;
+    const cloud = await refreshCloudLedger(userId, workspaceScope);
+    if (generation !== identityGeneration.current) return;
+    new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId}:smoke` : userId).save(cloud);
+    setWorkspace(cloud); setEvaluatedAt(new Date().toISOString()); setCloudIssue(message);
+  }, [userId, workspaceScope]);
+
   const persist = useCallback((next: TreasuryWorkspace) => {
     new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId).save(next);
     if (userId && !cloudReadable) return;
-    void syncWorkspaceToCloud(next, userId, workspaceScope).then(() => setCloudIssue(null)).catch(() => setCloudIssue("Cloud sync failed. Your changes are saved on this device."));
-  }, [userId, cloudReadable, workspaceScope]);
+    void syncWorkspaceToCloud(next, userId, workspaceScope).then(() => setCloudIssue(null)).catch((error: unknown) => {
+      if (isRevisionConflict(error)) void adoptCloud("This workspace changed elsewhere (for example through Claude). The latest version was loaded; repeat your last change if it is still needed.").catch(() => setCloudIssue("Cloud sync failed. Your changes are saved on this device."));
+      else setCloudIssue("Cloud sync failed. Your changes are saved on this device.");
+    });
+  }, [userId, cloudReadable, workspaceScope, adoptCloud]);
+
+  // Pick up changes made elsewhere (e.g. approved in Claude) when the tab regains focus.
+  useEffect(() => {
+    if (!hydrated || !userId || !cloudReadable) return;
+    let active = true;
+    const check = async () => {
+      const known = knownWorkspaceRevision(userId, workspaceScope);
+      const current = await cloudWorkspaceRevision(userId, workspaceScope).catch(() => null);
+      if (active && current !== null && known !== undefined && current > known) await adoptCloud(null).catch(() => undefined);
+    };
+    const onFocus = () => { void check(); };
+    window.addEventListener("focus", onFocus);
+    const interval = window.setInterval(onFocus, 30_000);
+    return () => { active = false; window.removeEventListener("focus", onFocus); window.clearInterval(interval); };
+  }, [hydrated, userId, cloudReadable, workspaceScope, adoptCloud]);
 
   const walletAddress = workspace.treasuryMode === "ARC_TESTNET_WALLET" ? workspace.walletConnection?.address : undefined;
   useEffect(() => {
