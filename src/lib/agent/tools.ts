@@ -11,7 +11,7 @@ import { assessTreasury } from "@/lib/treasury/engine";
 import { AgentError, agentIdentity } from "./auth";
 import { agentContext, liveWorkspace, type AgentContext } from "./context";
 import { applyChange, changeSchemas, REQUEST_KINDS, type ChangeKind } from "./changes";
-import { issueHandle, verifyHandle, HANDLE_TTL_MS } from "./handles";
+import { confirmationKey, issueHandle, verifyHandle, HANDLE_TTL_MS } from "./handles";
 import { allocationView, obligationView, overviewView, paymentCheckView, policyView, usdc } from "./views";
 
 const scope = z.enum(["TREASURY", "SMOKE_TEST"]).default("TREASURY").describe("TREASURY (main treasury, default) or SMOKE_TEST (isolated test workspace)");
@@ -77,7 +77,7 @@ async function prepare(auth: AuthInfo | undefined, workspaceScope: "TREASURY" | 
     const obligation = live.workspace.obligations.find((item) => item.id === (change as { obligationId: string }).obligationId)!;
     extra.paymentCheck = paymentCheckView(live.workspace, obligation, await estimateTransferFee(live.workspace, obligation.recipientAddress, obligation.amount), now);
   }
-  const { handle } = issueHandle({ uid: context.userId, cid: context.clientId, scope: workspaceScope, kind, rev: context.revision, change });
+  const { handle } = issueHandle({ uid: context.userId, cid: context.clientId, scope: workspaceScope, kind, rev: context.revision, change }, Date.now(), await confirmationKey(context.client));
   return {
     kind, summary: applied.summary, changes: applied.lines,
     impact: { dataSource: live.source, note: live.note, deployableCapital: { before: usdc(before.deployableCapital), after: usdc(after.deployableCapital) }, protectedCapital: { before: usdc(before.protectedCapital), after: usdc(after.protectedCapital) }, coverageStatus: { before: before.coverageStatus, after: after.coverageStatus } },
@@ -92,8 +92,8 @@ async function commit(auth: AuthInfo | undefined, kind: ChangeKind, args: { scop
   let change: Record<string, unknown>;
   try { change = changeSchemas[kind].parse(raw) as Record<string, unknown>; } catch (error) { rejectChange(error); }
   const identity = agentIdentity(auth);
-  const handle = verifyHandle(confirmation, { uid: identity.userId, cid: identity.clientId, scope: workspaceScope, kind, change });
   const context: AgentContext = await agentContext(auth, workspaceScope);
+  const handle = verifyHandle(confirmation, { uid: identity.userId, cid: identity.clientId, scope: workspaceScope, kind, change }, Date.now(), await confirmationKey(context.client));
   if (handle.rev !== context.revision) throw new AgentError("WORKSPACE_CHANGED", "The workspace changed after this preview (for example in the Hodd app). Nothing was written; prepare the change again.");
   let applied;
   try { applied = applyChange(context.workspace, kind, change, new Date()); } catch (error) { rejectChange(error); }

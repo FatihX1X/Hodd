@@ -31,7 +31,22 @@ export function handleSecret(env: Record<string, string | undefined> = process.e
   if (!root) throw new AgentError("UNCONFIGURED", "The connector confirmation secret is not configured.");
   return Buffer.from(hkdfSync("sha256", root, "hodd", "hodd-mcp-confirmation-v1", 32));
 }
-const secret = () => handleSecret();
+type Key = Buffer | string;
+let databaseKey: string | null = null;
+
+/**
+ * Key for this request: host configuration first, otherwise the random key the
+ * database generated (hodd_agent_confirmation_key, connector tokens only).
+ */
+export async function confirmationKey(client: { rpc: (name: string) => PromiseLike<{ data: unknown; error: unknown }> }): Promise<Key> {
+  try { return handleSecret(); }
+  catch (error) { if (!(error instanceof AgentError) || !error.message.includes("not configured")) throw error; }
+  if (databaseKey) return databaseKey;
+  const { data, error } = await client.rpc("hodd_agent_confirmation_key");
+  if (error || typeof data !== "string" || data.length < 32) throw new AgentError("UNCONFIGURED", "The connector confirmation key is unavailable.");
+  databaseKey = data;
+  return data;
+}
 
 /** Order-independent digest of a JSON change, so equal changes always match. */
 export function changeDigest(value: unknown) {
@@ -39,19 +54,19 @@ export function changeDigest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
-const sign = (body: string) => createHmac("sha256", secret()).update(body).digest("base64url");
+const sign = (body: string, key: Key) => createHmac("sha256", key).update(body).digest("base64url");
 
-export function issueHandle(input: Omit<HandlePayload, "v" | "id" | "exp" | "digest"> & { change: unknown }, now = Date.now()) {
+export function issueHandle(input: Omit<HandlePayload, "v" | "id" | "exp" | "digest"> & { change: unknown }, now = Date.now(), key: Key = handleSecret()) {
   const payload: HandlePayload = { v: 1, id: randomUUID(), uid: input.uid, cid: input.cid, scope: input.scope, kind: input.kind, digest: changeDigest(input.change), rev: input.rev, exp: now + HANDLE_TTL_MS };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return { handle: `${body}.${sign(body)}`, payload };
+  return { handle: `${body}.${sign(body, key)}`, payload };
 }
 
-export function verifyHandle(handle: string, expected: { uid: string; cid: string; scope: string; kind: string; change: unknown }, now = Date.now()): HandlePayload {
+export function verifyHandle(handle: string, expected: { uid: string; cid: string; scope: string; kind: string; change: unknown }, now = Date.now(), key: Key = handleSecret()): HandlePayload {
   const fail = (message: string): never => { throw new AgentError("CONFIRMATION_INVALID", message); };
   const [body, mac, extra] = handle.split(".");
   if (!body || !mac || extra !== undefined) fail("The confirmation handle is malformed. Prepare the change again.");
-  const actual = Buffer.from(mac); const wanted = Buffer.from(sign(body));
+  const actual = Buffer.from(mac); const wanted = Buffer.from(sign(body, key));
   if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted)) fail("The confirmation handle is not valid. Prepare the change again.");
   let payload: HandlePayload;
   try { payload = payloadSchema.parse(JSON.parse(Buffer.from(body, "base64url").toString("utf8"))); }

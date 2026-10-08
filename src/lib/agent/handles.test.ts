@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { changeDigest, handleSecret, issueHandle, verifyHandle, HANDLE_TTL_MS } from "./handles";
+import { changeDigest, confirmationKey, handleSecret, issueHandle, verifyHandle, HANDLE_TTL_MS } from "./handles";
 
 const base = { uid: "u1", cid: "claude", scope: "TREASURY" as const, kind: "UPDATE_POLICY" };
 const change = { safetyBuffer: "500", strategyCapsBps: { MORPHO: 5000 } };
@@ -38,6 +38,16 @@ describe("confirmation handles", () => {
     expect(derived).not.toEqual(Buffer.from("k".repeat(40)));
     expect(handleSecret({ CIRCLE_API_KEY: "c".repeat(40) })).not.toEqual(derived);
     expect(handleSecret({ HODD_MCP_HANDLE_SECRET: "d".repeat(40), SUPABASE_SECRET_KEY: "k".repeat(40) })).toBe("d".repeat(40));
+  });
+  it("falls back to the database-generated key when the host has no secret, and caches it", async () => {
+    vi.stubEnv("HODD_MCP_HANDLE_SECRET", ""); vi.stubEnv("SUPABASE_SECRET_KEY", ""); vi.stubEnv("CIRCLE_API_KEY", "");
+    const rpc = vi.fn(async () => ({ data: "z".repeat(64), error: null }));
+    const key = await confirmationKey({ rpc });
+    expect(key).toBe("z".repeat(64));
+    const { handle } = issueHandle({ ...base, rev: 2, change }, Date.now(), key);
+    expect(verifyHandle(handle, { ...base, change }, Date.now(), await confirmationKey({ rpc })).rev).toBe(2);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(() => verifyHandle(handle, { ...base, change }, Date.now(), "w".repeat(64))).toThrow("not valid");
   });
   it("digests JSON independent of key order and undefined fields", () => {
     expect(changeDigest({ a: 1, b: { c: 2, d: [1, { e: 3, f: undefined }] } })).toBe(changeDigest({ b: { d: [1, { e: 3 }], c: 2 }, a: 1 }));
