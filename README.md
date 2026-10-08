@@ -145,7 +145,7 @@ Users can connect Hodd to Claude (claude.ai, Claude Desktop, Claude mobile) as a
 - **Concurrency:** workspace rows have a `revision`; every update must name the revision it was based on (`workspace revision conflict` otherwise). Browsers send it and reload on conflict or when the tab regains focus, so a stale tab cannot overwrite a change approved in Claude, and vice versa.
 - **Audit:** connector changes add an `AGENT` activity marked "approved in Claude" and an `agent_actions` row (owner-readable; browsers cannot insert).
 
-One-time setup: in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. Set `HODD_MCP_HANDLE_SECRET` (32+ random characters) on the host. Apply `20261008125003_agent_actions.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction.
+One-time setup: in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. Prefer a dedicated `HODD_MCP_HANDLE_SECRET` (32+ random characters) on the host; without it the confirmation key is derived with HKDF from `SUPABASE_SECRET_KEY` or `CIRCLE_API_KEY` (label `hodd-mcp-confirmation-v1`). Apply `20261008125003_agent_actions.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction.
 
 ## Next work
 
