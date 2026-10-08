@@ -1,0 +1,57 @@
+/* Landing-only styles that Tailwind utilities cannot express cleanly. */
+
+.ticker {
+  display: inline-flex;
+  animation: tick 70s linear infinite;
+  will-change: transform;
+}
+
+@keyframes tick {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* Registration mark: a ringed crosshair. */
+.crosshair {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.7;
+}
+.crosshair::before,
+.crosshair::after {
+  content: "";
+  position: absolute;
+  background: currentColor;
+}
+.crosshair::before { left: 50%; top: -9px; bottom: -9px; width: 1px; }
+.crosshair::after { top: 50%; left: -9px; right: -9px; height: 1px; }
+
+/* Outlined step numbers. */
+.outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px #0b0b0d;
+}
+
+/* Halftone sphere under the wireframe globe. */
+.sphere {
+  background-image: radial-gradient(circle, #0b0b0d 1.1px, transparent 1.7px);
+  background-size: 8px 8px;
+  -webkit-mask-image: radial-gradient(circle at 30% 28%, rgba(0, 0, 0, 0) 8%, #000 88%);
+  mask-image: radial-gradient(circle at 30% 28%, rgba(0, 0, 0, 0) 8%, #000 88%);
+}
+
+/* Footer ghost wordmark. */
+.ghost {
+  background: linear-gradient(180deg, #303550 0%, #0b0b0d 88%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker { animation: none; }
+}

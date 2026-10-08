@@ -44,7 +44,26 @@ In Circle Console configure the User-Controlled Wallet App ID, Modular Client Ke
 
 For passkey execution, Hodd requires the official Gas Station paymaster. [Circle's current transfer guide](https://developers.circle.com/wallets/modular/transfer-tokens) says Arc Testnet sponsorship is automatic; a Console policy is required for mainnet, which Hodd does not enable. Hodd refuses any unsponsored/paid-paymaster fallback. Embedded execution uses the official User-Controlled Wallet server adapter; the browser SDK presents the PIN challenge. MetaMask/Rabby verify the selected account and Arc Testnet before each single-call transaction. Logout, reconnect, expiry and account/network changes invalidate the in-memory signer; quotes are bound to the original authenticated session, selected wallet, scope and policy snapshot.
 
-For hosting, configure environment variables in the host project. `.env.local` stays on your machine. Public-prefixed configuration is included in the browser bundle; the Circle API key stays server-side. This change does not deploy the application.
+For hosting, configure environment variables in the host project. `.env.local` stays on your machine. Public-prefixed configuration is included in the browser bundle; the Circle API key stays server-side.
+
+## Sites and domains
+
+One Vercel project serves two sites, chosen by the request host in `src/proxy.ts` (host lists live in `src/lib/site/hosts.ts`):
+
+| Host | Serves |
+| --- | --- |
+| `hoddfinance.xyz`, `www.hoddfinance.xyz` | Landing page (`/landing`, rewritten from `/`). API routes return 404; console paths redirect to the app host. |
+| `app.hoddfinance.xyz` | Treasury console, login, auth callbacks and API routes. Not indexed (`robots.txt` disallows everything). |
+| any other host (`hodd.vercel.app`, preview URLs, localhost) | Treasury console, so existing sessions and previews keep working. The landing page is always available at `/landing`. |
+
+DNS (at the registrar, unless the domain's nameservers are moved to Vercel): `A hoddfinance.xyz → 76.76.21.21`, `CNAME www → cname.vercel-dns.com`, `CNAME app → cname.vercel-dns.com`. Use the exact values Vercel shows for the project if they differ.
+
+Moving the console to `app.hoddfinance.xyz` needs matching provider settings, otherwise sign-in and passkeys fail on the new origin:
+
+- Supabase Auth: add `https://app.hoddfinance.xyz/auth/callback` and `https://app.hoddfinance.xyz/auth/confirm` to the redirect allow list and set the Site URL to `https://app.hoddfinance.xyz`.
+- Circle Console: set the Passkey Domain to `app.hoddfinance.xyz` (passkeys are bound to the domain and will not carry over from `hodd.vercel.app`) and allow the new domain on the Modular client key.
+
+Brand assets live in `public/brand` (derived from the master logo and star artwork; do not redraw them). Fonts are self-hosted from `src/app/fonts`: Archivo and IBM Plex Mono, both under the SIL Open Font License.
 
 ## Persistence
 
