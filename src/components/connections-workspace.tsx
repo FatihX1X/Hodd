@@ -43,8 +43,9 @@ export function ConnectionsWorkspace() {
     const client = createSupabaseBrowserClient();
     if (!client) return;
     const { error } = await client.auth.oauth.revokeGrant({ clientId });
-    setGrantNote(error ? "The connection could not be revoked. Try again." : "Connection revoked. Claude must be connected again to use Hodd.");
+    // Reload first: load() clears the note, so the outcome message must come after it.
     await load();
+    setGrantNote(error ? "The connection could not be revoked. Try again." : "Connection revoked. Claude must be connected again to use Hodd.");
   };
 
   const url = origin ? `${origin}/api/mcp` : "";
