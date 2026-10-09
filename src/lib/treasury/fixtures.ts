@@ -30,3 +30,4 @@ export const initialWorkspace = treasuryWorkspaceSchema.parse({
   ],
 });
 export const demoTreasury = initialWorkspace;
+export const sampleWorkspace = initialWorkspace;

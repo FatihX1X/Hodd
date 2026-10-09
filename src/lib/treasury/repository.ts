@@ -1,4 +1,4 @@
-import { initialWorkspace } from "./fixtures";
+import { createLiveStarterWorkspace } from "./starter";
 import { legacyTreasuryWorkspaceSchema, stage2TreasuryWorkspaceSchema, stage4TreasuryWorkspaceSchema, treasuryWorkspaceSchema, type TreasuryWorkspace } from "./models";
 
 export const WORKSPACE_STORAGE_KEY = "hodd.stage5.workspace.v4";
@@ -31,29 +31,29 @@ export class LocalTreasuryRepository implements TreasuryRepository {
   load(): WorkspaceLoadResult {
     const raw = this.storage.getItem(this.key);
     if (raw) {
-      try { const parsed = treasuryWorkspaceSchema.safeParse(JSON.parse(raw)); return parsed.success ? { status: "READY", workspace: parsed.data } : { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 4 workspace failed schema validation." }; }
-      catch { return { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 4 workspace is not valid JSON." }; }
+      try { const parsed = treasuryWorkspaceSchema.safeParse(JSON.parse(raw)); return parsed.success ? { status: "READY", workspace: parsed.data } : { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 4 workspace failed schema validation." }; }
+      catch { return { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 4 workspace is not valid JSON." }; }
     }
-    if (this.userId) return { status: "EMPTY", workspace: structuredClone(initialWorkspace) };
+    if (this.userId) return { status: "EMPTY", workspace: createLiveStarterWorkspace() };
     const stage4Raw = this.storage.getItem(STAGE4_WORKSPACE_STORAGE_KEY);
     if (stage4Raw) {
-      try { const migrated = migrateStage4Workspace(JSON.parse(stage4Raw)); return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 4 workspace could not be migrated safely." }; }
-      catch { return { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 4 workspace is not valid JSON." }; }
+      try { const migrated = migrateStage4Workspace(JSON.parse(stage4Raw)); return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 4 workspace could not be migrated safely." }; }
+      catch { return { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 4 workspace is not valid JSON." }; }
     }
     const stage3Raw = this.storage.getItem(STAGE3_WORKSPACE_STORAGE_KEY);
     if (stage3Raw) {
-      try { const migrated = migrateStage3Workspace(JSON.parse(stage3Raw)); return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 3 workspace could not be migrated safely." }; }
-      catch { return { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 3 workspace is not valid JSON." }; }
+      try { const migrated = migrateStage3Workspace(JSON.parse(stage3Raw)); return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 3 workspace could not be migrated safely." }; }
+      catch { return { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 3 workspace is not valid JSON." }; }
     }
     const legacyRaw = this.storage.getItem(LEGACY_WORKSPACE_STORAGE_KEY);
-    if (!legacyRaw) return { status: "EMPTY", workspace: structuredClone(initialWorkspace) };
+    if (!legacyRaw) return { status: "EMPTY", workspace: createLiveStarterWorkspace() };
     try {
       const migrated = migrateLegacyWorkspace(JSON.parse(legacyRaw));
-      return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 2 workspace could not be migrated safely." };
+      return migrated ? { status: "MIGRATED", workspace: migrated } : { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 2 workspace could not be migrated safely." };
     } catch {
-      return { status: "CORRUPT", workspace: structuredClone(initialWorkspace), message: "The saved Stage 2 workspace is not valid JSON." };
+      return { status: "CORRUPT", workspace: createLiveStarterWorkspace(), message: "The saved Stage 2 workspace is not valid JSON." };
     }
   }
   save(workspace: TreasuryWorkspace) { this.storage.setItem(this.key, JSON.stringify(treasuryWorkspaceSchema.parse(workspace))); if (!this.userId) { this.storage.removeItem(STAGE4_WORKSPACE_STORAGE_KEY); this.storage.removeItem(STAGE3_WORKSPACE_STORAGE_KEY); this.storage.removeItem(LEGACY_WORKSPACE_STORAGE_KEY); } }
-  reset() { this.storage.removeItem(this.key); if (!this.userId) { this.storage.removeItem(STAGE4_WORKSPACE_STORAGE_KEY); this.storage.removeItem(STAGE3_WORKSPACE_STORAGE_KEY); this.storage.removeItem(LEGACY_WORKSPACE_STORAGE_KEY); } return structuredClone(initialWorkspace); }
+  reset() { this.storage.removeItem(this.key); if (!this.userId) { this.storage.removeItem(STAGE4_WORKSPACE_STORAGE_KEY); this.storage.removeItem(STAGE3_WORKSPACE_STORAGE_KEY); this.storage.removeItem(LEGACY_WORKSPACE_STORAGE_KEY); } return createLiveStarterWorkspace(); }
 }
