@@ -13,6 +13,7 @@ import { cloudWorkspaceRevision, isRevisionConflict, knownWorkspaceRevision, loa
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 import { mergePaymentLedger } from "@/lib/payments/workspace";
+import { applyChange, type AppliedChange, type ChangeKind } from "@/lib/agent/changes";
 import { applyEarnPortfolio, applyWalletSnapshot, makeActivity } from "@/lib/treasury/live";
 
 type Assessment = ReturnType<typeof assessTreasury>;
@@ -41,6 +42,10 @@ type WorkspaceContextValue = {
   updateObligation(id: string, input: ObligationInput): void;
   updatePolicy(policy: Pick<TreasuryPolicy, "safetyBuffer" | "minimumLiquidityCoverageBps" | "strategyCapsBps">): void;
   updateTargets(targets: Record<StrategyKind, number>): void;
+  /** Dry run of a change proposed in Hoddie chat: exactly what approval would write. Throws a readable Error when not allowed. */
+  previewHoddieChange(kind: ChangeKind, change: unknown): AppliedChange;
+  /** Applies a change the user approved in Hoddie chat, only if the workspace is still the one the change was prepared against. */
+  applyHoddieChange(kind: ChangeKind, change: unknown, expectedUpdatedAt: string): AppliedChange;
   resetWorkspace(): void;
 };
 
@@ -281,7 +286,15 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     setPaymentLedgerRevision((current) => current + 1);
     setEvaluatedAt(new Date().toISOString()); refreshWallet(); refreshEarn();
   };
-  const value = { workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
+  const previewHoddieChange = (kind: ChangeKind, change: unknown) => applyChange(workspace, kind, change, new Date(), undefined, "Hoddie");
+  const applyHoddieChange = (kind: ChangeKind, change: unknown, expectedUpdatedAt: string) => {
+    if (storageIssue || !hydrated) throw new Error("The workspace is not available for changes right now.");
+    if (workspace.updatedAt !== expectedUpdatedAt) throw new Error("The workspace changed after this proposal was prepared. Ask again to get an up-to-date proposal.");
+    const applied = applyChange(workspace, kind, change, new Date(), undefined, "Hoddie");
+    commit(applied.workspace);
+    return applied;
+  };
+  const value = { workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, previewHoddieChange, applyHoddieChange, resetWorkspace };
   return <WorkspaceContext.Provider value={value}>{userId && <div role="note" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.14] bg-[#fff2d4] px-5 py-3 text-xs"><p>{workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST WORKSPACE · separate ledger, 1 USDC initial buffer, max 1 USDC deposit. Connect a different test wallet; your main treasury is unchanged." : "Main treasury workspace · isolated smoke tests do not change its obligations or policy."}</p><button disabled={!hydrated} onClick={() => { clearActiveWalletRuntime(); setWorkspaceScope(workspaceScope === "TREASURY" ? "SMOKE_TEST" : "TREASURY"); }} className="shrink-0 border border-white/20 px-3 py-2">{workspaceScope === "SMOKE_TEST" ? "Return to treasury" : "Open isolated smoke workspace"}</button></div>}{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#fff2d4] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-white/[0.14] px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 
