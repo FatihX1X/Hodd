@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, ArrowUpRight, BriefcaseBusiness, Landmark, ListChecks, Plug, SlidersHorizontal } from "lucide-react";
+import { Activity, ArrowUpRight, Bot, BriefcaseBusiness, Landmark, ListChecks, Plug, SlidersHorizontal } from "lucide-react";
 import clsx from "clsx";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { formatDate } from "@/lib/treasury/format";
@@ -16,6 +16,7 @@ const navigation = [
   { href: "/policy", label: "Policy", icon: SlidersHorizontal },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/connections", label: "Connections", icon: Plug },
+  { href: "/hoddie", label: "Hoddie", icon: Bot },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -87,12 +88,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/15 bg-[#0b0b0d]/95 px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur lg:hidden">
-        <ul className="grid grid-cols-6">
+        <ul className="grid grid-cols-7">
           {navigation.map(({ href, label, icon: Icon }) => {
             const active = isActive(href);
             return (
               <li key={href}>
-                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("mono flex min-h-14 flex-col items-center justify-center gap-1 text-[8px] uppercase tracking-normal min-[400px]:text-[9px] min-[400px]:tracking-[0.04em]", active ? "text-[#f4f1e8]" : "text-white/50")}>
+                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("mono flex min-h-14 flex-col items-center justify-center gap-1 text-[7px] uppercase tracking-normal min-[400px]:text-[8px] min-[500px]:text-[9px]", active ? "text-[#f4f1e8]" : "text-white/50")}>
                   <Icon aria-hidden="true" className={clsx("size-[22px]", active && "text-[#7fa6ff]")} />{label}
                 </Link>
               </li>

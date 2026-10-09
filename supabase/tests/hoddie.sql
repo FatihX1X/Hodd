@@ -1,0 +1,80 @@
+-- Rollback-only synthetic first-party Hoddie tests. No real workspace is changed.
+begin;
+do $$
+declare owner_id uuid := gen_random_uuid(); other_id uuid := gen_random_uuid(); sid uuid := gen_random_uuid();
+  action_id uuid := gen_random_uuid(); w jsonb; claims jsonb; rev bigint; rejected boolean; n integer;
+begin
+  if has_table_privilege('authenticated','hodd_private.hoddie_usage','SELECT') then raise exception 'usage counters exposed'; end if;
+  insert into auth.users(id,is_sso_user,is_anonymous) values (owner_id,false,false),(other_id,false,false);
+  insert into auth.sessions(id,user_id) values(sid,owner_id);
+  w := jsonb_build_object('schemaVersion',4,'obligations','[]'::jsonb,'policy','{}'::jsonb,'walletConnection',null,'pendingTransactions',jsonb_build_object('currency','USDC','decimals',6,'minorUnits','0'));
+  perform set_config('request.jwt.claims','{"role":"service_role"}',true);
+  insert into public.treasury_workspaces(user_id,schema_version,workspace) values(owner_id,4,w);
+  claims := jsonb_build_object('sub',owner_id,'role','authenticated','session_id',sid,'exp',floor(extract(epoch from now()+interval '1 hour'))::bigint);
+  perform set_config('request.jwt.claims',claims::text,true);
+  execute 'set local role authenticated';
+  rev := public.hodd_apply_hoddie_action(action_id,'UPDATE_POLICY','{"safetyBuffer":"1"}','Hoddie approved test','APPLIED',null,w,0);
+  if rev <> 1 then raise exception 'revision did not advance'; end if;
+  select count(*) into n from public.agent_actions where id=action_id and source='HODDIE' and client_id='hoddie:first-party';
+  if n <> 1 then raise exception 'Hoddie audit source missing'; end if;
+  rejected := false;
+  begin perform public.hodd_apply_hoddie_action(action_id,'UPDATE_POLICY','{}','replay','APPLIED',null,w,1); exception when unique_violation then rejected:=true; end;
+  if not rejected then raise exception 'replay accepted'; end if;
+  select revision into rev from public.treasury_workspaces where user_id=owner_id;
+  if rev <> 1 then raise exception 'replay changed workspace'; end if;
+  rejected := false;
+  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','stale','APPLIED',null,w,0); exception when serialization_failure then rejected:=true; end;
+  if not rejected then raise exception 'stale cache accepted'; end if;
+  -- Normal Hodd session still cannot impersonate an OAuth connector.
+  rejected := false;
+  begin perform public.hodd_apply_agent_action(gen_random_uuid(),'TREASURY','UPDATE_POLICY','{}','native attempt','APPLIED',null,w,1); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'MCP guard weakened'; end if;
+  for n in 1..10 loop perform public.hoddie_reserve_usage('GEMINI',true); end loop;
+  rejected := false;
+  begin perform public.hoddie_reserve_usage('GEMINI',true); exception when raise_exception then rejected:=sqlerrm='minute request budget exceeded'; end;
+  if not rejected then raise exception 'minute quota exceeded'; end if;
+  perform set_config('request.jwt.claims',(claims || '{"client_id":"oauth-test"}'::jsonb)::text,true);
+  rejected := false;
+  begin perform public.hoddie_reserve_usage('GEMINI',true); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'OAuth used native quota'; end if;
+  rejected := false;
+  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','OAuth attempt','APPLIED',null,w,1); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'OAuth used native writer'; end if;
+  perform set_config('request.jwt.claims',(claims || jsonb_build_object('sub',other_id))::text,true);
+  select count(*) into n from public.agent_actions where id=action_id;
+  if n <> 0 then raise exception 'cross-user action read'; end if;
+  rejected := false;
+  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','other user','APPLIED',null,w,1); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'cross-user write'; end if;
+  -- Counter row locks/upsert reserve exact capacity; failure rolls back both counters.
+  execute 'reset role';
+  insert into hodd_private.hoddie_usage(key,bucket,used) values('openrouter:global',date_trunc('day',now() at time zone 'UTC') at time zone 'UTC',1)
+    on conflict(key,bucket) do update set used=1;
+  delete from hodd_private.hoddie_usage where key='user:'||owner_id::text;
+  perform set_config('request.jwt.claims',claims::text,true);
+  execute 'set local role authenticated';
+  for n in 1..10 loop perform public.hoddie_reserve_usage('OPENROUTER',true); end loop;
+  rejected := false;
+  begin perform public.hoddie_reserve_usage('OPENROUTER',true); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'failed minute call accepted'; end if;
+  execute 'reset role';
+  select used into n from hodd_private.hoddie_usage where key='openrouter:global' and bucket=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC';
+  if n <> 11 then raise exception 'failed minute request consumed global budget'; end if;
+  update hodd_private.hoddie_usage set used=45 where key='openrouter:global' and bucket=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC';
+  delete from hodd_private.hoddie_usage where key='user:'||owner_id::text;
+  execute 'set local role authenticated';
+  rejected := false;
+  begin perform public.hoddie_reserve_usage('OPENROUTER',true); exception when raise_exception then rejected:=sqlerrm='daily model budget exceeded'; end;
+  if not rejected then raise exception 'daily budget exceeded'; end if;
+  perform public.hoddie_reserve_usage('OPENROUTER',false); -- UI field completion is not a model call.
+  execute 'reset role';
+  delete from auth.sessions where id=sid;
+  execute 'set local role authenticated';
+  rejected := false;
+  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','expired','APPLIED',null,w,1); exception when raise_exception then rejected:=true; end;
+  if not rejected then raise exception 'deleted session accepted'; end if;
+  execute 'reset role';
+end;
+$$;
+select 'hoddie first-party isolation, revision, replay, quotas and session checks passed' as result;
+rollback;
