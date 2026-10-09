@@ -28,7 +28,12 @@ export function verifyEarnReceipt(receipt: TransactionReceipt, quote: EarnQuote)
   if (receipt.status !== "success") throw new Error("RECEIPT_REVERTED");
   const address = quote.walletAddress.toLowerCase();
   let operation = false; let received = false;
-  const withdrawalReceivers = new Set<string>();
+  // Receiver -> exact assets of this wallet's vault withdrawal.
+  const withdrawalReceivers = new Map<string, bigint>();
+  // Redeem-all burns every share; the vault may return a unit more than quoted (rounding),
+  // never less. Partial withdrawals must match exactly.
+  const quoted = BigInt(quote.amount.minorUnits);
+  const expectedAssets = (assets: bigint) => quote.operation === "REDEEM_ALL" ? assets >= quoted : assets === quoted;
   // Earn Kit routers pull the wallet's shares and withdraw as owner. Accept a
   // router owner only when this wallet's net share transfer to it equals
   // exactly the shares burned by that withdrawal.
@@ -41,7 +46,7 @@ export function verifyEarnReceipt(receipt: TransactionReceipt, quote: EarnQuote)
     if (log.address.toLowerCase() !== quote.vaultAddress.toLowerCase()) continue;
     try {
       const event = decodeEventLog({ abi, data: log.data, topics: log.topics });
-      if (event.eventName === "Withdraw" && ownedBy(event.args.owner, event.args.shares) && event.args.assets === BigInt(quote.amount.minorUnits)) withdrawalReceivers.add(event.args.receiver.toLowerCase());
+      if (event.eventName === "Withdraw" && ownedBy(event.args.owner, event.args.shares) && expectedAssets(event.args.assets)) withdrawalReceivers.set(event.args.receiver.toLowerCase(), event.args.assets);
     } catch { /* unrelated event */ }
   }
   for (const log of receipt.logs) {
@@ -49,12 +54,12 @@ export function verifyEarnReceipt(receipt: TransactionReceipt, quote: EarnQuote)
       const event = decodeEventLog({ abi, data: log.data, topics: log.topics });
       if (log.address.toLowerCase() === quote.vaultAddress.toLowerCase()) {
         if (event.eventName === "Deposit" && quote.operation === "DEPOSIT" && event.args.assets === BigInt(quote.amount.minorUnits) && event.args.owner.toLowerCase() === address) { operation = true; received = true; }
-        if (event.eventName === "Withdraw" && quote.operation !== "DEPOSIT" && event.args.assets === BigInt(quote.amount.minorUnits) && ownedBy(event.args.owner, event.args.shares)) { operation = true; if (event.args.receiver.toLowerCase() === address) received = true; }
+        if (event.eventName === "Withdraw" && quote.operation !== "DEPOSIT" && expectedAssets(event.args.assets) && ownedBy(event.args.owner, event.args.shares)) { operation = true; if (event.args.receiver.toLowerCase() === address) received = true; }
         if (event.eventName === "Transfer" && quote.operation === "DEPOSIT" && event.args.to.toLowerCase() === address && event.args.value > 0n) received = true;
       }
-      if (log.address.toLowerCase() === ARC_TESTNET_USDC.toLowerCase() && event.eventName === "Transfer" && quote.operation !== "DEPOSIT" && withdrawalReceivers.has(event.args.from.toLowerCase()) && event.args.to.toLowerCase() === address && event.args.value === BigInt(quote.amount.minorUnits)) received = true;
+      if (log.address.toLowerCase() === ARC_TESTNET_USDC.toLowerCase() && event.eventName === "Transfer" && quote.operation !== "DEPOSIT" && withdrawalReceivers.get(event.args.from.toLowerCase()) === event.args.value && event.args.to.toLowerCase() === address) received = true;
       // Alternative evidence, not an additional balance: system logs use 18 decimals.
-      if (log.address.toLowerCase() === ARC_USDC_SYSTEM_EMITTER && event.eventName === "Transfer" && quote.operation !== "DEPOSIT" && withdrawalReceivers.has(event.args.from.toLowerCase()) && event.args.to.toLowerCase() === address && event.args.value === BigInt(quote.amount.minorUnits) * 10n ** 12n) received = true;
+      if (log.address.toLowerCase() === ARC_USDC_SYSTEM_EMITTER && event.eventName === "Transfer" && quote.operation !== "DEPOSIT" && (withdrawalReceivers.get(event.args.from.toLowerCase()) ?? -1n) * 10n ** 12n === event.args.value && event.args.to.toLowerCase() === address) received = true;
     } catch { /* unrelated logs do not count as evidence */ }
   }
   if (quote.operation === "DEPOSIT" && !operation) operation = received = routedDepositVerified(receipt, quote);
