@@ -9,7 +9,10 @@ import { MoneyValue, SectionCard, SectionHeading, StatusPill, buttonClass, label
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { answerQuestion, starterPrompts, type HoddieContext, type HoddieReply } from "@/lib/hoddie/answers";
 import { askLanguageServiceFromBrowser, type ServiceResult } from "@/lib/hoddie/client";
+import { EarnOperationDialog } from "./earn-operation-dialog";
+import { earnSnapshot, planEarn, writesEnabled, type EarnChange, type EarnContext, type EarnPlan } from "@/lib/hoddie/earn";
 import { buildSnapshot } from "@/lib/hoddie/snapshot";
+import { moneyToInput } from "@/lib/treasury/money";
 import type { ChatRequest, HoddieActionKind } from "@/lib/hoddie/schema";
 import { formatDate } from "@/lib/treasury/format";
 
@@ -42,7 +45,21 @@ function Mark({ className = "size-9" }: { className?: string }) {
   return <span aria-hidden="true" className={clsx("grid shrink-0 place-items-center border border-white/[0.14] bg-[#0b0b0d]", className)}><Image src="/brand/hodd-star.png" alt="" width={160} height={160} className="size-[70%]" /></span>;
 }
 
-function ProposalCard({ proposal, onDecide, canAct }: { proposal: Proposal; onDecide: (approve: boolean) => void; canAct: boolean }) {
+/** Morpho: the primary action opens the normal Earn dialog (fresh quote, confirmation, wallet signature) pre-filled from the proposal. */
+function EarnAction({ proposal, onCompleted }: { proposal: Proposal; onCompleted: () => void }) {
+  const { workspace, operationalWorkspace, assessment, earnState } = useTreasuryWorkspace();
+  const portfolio = earnState.status === "READY" ? earnState.portfolio : null;
+  let plan: EarnPlan | null = null; let problem = "";
+  try { plan = planEarn({ workspace, operationalWorkspace, assessment, portfolio }, proposal.change as EarnChange); }
+  catch (cause) { problem = cause instanceof Error ? cause.message : "This operation is no longer allowed."; }
+  if (!plan) return <p role="status" className="basis-full text-xs leading-5 text-[#ffd27f]">{problem}</p>;
+  return <>
+    <EarnOperationDialog operation={plan.operation} vault={plan.vault} position={plan.position} policyLimit={plan.limit} enabled={writesEnabled(portfolio)} initialAmount={plan.amount ? moneyToInput(plan.amount) : ""} onComplete={onCompleted} />
+    {!writesEnabled(portfolio) && <p className="basis-full text-xs leading-5 text-white/55">Morpho transactions can be signed only where Earn execution is enabled (local Hodd for now).</p>}
+  </>;
+}
+
+function ProposalCard({ proposal, onDecide, onCompleted, canAct }: { proposal: Proposal; onDecide: (approve: boolean) => void; onCompleted: () => void; canAct: boolean }) {
   const done = proposal.status !== "PENDING";
   const tone = proposal.status === "APPLIED" ? "success" : proposal.status === "FAILED" ? "danger" : "neutral";
   const word = proposal.status === "APPLIED" ? proposal.labels.applied : proposal.status === "DECLINED" ? proposal.labels.declined : proposal.status === "EXPIRED" ? proposal.labels.expired : "Failed";
@@ -56,7 +73,7 @@ function ProposalCard({ proposal, onDecide, canAct }: { proposal: Proposal; onDe
       {proposal.error && <p role="alert" className="border-t border-[#ff9a92]/30 bg-[#d03b3b]/15 px-3.5 py-2.5 text-xs leading-5 text-[#ff9a92]">{proposal.error}</p>}
       {!done && (
         <div className="flex flex-wrap gap-3 border-t border-white/10 p-3.5">
-          <button type="button" disabled={!canAct} onClick={() => onDecide(true)} className={clsx(buttonClass.primary, "min-h-10")}>{proposal.labels.approve}</button>
+          {proposal.kind === "EARN_REQUEST" ? <EarnAction proposal={proposal} onCompleted={onCompleted} /> : <button type="button" disabled={!canAct} onClick={() => onDecide(true)} className={clsx(buttonClass.primary, "min-h-10")}>{proposal.labels.approve}</button>}
           <button type="button" disabled={!canAct} onClick={() => onDecide(false)} className={clsx(buttonClass.ghost, "min-h-10")}>{proposal.labels.decline}</button>
         </div>
       )}
@@ -64,7 +81,7 @@ function ProposalCard({ proposal, onDecide, canAct }: { proposal: Proposal; onDe
   );
 }
 
-function ReplyBody({ message, onFollowUp, onDecide, canAsk }: { message: Message; onFollowUp: (question: string) => void; onDecide: (approve: boolean) => void; canAsk: boolean }) {
+function ReplyBody({ message, onFollowUp, onDecide, onCompleted, canAsk }: { message: Message; onFollowUp: (question: string) => void; onDecide: (approve: boolean) => void; onCompleted: () => void; canAsk: boolean }) {
   const reply = message.reply; if (!reply) return null;
   return (
     <div className="space-y-4">
@@ -79,7 +96,7 @@ function ReplyBody({ message, onFollowUp, onDecide, canAsk }: { message: Message
           ))}
         </dl>
       )}
-      {message.proposal && <ProposalCard proposal={message.proposal} onDecide={onDecide} canAct={canAsk} />}
+      {message.proposal && <ProposalCard proposal={message.proposal} onDecide={onDecide} onCompleted={onCompleted} canAct={canAsk} />}
       {reply.sources.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className={labelClass}>From</span>
@@ -111,15 +128,15 @@ function Thinking() {
 
 /** Conversation with Hoddie. `respond` is the only source of replies, so it can be swapped without touching the interface. */
 export function HoddieChat({ service = askLanguageServiceFromBrowser, local = answerQuestion }: { service?: Service; local?: Responder }) {
-  const { operationalWorkspace, workspace, assessment, hydrated, previewHoddieChange, applyHoddieChange } = useTreasuryWorkspace();
+  const { operationalWorkspace, workspace, assessment, hydrated, earnState, previewHoddieChange, applyHoddieChange } = useTreasuryWorkspace();
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [restored, setRestored] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const live = useRef({ operationalWorkspace, workspace, assessment, service, local, previewHoddieChange, applyHoddieChange, messages });
-  useEffect(() => { live.current = { operationalWorkspace, workspace, assessment, service, local, previewHoddieChange, applyHoddieChange, messages }; });
+  const live = useRef({ operationalWorkspace, workspace, assessment, earnState, service, local, previewHoddieChange, applyHoddieChange, messages });
+  useEffect(() => { live.current = { operationalWorkspace, workspace, assessment, earnState, service, local, previewHoddieChange, applyHoddieChange, messages }; });
 
   useEffect(() => { const timer = window.setTimeout(() => { setMessages(load()); setRestored(true); }, 0); return () => window.clearTimeout(timer); }, []);
   useEffect(() => { if (restored) save(messages); }, [messages, restored]);
@@ -130,6 +147,8 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
     const current = live.current.messages.find((message) => message.id === id);
     const proposal = current?.proposal;
     if (!proposal || proposal.status !== "PENDING") return null;
+    // Morpho operations are finished in the Earn dialog with a wallet signature; they are never applied from here.
+    if (approve && proposal.kind === "EARN_REQUEST") return null;
     let next: Proposal;
     if (!approve) next = { ...proposal, status: "DECLINED" };
     else {
@@ -140,6 +159,8 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
     return next;
   }, []);
 
+  const complete = useCallback((id: string) => setMessages((all) => all.map((message) => message.id === id && message.proposal ? { ...message, proposal: { ...message.proposal, status: "APPLIED" as const } } : message)), []);
+
   const ask = useCallback(async (raw: string) => {
     const question = raw.trim().slice(0, MAX_LENGTH);
     if (!question || busy) return;
@@ -147,25 +168,26 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
     const before = live.current.messages;
     setMessages((all) => [...all, { id: `u-${now}`, role: "user", at: now, text: question }]);
     setDraft(""); setBusy(true);
-    const { operationalWorkspace: engineWorkspace, workspace: shownWorkspace, assessment: engineAssessment } = live.current;
+    const { operationalWorkspace: engineWorkspace, workspace: shownWorkspace, assessment: engineAssessment, earnState: currentEarn } = live.current;
+    const earnContext: EarnContext = { workspace: shownWorkspace, operationalWorkspace: engineWorkspace, assessment: engineAssessment, portfolio: currentEarn.status === "READY" ? currentEarn.portfolio : null };
     const started = Date.now();
     const evaluatedAt = new Date(engineAssessment?.evaluatedAt ?? Date.now());
     const pending = [...before].reverse().find((message) => message.proposal?.status === "PENDING");
     const history: ChatRequest["messages"] = [...before, { id: "q", role: "user" as const, at: now, text: question } as Message].slice(-12).map((message) => ({ role: message.role === "user" ? "user" as const : "assistant" as const, text: historyText(message).slice(0, 2000) })).filter((turn) => turn.text.trim().length > 0);
 
     let result: Message;
-    const service = await live.current.service({ messages: history, snapshot: buildSnapshot(engineWorkspace ?? shownWorkspace, engineAssessment, evaluatedAt, pending?.proposal ? { kind: pending.proposal.kind, summary: pending.proposal.lines.join("; ").slice(0, 600) } : null) }).catch((): ServiceResult => ({ status: "UNAVAILABLE", reason: "OFFLINE" }));
+    const service = await live.current.service({ messages: history, snapshot: buildSnapshot(engineWorkspace ?? shownWorkspace, engineAssessment, evaluatedAt, pending?.proposal ? { kind: pending.proposal.kind, summary: pending.proposal.lines.join("; ").slice(0, 600) } : null, earnSnapshot(earnContext)) }).catch((): ServiceResult => ({ status: "UNAVAILABLE", reason: "OFFLINE" }));
     if (service.status === "READY") {
       const model = service.reply;
       const labels: Labels = { ...defaultLabels, ...model.labels };
       let text = model.text; let proposal: Proposal | undefined;
-      if (model.approvesPending && pending?.proposal && question.length <= MAX_TYPED_APPROVAL_CHARS) {
+      if (model.approvesPending && pending?.proposal && pending.proposal.kind !== "EARN_REQUEST" && question.length <= MAX_TYPED_APPROVAL_CHARS) {
         const outcome = decide(pending.id, true);
         if (outcome && outcome.status !== "APPLIED") text = outcome.error ?? "The change could not be applied.";
       } else if (model.action) {
         try {
-          const preview = live.current.previewHoddieChange(model.action.kind, model.action.change);
-          proposal = { kind: model.action.kind, change: model.action.change, lines: preview.lines, baseUpdatedAt: live.current.workspace.updatedAt, status: "PENDING", labels };
+          const lines = model.action.kind === "EARN_REQUEST" ? planEarn(earnContext, model.action.change as EarnChange).lines : live.current.previewHoddieChange(model.action.kind, model.action.change).lines;
+          proposal = { kind: model.action.kind, change: model.action.change, lines, baseUpdatedAt: live.current.workspace.updatedAt, status: "PENDING", labels };
         } catch (cause) { text = `${text}\n\n${cause instanceof Error ? cause.message : "That change is not allowed."}`; }
       } else if (model.actionRejected) text = `${text}\n\nThat change could not be validated, so nothing was prepared.`;
       result = { id: "", role: "hoddie", at: 0, reply: { paragraphs: text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean), sources: [], followUps: model.followUps }, proposal };
@@ -205,7 +227,7 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
             <div className="flex min-h-full"><div className="m-auto flex w-full max-w-2xl flex-col items-center py-4 text-center">
               <div className="relative grid size-20 place-items-center"><span aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(circle,rgba(40,90,255,0.35),rgba(40,90,255,0)_68%)]" /><Image src="/brand/hodd-star.png" alt="" width={320} height={320} className="relative size-16 drop-shadow-[0_0_14px_rgba(40,100,255,0.45)]" /></div>
               <p className="disp mt-4 text-[clamp(1.4rem,3.4vw,2rem)]">Ask about your treasury.</p>
-              <p className="mt-3 max-w-md text-sm leading-6 text-white/60">Hoddie answers from your own workspace: balances, bills, runway and policy. It can prepare changes for your approval, never move funds.</p>
+              <p className="mt-3 max-w-md text-sm leading-6 text-white/60">How can I help you?</p>
               <div className="mt-6 grid w-full gap-3 sm:grid-cols-2">
                 {starterPrompts.map((prompt, index) => (
                   <button key={prompt} type="button" onClick={() => void ask(prompt)} className="group flex min-h-[4.5rem] flex-col items-start justify-between border border-white/25 p-3.5 text-left transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:border-[#f4f1e8] hover:shadow-[4px_4px_0_#0a52e8]">
@@ -226,7 +248,7 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
                   <Mark className="size-8" />
                   <div className="min-w-0 max-w-[92%] flex-1 sm:max-w-[85%]">
                     <span className={labelClass}>Hoddie · {time(message.at)}</span>
-                    <div className="mt-1.5 border border-white/[0.14] bg-white/[0.04] px-4 py-3.5"><ReplyBody message={message} canAsk={!busy} onFollowUp={(question) => void ask(question)} onDecide={(approve) => decide(message.id, approve)} /></div>
+                    <div className="mt-1.5 border border-white/[0.14] bg-white/[0.04] px-4 py-3.5"><ReplyBody message={message} canAsk={!busy} onFollowUp={(question) => void ask(question)} onDecide={(approve) => decide(message.id, approve)} onCompleted={() => complete(message.id)} /></div>
                   </div>
                 </li>
               ))}
@@ -243,7 +265,7 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
             </label>
             <button type="submit" disabled={busy || draft.trim().length === 0} aria-label="Send message" className={clsx(buttonClass.primary, "size-12 shrink-0 px-0")}><ArrowUp aria-hidden="true" className="size-5" /></button>
           </div>
-          <p className="mx-auto mt-2 flex max-w-3xl flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-white/45"><span>Enter to send · Shift+Enter for a new line</span><span>Changes apply only after you approve. Hoddie never moves funds.</span></p>
+          <p className="mx-auto mt-2 flex max-w-3xl flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-white/45"><span>Enter to send · Shift+Enter for a new line</span><span>Nothing applies without your approval. Funds move only with your wallet signature.</span></p>
         </form>
       </section>
 
@@ -264,7 +286,8 @@ export function HoddieChat({ service = askLanguageServiceFromBrowser, local = an
             <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Read balances, bills, policy</span><StatusPill label="Can" tone="success" /></li>
             <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Explain why a payment fits</span><StatusPill label="Can" tone="success" /></li>
             <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Change obligations, policy, targets</span><StatusPill label="After approval" tone="info" /></li>
-            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Move or deploy funds</span><StatusPill label="Cannot" tone="neutral" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Invest in Morpho within engine limits</span><StatusPill label="You sign" tone="info" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Pay bills or move funds alone</span><StatusPill label="Cannot" tone="neutral" /></li>
           </ul>
         </SectionCard>
         <SectionCard>

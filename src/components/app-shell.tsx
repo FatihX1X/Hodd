@@ -81,7 +81,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <AccountMenu />
             <span className="hidden text-xs text-white/50 sm:inline">Updated {formatDate(workspace.updatedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-            <span className="mono inline-flex min-h-8 items-center gap-2 border border-white/25 px-3 text-[10px] font-semibold uppercase tracking-[0.12em]"><span aria-hidden="true" className="size-2 rounded-full bg-[#2fcf2f]" />Arc Testnet</span>
           </div>
         </header>
         <main className="pb-24 lg:pb-0">{children}</main>
