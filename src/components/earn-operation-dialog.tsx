@@ -96,6 +96,7 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
       }
       if (!job.result) { setUnknownId(job.executionId); throw new Error("Receipt verification is taking longer than expected. Use “Check again” below; do not resubmit."); }
       for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
+      setTimeline(job.events.map((event) => `${event.stage.replaceAll("_", " ")}${event.hash ? ` · ${event.hash}` : ""}`));
       finished(job.result);
     } catch (caught) { const message = caught instanceof Error ? caught.message : "Execution status is unknown. Check the explorer before retrying."; setError(message); setQuote((current) => current ? { ...current, quoteId: null } : current); recordEarnActivity("Earn execution requires review", `${labels[operation]} did not return a confirmed receipt.`, message, undefined, { approval: "APPROVED", execution: "UNKNOWN" }); } finally { setBusy(false); }
   };
