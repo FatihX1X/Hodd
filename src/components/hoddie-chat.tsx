@@ -1,0 +1,300 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { ArrowUp, RotateCcw } from "lucide-react";
+import clsx from "clsx";
+import { MoneyValue, SectionCard, SectionHeading, StatusPill, buttonClass, labelClass } from "./primitives";
+import { useTreasuryWorkspace } from "./treasury-workspace-provider";
+import { answerQuestion, starterPrompts, type HoddieContext, type HoddieReply } from "@/lib/hoddie/answers";
+import { askLanguageServiceFromBrowser, type ServiceResult } from "@/lib/hoddie/client";
+import { EarnOperationDialog } from "./earn-operation-dialog";
+import { earnSnapshot, planEarn, writesEnabled, type EarnChange, type EarnContext, type EarnPlan } from "@/lib/hoddie/earn";
+import { buildSnapshot } from "@/lib/hoddie/snapshot";
+import { moneyToInput } from "@/lib/treasury/money";
+import type { ChatRequest, HoddieActionKind } from "@/lib/hoddie/schema";
+import { formatDate } from "@/lib/treasury/format";
+
+type Labels = Readonly<{ approve: string; decline: string; proposal: string; applied: string; declined: string; expired: string }>;
+type ProposalStatus = "PENDING" | "APPLIED" | "DECLINED" | "EXPIRED" | "FAILED";
+type Proposal = Readonly<{ kind: HoddieActionKind; change: Record<string, unknown>; lines: readonly string[]; baseUpdatedAt: string; status: ProposalStatus; error?: string; labels: Labels }>;
+type Message = Readonly<{ id: string; role: "user" | "hoddie"; at: number; text?: string; reply?: HoddieReply; proposal?: Proposal; basic?: "SIGN_IN" | "OFFLINE" }>;
+type Responder = (context: HoddieContext) => HoddieReply | Promise<HoddieReply>;
+type Service = (request: ChatRequest) => Promise<ServiceResult>;
+
+const defaultLabels: Labels = { approve: "Approve", decline: "Decline", proposal: "Proposed change", applied: "Applied", declined: "Declined", expired: "Expired" };
+/** A typed approval only counts when it is a short message of the user's own, never relayed text. */
+const MAX_TYPED_APPROVAL_CHARS = 80;
+const historyText = (message: Message) => message.role === "user" ? message.text ?? "" : `${message.reply?.paragraphs.join("\n\n") ?? ""}${message.proposal ? ` [proposal: ${message.proposal.status.toLowerCase()}]` : ""}`;
+
+const STORAGE_KEY = "hodd.hoddie.chat.v1";
+const MAX_LENGTH = 500;
+const MIN_THINKING_MS = 450;
+const time = (at: number) => new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(at);
+
+function load(): Message[] {
+  try {
+    const parsed: unknown = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is Message => Boolean(item) && typeof item.id === "string" && (item.role === "user" || item.role === "hoddie") && typeof item.at === "number").slice(-60) : [];
+  } catch { return []; }
+}
+function save(messages: readonly Message[]) { try { window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-60))); } catch { /* the conversation simply is not kept */ } }
+
+function Mark({ className = "size-9" }: { className?: string }) {
+  return <span aria-hidden="true" className={clsx("grid shrink-0 place-items-center border border-white/[0.14] bg-[#0b0b0d]", className)}><Image src="/brand/hodd-star.png" alt="" width={160} height={160} className="size-[70%]" /></span>;
+}
+
+/** Morpho: the primary action opens the normal Earn dialog (fresh quote, confirmation, wallet signature) pre-filled from the proposal. */
+function EarnAction({ proposal, onCompleted }: { proposal: Proposal; onCompleted: () => void }) {
+  const { workspace, operationalWorkspace, assessment, earnState } = useTreasuryWorkspace();
+  const portfolio = earnState.status === "READY" ? earnState.portfolio : null;
+  let plan: EarnPlan | null = null; let problem = "";
+  try { plan = planEarn({ workspace, operationalWorkspace, assessment, portfolio }, proposal.change as EarnChange); }
+  catch (cause) { problem = cause instanceof Error ? cause.message : "This operation is no longer allowed."; }
+  if (!plan) return <p role="status" className="basis-full text-xs leading-5 text-[#ffd27f]">{problem}</p>;
+  return <>
+    <EarnOperationDialog operation={plan.operation} vault={plan.vault} position={plan.position} policyLimit={plan.limit} enabled={writesEnabled(portfolio)} initialAmount={plan.amount ? moneyToInput(plan.amount) : ""} onComplete={onCompleted} />
+    {!writesEnabled(portfolio) && <p className="basis-full text-xs leading-5 text-white/55">Morpho transactions can be signed only where Earn execution is enabled (local Hodd for now).</p>}
+  </>;
+}
+
+function ProposalCard({ proposal, onDecide, onCompleted, canAct }: { proposal: Proposal; onDecide: (approve: boolean) => void; onCompleted: () => void; canAct: boolean }) {
+  const done = proposal.status !== "PENDING";
+  const tone = proposal.status === "APPLIED" ? "success" : proposal.status === "FAILED" ? "danger" : "neutral";
+  const word = proposal.status === "APPLIED" ? proposal.labels.applied : proposal.status === "DECLINED" ? proposal.labels.declined : proposal.status === "EXPIRED" ? proposal.labels.expired : "Failed";
+  return (
+    <div className="border border-[#7fa6ff]/40 bg-[#0b0b0d]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-3.5 py-2.5">
+        <span className={clsx(labelClass, "text-[#9ec5f4]")}>{proposal.labels.proposal}</span>
+        {done && <StatusPill label={word} tone={tone} />}
+      </div>
+      <ul className="space-y-1.5 px-3.5 py-3">{proposal.lines.map((line) => <li key={line} className="mono text-xs leading-5 text-[#e6e8ee]">{line}</li>)}</ul>
+      {proposal.error && <p role="alert" className="border-t border-[#ff9a92]/30 bg-[#d03b3b]/15 px-3.5 py-2.5 text-xs leading-5 text-[#ff9a92]">{proposal.error}</p>}
+      {!done && (
+        <div className="flex flex-wrap gap-3 border-t border-white/10 p-3.5">
+          {proposal.kind === "EARN_REQUEST" ? <EarnAction proposal={proposal} onCompleted={onCompleted} /> : <button type="button" disabled={!canAct} onClick={() => onDecide(true)} className={clsx(buttonClass.primary, "min-h-10")}>{proposal.labels.approve}</button>}
+          <button type="button" disabled={!canAct} onClick={() => onDecide(false)} className={clsx(buttonClass.ghost, "min-h-10")}>{proposal.labels.decline}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReplyBody({ message, onFollowUp, onDecide, onCompleted, canAsk }: { message: Message; onFollowUp: (question: string) => void; onDecide: (approve: boolean) => void; onCompleted: () => void; canAsk: boolean }) {
+  const reply = message.reply; if (!reply) return null;
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2 text-sm leading-6">{reply.paragraphs.map((paragraph) => <p key={paragraph} className="whitespace-pre-wrap break-words">{paragraph}</p>)}</div>
+      {reply.status && <StatusPill label={reply.status.label} tone={reply.status.tone} />}
+      {reply.facts && reply.facts.length > 0 && (
+        <dl className="divide-y divide-white/10 border border-white/[0.14] bg-[#0b0b0d]">
+          {reply.facts.map((fact) => (
+            <div key={`${fact.label}-${fact.value}`} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3.5 py-2.5">
+              <dt className={labelClass}>{fact.label}</dt><dd className="mono text-xs tabular-nums">{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {message.proposal && <ProposalCard proposal={message.proposal} onDecide={onDecide} onCompleted={onCompleted} canAct={canAsk} />}
+      {reply.sources.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <span className={labelClass}>From</span>
+          {reply.sources.map((source) => <Link key={source.href} href={source.href} className="mono border-b border-white/30 pb-0.5 text-[10px] uppercase tracking-[0.12em] text-[#c9cbd3] hover:border-[#7fa6ff] hover:text-white">{source.label}</Link>)}
+        </div>
+      )}
+      {message.basic && (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-white/55"><StatusPill label="Basic mode" tone="neutral" />{message.basic === "SIGN_IN" ? <span>Sign in to chat in any language and to prepare changes.</span> : <span>Answers are in English until the language service is back.</span>}</p>
+      )}
+      {reply.followUps.length > 0 && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {reply.followUps.map((question) => <button key={question} type="button" disabled={!canAsk} onClick={() => onFollowUp(question)} className="border border-white/25 px-3 py-2 text-left text-xs text-[#c9cbd3] transition hover:border-[#7fa6ff] hover:text-white disabled:opacity-40">{question}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Thinking() {
+  return (
+    <div role="status" aria-label="Hoddie is thinking" className="flex items-start gap-3">
+      <Mark className="size-8" />
+      <div className="flex h-8 items-center gap-1.5 border border-white/[0.14] bg-white/[0.04] px-3.5">
+        {[0, 1, 2].map((index) => <span key={index} aria-hidden="true" className="size-1.5 bg-[#7fa6ff] motion-safe:animate-pulse" style={{ animationDelay: `${index * 160}ms` }} />)}
+      </div>
+    </div>
+  );
+}
+
+/** Conversation with Hoddie. `respond` is the only source of replies, so it can be swapped without touching the interface. */
+export function HoddieChat({ service = askLanguageServiceFromBrowser, local = answerQuestion }: { service?: Service; local?: Responder }) {
+  const { operationalWorkspace, workspace, assessment, hydrated, earnState, previewHoddieChange, applyHoddieChange } = useTreasuryWorkspace();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const live = useRef({ operationalWorkspace, workspace, assessment, earnState, service, local, previewHoddieChange, applyHoddieChange, messages });
+  useEffect(() => { live.current = { operationalWorkspace, workspace, assessment, earnState, service, local, previewHoddieChange, applyHoddieChange, messages }; });
+
+  useEffect(() => { const timer = window.setTimeout(() => { setMessages(load()); setRestored(true); }, 0); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => { if (restored) save(messages); }, [messages, restored]);
+  useEffect(() => { const list = listRef.current; if (list) list.scrollTop = messages.length === 0 && !busy ? 0 : list.scrollHeight; }, [messages, busy]);
+
+  /** Applies or declines a pending proposal. Applying goes through the same validated change logic as every other edit. */
+  const decide = useCallback((id: string, approve: boolean) => {
+    const current = live.current.messages.find((message) => message.id === id);
+    const proposal = current?.proposal;
+    if (!proposal || proposal.status !== "PENDING") return null;
+    // Morpho operations are finished in the Earn dialog with a wallet signature; they are never applied from here.
+    if (approve && proposal.kind === "EARN_REQUEST") return null;
+    let next: Proposal;
+    if (!approve) next = { ...proposal, status: "DECLINED" };
+    else {
+      try { live.current.applyHoddieChange(proposal.kind, proposal.change, proposal.baseUpdatedAt); next = { ...proposal, status: "APPLIED" }; }
+      catch (cause) { const message = cause instanceof Error ? cause.message : "The change could not be applied."; next = { ...proposal, status: /changed after/.test(message) ? "EXPIRED" : "FAILED", error: message }; }
+    }
+    setMessages((all) => all.map((message) => message.id === id ? { ...message, proposal: next } : message));
+    return next;
+  }, []);
+
+  const complete = useCallback((id: string) => setMessages((all) => all.map((message) => message.id === id && message.proposal ? { ...message, proposal: { ...message.proposal, status: "APPLIED" as const } } : message)), []);
+
+  const ask = useCallback(async (raw: string) => {
+    const question = raw.trim().slice(0, MAX_LENGTH);
+    if (!question || busy) return;
+    const now = Date.now();
+    const before = live.current.messages;
+    setMessages((all) => [...all, { id: `u-${now}`, role: "user", at: now, text: question }]);
+    setDraft(""); setBusy(true);
+    const { operationalWorkspace: engineWorkspace, workspace: shownWorkspace, assessment: engineAssessment, earnState: currentEarn } = live.current;
+    const earnContext: EarnContext = { workspace: shownWorkspace, operationalWorkspace: engineWorkspace, assessment: engineAssessment, portfolio: currentEarn.status === "READY" ? currentEarn.portfolio : null };
+    const started = Date.now();
+    const evaluatedAt = new Date(engineAssessment?.evaluatedAt ?? Date.now());
+    const pending = [...before].reverse().find((message) => message.proposal?.status === "PENDING");
+    const history: ChatRequest["messages"] = [...before, { id: "q", role: "user" as const, at: now, text: question } as Message].slice(-12).map((message) => ({ role: message.role === "user" ? "user" as const : "assistant" as const, text: historyText(message).slice(0, 2000) })).filter((turn) => turn.text.trim().length > 0);
+
+    let result: Message;
+    const service = await live.current.service({ messages: history, snapshot: buildSnapshot(engineWorkspace ?? shownWorkspace, engineAssessment, evaluatedAt, pending?.proposal ? { kind: pending.proposal.kind, summary: pending.proposal.lines.join("; ").slice(0, 600) } : null, earnSnapshot(earnContext)) }).catch((): ServiceResult => ({ status: "UNAVAILABLE", reason: "OFFLINE" }));
+    if (service.status === "READY") {
+      const model = service.reply;
+      const labels: Labels = { ...defaultLabels, ...model.labels };
+      let text = model.text; let proposal: Proposal | undefined;
+      if (model.approvesPending && pending?.proposal && pending.proposal.kind !== "EARN_REQUEST" && question.length <= MAX_TYPED_APPROVAL_CHARS) {
+        const outcome = decide(pending.id, true);
+        if (outcome && outcome.status !== "APPLIED") text = outcome.error ?? "The change could not be applied.";
+      } else if (model.action) {
+        try {
+          const lines = model.action.kind === "EARN_REQUEST" ? planEarn(earnContext, model.action.change as EarnChange).lines : live.current.previewHoddieChange(model.action.kind, model.action.change).lines;
+          proposal = { kind: model.action.kind, change: model.action.change, lines, baseUpdatedAt: live.current.workspace.updatedAt, status: "PENDING", labels };
+        } catch (cause) { text = `${text}\n\n${cause instanceof Error ? cause.message : "That change is not allowed."}`; }
+      } else if (model.actionRejected) text = `${text}\n\nThat change could not be validated, so nothing was prepared.`;
+      result = { id: "", role: "hoddie", at: 0, reply: { paragraphs: text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean), sources: [], followUps: model.followUps }, proposal };
+    } else {
+      let reply: HoddieReply;
+      try { reply = await live.current.local({ question, workspace: engineWorkspace ?? shownWorkspace, assessment: engineWorkspace ? engineAssessment : null, evaluatedAt }); }
+      catch { reply = { paragraphs: ["I could not answer that just now. Nothing was changed. Please try again."], status: { label: "UNAVAILABLE", tone: "danger" }, sources: [], followUps: [] }; }
+      result = { id: "", role: "hoddie", at: 0, reply, basic: service.reason };
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, Math.max(0, MIN_THINKING_MS - (Date.now() - started))));
+    const done = Date.now();
+    setMessages((all) => {
+      // A new proposal replaces any older pending one, so only one change is ever waiting.
+      const settled = result.proposal ? all.map((message) => message.proposal?.status === "PENDING" ? { ...message, proposal: { ...message.proposal, status: "EXPIRED" as const } } : message) : all;
+      return [...settled, { ...result, id: `h-${done}`, at: done }];
+    });
+    setBusy(false);
+    inputRef.current?.focus();
+  }, [busy, decide]);
+
+  const submit = (event: React.FormEvent) => { event.preventDefault(); void ask(draft); };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(draft); } };
+  const reset = () => { setMessages([]); setDraft(""); inputRef.current?.focus(); };
+  const empty = messages.length === 0;
+  const next = assessment?.nextPayment ?? null;
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+      <section aria-label="Conversation with Hoddie" className="flex h-[74dvh] min-h-[480px] flex-col border border-white/[0.14] bg-[#101319] lg:h-[calc(100dvh-21rem)] lg:max-h-[860px]">
+        <div className="flex items-center justify-between gap-4 border-b border-white/[0.14] px-4 py-3">
+          <div className="flex items-center gap-3"><Mark className="size-8" /><div><p className="disp text-[13px]">Hoddie</p><p className={labelClass}>Treasury assistant</p></div></div>
+          <button type="button" onClick={reset} disabled={empty && !draft} className="mono inline-flex min-h-9 items-center gap-2 border border-white/25 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#c9cbd3] transition hover:border-[#7fa6ff] hover:text-white disabled:opacity-35"><RotateCcw aria-hidden="true" className="size-3.5" />New chat</button>
+        </div>
+
+        <div ref={listRef} role="log" aria-label="Conversation" aria-live="polite" tabIndex={0} className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+          {empty && !busy ? (
+            <div className="flex min-h-full"><div className="m-auto flex w-full max-w-2xl flex-col items-center py-4 text-center">
+              <div className="relative grid size-20 place-items-center"><span aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(circle,rgba(40,90,255,0.35),rgba(40,90,255,0)_68%)]" /><Image src="/brand/hodd-star.png" alt="" width={320} height={320} className="relative size-16 drop-shadow-[0_0_14px_rgba(40,100,255,0.45)]" /></div>
+              <p className="disp mt-4 text-[clamp(1.4rem,3.4vw,2rem)]">Ask about your treasury.</p>
+              <p className="mt-3 max-w-md text-sm leading-6 text-white/60">How can I help you?</p>
+              <div className="mt-6 grid w-full gap-3 sm:grid-cols-2">
+                {starterPrompts.map((prompt, index) => (
+                  <button key={prompt} type="button" onClick={() => void ask(prompt)} className="group flex min-h-[4.5rem] flex-col items-start justify-between border border-white/25 p-3.5 text-left transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:border-[#f4f1e8] hover:shadow-[4px_4px_0_#0a52e8]">
+                    <span aria-hidden="true" className="mono text-[10px] text-white/45">{String(index + 1).padStart(2, "0")}</span><span className="mt-2 text-sm">{prompt}</span>
+                  </button>
+                ))}
+              </div>
+            </div></div>
+          ) : (
+            <ol className="mx-auto flex max-w-3xl flex-col gap-6">
+              {messages.map((message) => message.role === "user" ? (
+                <li key={message.id} className="flex flex-col items-end gap-1.5">
+                  <span className={labelClass}>You · {time(message.at)}</span>
+                  <p className="max-w-[85%] whitespace-pre-wrap break-words bg-[#f4f1e8] px-4 py-3 text-sm leading-6 text-[#0b0b0d] sm:max-w-[75%]">{message.text}</p>
+                </li>
+              ) : (
+                <li key={message.id} className="flex items-start gap-3">
+                  <Mark className="size-8" />
+                  <div className="min-w-0 max-w-[92%] flex-1 sm:max-w-[85%]">
+                    <span className={labelClass}>Hoddie · {time(message.at)}</span>
+                    <div className="mt-1.5 border border-white/[0.14] bg-white/[0.04] px-4 py-3.5"><ReplyBody message={message} canAsk={!busy} onFollowUp={(question) => void ask(question)} onDecide={(approve) => decide(message.id, approve)} onCompleted={() => complete(message.id)} /></div>
+                  </div>
+                </li>
+              ))}
+              {busy && <li><Thinking /></li>}
+            </ol>
+          )}
+        </div>
+
+        <form onSubmit={submit} className="border-t border-white/[0.14] p-3 sm:p-4">
+          <div className="mx-auto flex max-w-3xl items-end gap-3">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">Message Hoddie</span>
+              <textarea ref={inputRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} maxLength={MAX_LENGTH} rows={1} placeholder="Ask about a bill or your runway…" className="block max-h-40 min-h-12 w-full resize-none border border-white/25 bg-[#0b0b0d] px-4 py-3 text-sm leading-6 text-[#f4f1e8] outline-none placeholder:text-white/35 focus:border-[#7fa6ff] [field-sizing:content]" />
+            </label>
+            <button type="submit" disabled={busy || draft.trim().length === 0} aria-label="Send message" className={clsx(buttonClass.primary, "size-12 shrink-0 px-0")}><ArrowUp aria-hidden="true" className="size-5" /></button>
+          </div>
+          <p className="mx-auto mt-2 flex max-w-3xl flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-white/45"><span>Enter to send · Shift+Enter for a new line</span><span>Nothing applies without your approval. Funds move only with your wallet signature.</span></p>
+        </form>
+      </section>
+
+      <aside aria-label="What Hoddie sees" className="space-y-6">
+        <SectionCard>
+          <SectionHeading index="H.1" title="In view" description={hydrated ? "Read from this workspace" : "Loading the workspace…"} />
+          {assessment && operationalWorkspace ? (
+            <dl className="divide-y divide-white/10">
+              <div className="px-5 py-4"><dt className={labelClass}>Total treasury</dt><dd><MoneyValue money={operationalWorkspace.totalTreasury} className="mt-2 block text-lg" /></dd></div>
+              <div className="px-5 py-4"><dt className={labelClass}>Deployable</dt><dd><MoneyValue money={assessment.deployableCapital} className="mt-2 block text-lg text-[#9ec5f4]" /></dd></div>
+              <div className="px-5 py-4"><dt className={labelClass}>Next payment</dt><dd className="mt-2 text-sm">{next ? <>{next.title}<span className="mt-1 block text-xs text-white/50">{formatDate(next.dueAt, { year: undefined, month: "short", day: "numeric" })}</span></> : "Nothing due"}</dd></div>
+            </dl>
+          ) : <p role="status" className="p-5 text-sm leading-6 text-white/60">Figures are paused until the linked Arc Testnet balance is verified.</p>}
+        </SectionCard>
+        <SectionCard>
+          <SectionHeading index="H.2" title="Boundaries" />
+          <ul className="divide-y divide-white/10 text-sm">
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Read balances, bills, policy</span><StatusPill label="Can" tone="success" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Explain why a payment fits</span><StatusPill label="Can" tone="success" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Change obligations, policy, targets</span><StatusPill label="After approval" tone="info" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Invest in Morpho within engine limits</span><StatusPill label="You sign" tone="info" /></li>
+            <li className="flex items-center justify-between gap-3 px-5 py-3.5"><span>Pay bills or move funds alone</span><StatusPill label="Cannot" tone="neutral" /></li>
+          </ul>
+        </SectionCard>
+        <SectionCard>
+          <SectionHeading index="H.3" title="Privacy" />
+          <p className="px-5 py-4 text-xs leading-5 text-white/60">To reply in your language, your message and a summary of this workspace (amounts, dates, policy) are processed on Hodd&apos;s servers. Recipient addresses, payment references and wallet details are never included.</p>
+        </SectionCard>
+      </aside>
+    </div>
+  );
+}
