@@ -13,14 +13,14 @@ export const buttonClass = {
 
 export const inputClass = "mt-2 w-full border border-white/25 bg-[#0b0b0d] px-3 py-2.5 text-sm text-[#f4f1e8] outline-none placeholder:text-white/35 focus:border-[#7fa6ff]";
 
-export function PageHeader({ eyebrow, title, description, aside }: { eyebrow: string; title: string; description: string; aside?: React.ReactNode }) {
+export function PageHeader({ eyebrow, title, description, aside, compact = false }: { eyebrow: string; title: string; description: string; aside?: React.ReactNode; compact?: boolean }) {
   return (
-    <header className="ink-grid border-b border-white/10 px-5 py-10 text-white md:px-8 md:py-14 lg:px-10">
+    <header className={clsx("ink-grid border-b border-white/10 px-5 text-white md:px-8 lg:px-10", compact ? "py-7 md:py-9" : "py-10 md:py-14")}>
       <div className="mx-auto flex max-w-[1440px] flex-col gap-7 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="mono text-[10px] uppercase tracking-[0.22em] text-[#7fa6ff]">{eyebrow}</p>
-          <h1 className="disp mt-4 text-[clamp(1.75rem,5.4vw,3.25rem)]">{title}</h1>
-          <p className="mt-5 max-w-2xl text-sm leading-6 text-white/60 md:text-base">{description}</p>
+          <h1 className={clsx("disp mt-4", compact ? "text-[clamp(1.75rem,4.4vw,2.5rem)]" : "text-[clamp(1.75rem,5.4vw,3.25rem)]")}>{title}</h1>
+          <p className={clsx("max-w-2xl text-sm leading-6 text-white/60 md:text-base", compact ? "mt-3" : "mt-5")}>{description}</p>
         </div>
         {aside}
       </div>
