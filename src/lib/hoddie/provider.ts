@@ -5,10 +5,11 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { HoddieError, intentSchema, type HoddieProvider } from "./models";
 
 export const GEMINI_MODEL = "gemini-3.8-flash";
+export function geminiModel() { const value = process.env.HODDIE_GEMINI_MODEL?.trim() || GEMINI_MODEL; if (!/^gemini-[a-z0-9.-]+-flash(?:-lite)?$/.test(value)) throw new HoddieError("PROVIDER_NOT_CONFIGURED", "Choose a free-tier Flash model and verify its unpaid project configuration.", 503); return value; }
 export const OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 export function providerAvailability() {
   return [
-    { id: "GEMINI" as const, label: "Gemini", model: GEMINI_MODEL, ready: Boolean(process.env.GEMINI_API_KEY?.trim() && process.env.HODDIE_GEMINI_FREE_TIER_CONFIRMED === "true"), note: "A free-tier Gemini project and its server API key must be configured." },
+    { id: "GEMINI" as const, label: "Gemini", model: process.env.HODDIE_GEMINI_MODEL?.trim() || GEMINI_MODEL, ready: Boolean(process.env.GEMINI_API_KEY?.trim() && process.env.HODDIE_GEMINI_FREE_TIER_CONFIRMED === "true"), note: "A free-tier Gemini project and its server API key must be configured." },
     { id: "OPENROUTER" as const, label: "OpenRouter Free", model: OPENROUTER_MODEL, ready: Boolean(process.env.OPENROUTER_API_KEY?.trim()), note: "NVIDIA free endpoint only · application budget 45 calls/day." },
   ];
 }
@@ -27,7 +28,7 @@ const instructions = `You are Hoddie's bilingual command parser, not a treasury 
 export async function parseIntent(provider: HoddieProvider, maskedText: string, hasSelection: boolean, signal?: AbortSignal) {
   if (!providerAvailability().find((item) => item.id === provider)?.ready) throw new HoddieError("PROVIDER_NOT_CONFIGURED", "This provider is not configured yet. API keys are configured on the server after code validation.", 503);
   if (provider === "OPENROUTER") await assertFreeEndpoint(signal);
-  const model = provider === "GEMINI" ? createGoogle({ apiKey: process.env.GEMINI_API_KEY! })(GEMINI_MODEL) : createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY! })(OPENROUTER_MODEL, { extraBody: { provider: { only: ["nvidia"], allow_fallbacks: false, require_parameters: true, max_price: { prompt: 0, completion: 0 } } } });
+  const model = provider === "GEMINI" ? createGoogle({ apiKey: process.env.GEMINI_API_KEY! })(geminiModel()) : createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY! })(OPENROUTER_MODEL, { extraBody: { provider: { only: ["nvidia"], allow_fallbacks: false, require_parameters: true, max_price: { prompt: 0, completion: 0 } } } });
   try {
     const result = await generateText({ model, system: instructions, prompt: JSON.stringify({ command: maskedText, hasSelectedObligation: hasSelection }), output: Output.object({ schema: intentSchema }), maxOutputTokens: 2048, maxRetries: 0, timeout: 20_000, abortSignal: signal });
     return intentSchema.parse(result.output);

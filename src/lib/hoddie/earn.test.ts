@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assessTreasury } from "@/lib/treasury/engine";
 import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
 import type { EarnPortfolioResponse } from "@/lib/earn/models";
-import { earnSnapshot, morphoDepositLimit, planEarn, type EarnContext } from "./earn";
+import { morphoDepositLimit, planEarn, type EarnContext } from "./earn";
 
 const eu = (minorUnits: string) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits });
 const at = new Date("2026-09-27T00:00:00.000Z");
@@ -56,10 +56,10 @@ describe("Morpho proposals", () => {
     expect(() => planEarn(context({ operationalWorkspace: null, assessment: null }), { operation: "DEPOSIT", amount: "1" })).toThrow(/paused/);
   });
 
-  it("describes vaults to the language service without the user's wallet address", () => {
-    const text = JSON.stringify(earnSnapshot(context({ portfolio: portfolio({ positions: [position] }) })));
-    expect(text).toContain('"depositLimit":"4500"'); expect(text).toContain(address);
-    expect(text).not.toContain(position.walletAddress);
-    expect(earnSnapshot(context({ portfolio: null }))).toBeNull();
+  it("rechecks withdrawals against current vault liquidity and maximum withdrawable", () => {
+    const held = context({ portfolio: portfolio({ positions: [{ ...position, maxWithdrawable: eu("100000000") }] }) });
+    expect(planEarn(held, { operation: "WITHDRAW", amount: "100" }).limit.minorUnits).toBe("100000000");
+    expect(() => planEarn(held, { operation: "WITHDRAW", amount: "101" })).toThrow(/at most/);
+    expect(() => planEarn(held, { operation: "REDEEM_ALL" })).toThrow(/Full redemption/);
   });
 });

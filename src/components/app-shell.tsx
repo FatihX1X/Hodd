@@ -90,7 +90,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="mono inline-flex min-h-8 items-center gap-2 border border-white/25 px-3 text-[10px] font-semibold uppercase tracking-[0.12em]"><span aria-hidden="true" className="size-2 rounded-full bg-[#2fcf2f]" />Arc Testnet</span>
           </div>
         </header>
-        <main className="pb-24 lg:pb-0"><DemoBanner /><SampleDataBanner />{mode === "LIVE" && signedIn && hydrated && <div className="flex justify-end border-b border-white/10 px-5 py-2"><button onClick={enterDemo} className={buttonClass.ghost}>Explore the read-only demo</button></div>}{!hydrated ? <PageSkeleton /> : mode === "LIVE" && !signedIn ? <WelcomeGate /> : <>{mode === "LIVE" && !workspace.walletConnection && pathname !== "/" && <PageBody><OnboardingChecklist /></PageBody>}{children}</>}</main>
+        <main className="pb-24 lg:pb-0"><DemoBanner /><SampleDataBanner />{mode === "LIVE" && signedIn && hydrated && <div className="flex justify-end border-b border-white/10 px-5 py-2"><button onClick={enterDemo} className={buttonClass.ghost}>Explore the read-only demo</button></div>}{!hydrated ? <PageSkeleton /> : mode === "LIVE" && !signedIn && pathname !== "/hoddie" ? <WelcomeGate /> : <>{mode === "LIVE" && !workspace.walletConnection && pathname !== "/" && <PageBody><OnboardingChecklist /></PageBody>}{children}</>}</main>
       </div>
 
       <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/15 bg-[#0b0b0d]/95 px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur lg:hidden">
