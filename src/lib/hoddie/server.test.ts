@@ -42,8 +42,13 @@ describe("model output", () => {
     const reply = parseModelOutput(output({ reply: "Done", action: { kind: "CREATE_OBLIGATION", change: { title: "Rent", amount: "five hundred", dueDate: "soon" } } }));
     expect(reply).toMatchObject({ action: null, actionRejected: true });
   });
-  it("never accepts money-moving actions", () => {
-    for (const kind of ["PAYMENT_REQUEST", "EARN_REQUEST", "TRANSFER"]) expect(parseModelOutput(output({ reply: "ok", action: { kind, change: { obligationId: "x" } } }))).toMatchObject({ action: null });
+  it("accepts a Morpho request only with the connector's strict shape", () => {
+    expect(parseModelOutput(output({ reply: "ok", action: { kind: "EARN_REQUEST", change: { operation: "DEPOSIT", amount: "100" } } }))).toMatchObject({ action: { kind: "EARN_REQUEST" } });
+    expect(parseModelOutput(output({ reply: "ok", action: { kind: "EARN_REQUEST", change: { operation: "SWAP", amount: "100" } } }))).toMatchObject({ action: null, actionRejected: true });
+    expect(parseModelOutput(output({ reply: "ok", action: { kind: "EARN_REQUEST", change: { operation: "DEPOSIT", amount: "100", recipient: "0xabc" } } }))).toMatchObject({ action: null, actionRejected: true });
+  });
+  it("never accepts payments or transfers", () => {
+    for (const kind of ["PAYMENT_REQUEST", "TRANSFER"]) expect(parseModelOutput(output({ reply: "ok", action: { kind, change: { obligationId: "x" } } }))).toMatchObject({ action: null });
   });
   it("rejects requests whose last message is not from the user", () => {
     expect(chatRequestSchema.safeParse({ messages: [{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }], snapshot: {} }).success).toBe(false);

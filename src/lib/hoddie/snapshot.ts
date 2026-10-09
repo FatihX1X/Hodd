@@ -7,7 +7,7 @@ const amount = (money: Money) => moneyToInput(money);
  * The slice of the workspace Hoddie's language service sees. Recipient addresses, payment
  * references and wallet identifiers are never included. Everything here is read-only context.
  */
-export function buildSnapshot(workspace: TreasuryWorkspace, assessment: TreasuryAssessment | null, now: Date, pending: { kind: string; summary: string } | null) {
+export function buildSnapshot(workspace: TreasuryWorkspace, assessment: TreasuryAssessment | null, now: Date, pending: { kind: string; summary: string } | null, earn: unknown = null) {
   return {
     today: now.toISOString().slice(0, 10),
     currency: "USDC",
@@ -26,6 +26,7 @@ export function buildSnapshot(workspace: TreasuryWorkspace, assessment: Treasury
     strategies: workspace.strategies.map((item) => ({ kind: item.kind, name: item.name, balance: amount(item.balance), apyPercent: item.apyBps === null ? null : item.apyBps / 100, liquidity: item.liquidity, risk: item.risk })),
     recentActivity: workspace.activities.slice(0, 5).map((item) => ({ at: item.occurredAt.slice(0, 10), actor: item.actor, action: item.action })),
     paymentPending: Boolean(workspace.paymentReservations?.length),
+    morpho: earn,
     pendingProposal: pending,
   };
 }

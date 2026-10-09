@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { changeSchemas } from "@/lib/agent/changes";
 
-/** Changes Hoddie may propose. Payments and Morpho operations are deliberately absent: they are finished by the user in Hodd with a wallet signature. */
-export const HODDIE_ACTIONS = ["CREATE_OBLIGATION", "UPDATE_OBLIGATION", "UPDATE_POLICY", "SET_TARGETS"] as const;
+/** Changes Hoddie may propose. EARN_REQUEST is a Morpho operation the user finishes with a fresh quote and their own wallet signature; payments are never proposed. */
+export const HODDIE_ACTIONS = ["CREATE_OBLIGATION", "UPDATE_OBLIGATION", "UPDATE_POLICY", "SET_TARGETS", "EARN_REQUEST"] as const;
 export type HoddieActionKind = (typeof HODDIE_ACTIONS)[number];
 
 export const MAX_MESSAGE_CHARS = 2_000;
