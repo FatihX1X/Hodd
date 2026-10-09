@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AllocationBar, RunwayChart, WeeklyOutflowChart } from "./charts";
@@ -9,12 +9,15 @@ import { TreasuryWorkspaceProvider } from "./treasury-workspace-provider";
 import { initialWorkspace } from "@/lib/treasury/fixtures";
 import { allocationByLiquidity, runwayProjection, weeklyOutflows } from "@/lib/treasury/views";
 
+vi.mock("@/lib/supabase/client", () => ({ createSupabaseBrowserClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: "test-user" } } }), onAuthStateChange: (callback: (event: string, session: { user: { id: string } }) => void) => { queueMicrotask(() => callback("INITIAL_SESSION", { user: { id: "test-user" } })); return { data: { subscription: { unsubscribe: () => undefined } } }; } } }) }));
+vi.mock("@/lib/supabase/workspace-sync", () => ({ loadCloudWorkspace: async () => null, syncWorkspaceToCloud: async () => undefined, knownWorkspaceRevision: () => undefined, cloudWorkspaceRevision: async () => null, isRevisionConflict: () => false }));
+
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
 const renderWorkspace = (node: React.ReactNode) => render(<TreasuryWorkspaceProvider>{node}</TreasuryWorkspaceProvider>);
 const at = new Date("2026-09-27T00:00:00.000Z");
 
-beforeEach(() => { window.localStorage.clear(); vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => earnReadOnlyResponse }))); });
+beforeEach(() => { window.localStorage.clear(); window.sessionStorage.clear(); window.history.replaceState(null, "", "/"); vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => earnReadOnlyResponse }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("strategy table", () => {
@@ -72,7 +75,8 @@ describe("charts", () => {
   });
 });
 
-describe("obligations detail", () => {
+describe("obligations detail in read-only demo", () => {
+  beforeEach(() => { window.sessionStorage.setItem("hodd:workspace-mode", "DEMO"); });
   it("shows the funding plan for the next payment and follows the selection", async () => {
     const user = userEvent.setup();
     renderWorkspace(<ObligationExplorer />);
@@ -104,8 +108,9 @@ describe("policy page", () => {
   it("states the policy in plain language and saves new values", async () => {
     const user = userEvent.setup();
     renderWorkspace(<PolicyView />);
-    expect(await screen.findByText(/protect obligations due in the next 30 days plus a 1,000.00 usdc safety buffer/i)).toBeVisible();
+    expect(await screen.findByText(/protect obligations due in the next 30 days plus a 1.00 usdc safety buffer/i)).toBeVisible();
     expect(screen.getByText(/place at most 60% in morpho/i)).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText("Safety buffer")).toBeEnabled());
     await user.clear(screen.getByLabelText("Safety buffer")); await user.type(screen.getByLabelText("Safety buffer"), "1500");
     await user.click(screen.getByRole("button", { name: /save policy and recalculate/i }));
     expect(await screen.findByText(/1,500.00 usdc safety buffer/i)).toBeVisible();
@@ -115,6 +120,7 @@ describe("policy page", () => {
     const user = userEvent.setup();
     renderWorkspace(<PolicyView />);
     const coverage = await screen.findByLabelText("Minimum liquidity coverage");
+    await waitFor(() => expect(coverage).toBeEnabled());
     await user.clear(coverage); await user.type(coverage, "150");
     await user.click(screen.getByRole("button", { name: /save policy and recalculate/i }));
     expect(screen.getByRole("alert")).toHaveTextContent(/between 0 and 100/i);

@@ -62,6 +62,7 @@ export default async function LandingPage() {
   // On the marketing host the console lives on its own subdomain; everywhere else (previews, localhost) it is same-origin.
   const appBase = siteForHost((await headers()).get("host")) === "marketing" ? APP_ORIGIN : "";
   const launch = `${appBase}/`;
+  const demo = `${appBase}/?demo=1`;
   const signIn = `${appBase}/login`;
 
   return (
@@ -120,7 +121,7 @@ export default async function LandingPage() {
               <div className="max-w-[520px] flex-[1_1_360px]">
                 <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Hodd is an autonomous treasury system. It puts idle capital to work, keeps liquidity ready, and settles obligations before they’re due — all on Arc.</p>
                 <div className="flex flex-wrap gap-3.5">
-                  <a className={buttonInk} href={launch}>Launch app <Arrow /></a>
+                  <a className={buttonInk} href={launch}>Launch app <Arrow /></a><a className={buttonInk} href={demo}>Try the demo <Arrow /></a>
                   <a className={buttonLine} href="#system">See how it thinks</a>
                 </div>
               </div>
@@ -223,7 +224,7 @@ export default async function LandingPage() {
                 <h2 className="disp mb-7 mt-[22px] text-[clamp(2.25rem,5.4vw,4.75rem)]">Money should<br />know what’s next.</h2>
                 <p className="mb-9 max-w-[480px] text-lg leading-[1.55] text-[#eaf1ff]">Put your treasury ahead of time. Connect, set your policy, and let Hodd take it from there.</p>
                 <div className="flex flex-wrap gap-3.5">
-                  <a className={buttonPaper} href={launch}>Launch app <Arrow /></a>
+                  <a className={buttonPaper} href={launch}>Launch app <Arrow /></a><a className={buttonPaper} href={demo}>Try the demo <Arrow /></a>
                   <a className={buttonLight} href={signIn}>Sign in</a>
                 </div>
               </div>
