@@ -7,7 +7,7 @@ import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { getAddress } from "viem";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { ActiveWalletRuntime } from "./runtime";
-import { ARC_MIN_GAS_PRICE_WEI, boundedArcGasPrice } from "@/lib/earn/gas";
+import { ARC_MIN_GAS_PRICE_WEI, boundedArcGasPrice, quotedSigningGasPrice } from "@/lib/earn/gas";
 import { ARC_GAS_STATION_PAYMASTER, walletFeeQuoteSchema } from "./fee-quote";
 import { WalletPreflightError, walletPreflight } from "./preflight";
 
@@ -65,7 +65,8 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
       // The browser does not need a second cross-origin RPC simulation before Rabby opens.
       const publicClient = earnGasCeiling ? null : createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io", { retryCount: 0 }) });
       const gas = earnGasCeiling ? BigInt(earnGasCeiling.gasLimit) : await publicClient!.estimateGas({ account, ...call, value: BigInt(call.value ?? "0") });
-      const gasPrice = earnGasCeiling ? BigInt(earnGasCeiling.gasPriceWei) : boundedArcGasPrice(await publicClient!.getGasPrice());
+      // A fee quote already carries the 2x buffer: never buffer the network price twice.
+      const gasPrice = earnGasCeiling ? BigInt(earnGasCeiling.gasPriceWei) : feeQuote ? quotedSigningGasPrice(await publicClient!.getGasPrice(), BigInt(feeQuote.maxFeePerGasWei)) : boundedArcGasPrice(await publicClient!.getGasPrice());
       if (gas <= 0n || gasPrice < ARC_MIN_GAS_PRICE_WEI || gas * gasPrice > BigInt(gasBudgetWei)) throw new WalletPreflightError("FEE_RESERVE_EXCEEDED", "Current gas exceeds the approved fee reserve. Request a new quote.");
       if (feeQuote && (feeQuote.provider !== walletConnection.provider || feeQuote.walletAddress.toLowerCase() !== account.toLowerCase() || Date.parse(feeQuote.expiresAt) <= Date.now() || gas > BigInt(feeQuote.gasLimit) || gasPrice > BigInt(feeQuote.maxFeePerGasWei) || feeQuote.maxNativeFeeWei !== gasBudgetWei)) throw new WalletPreflightError("FEE_RESERVE_EXCEEDED", "The current fee or wallet exceeds the approved quote. Request a new quote.");
       const wallet = createWalletClient({ account, chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) });

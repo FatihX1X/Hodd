@@ -7,6 +7,7 @@ import { assertFeeBinding } from "@/lib/wallet/fee-quote";
 import { modularReadClient } from "@/lib/wallet/modular-server";
 import { arcClient } from "@/lib/earn/gateway";
 import { digest } from "@/lib/earn/digest";
+import { quotedSigningGasPrice } from "@/lib/earn/gas";
 import { EarnAccessError } from "@/lib/earn/security";
 import { earnServerContext } from "@/lib/earn/server-context";
 import type { ExecutionMode } from "@/lib/earn/access-policy";
@@ -22,7 +23,7 @@ import { verifyPaymentUserOperation, resolvePaymentUserOperation } from "./user-
 const integer = z.string().regex(/^\d+$/);
 export const paymentPendingSchema = z.object({
   id: z.string().uuid(), calls: z.array(z.object({ to: z.string(), data: z.string(), value: integer })).length(1), gasBudgetWei: integer,
-  expiresAt: z.string().datetime(), nonce: integer.optional(), challengeId: z.string().optional(), challengeApproved: z.boolean().optional(), testSignerClaimed: z.boolean().optional(),
+  expiresAt: z.string().datetime(), nonce: integer.optional(), gasCeiling: z.object({ gasLimit: integer, gasPriceWei: integer }).optional(), challengeId: z.string().optional(), challengeApproved: z.boolean().optional(), testSignerClaimed: z.boolean().optional(),
 });
 type Pending = z.infer<typeof paymentPendingSchema>;
 type Row = Awaited<ReturnType<typeof readPayment>>["row"];
@@ -48,7 +49,11 @@ async function validateFreshFees(context: PaymentContext, proposal: PaymentPropo
   const approved = assertFeeBinding(proposal.feeQuote ?? undefined, { provider: context.wallet.provider, address: context.wallet.address, digest: digest(call) });
   if (approved.maxNativeFeeWei !== proposal.gasBudgetWei || approved.maxWalletDebit.minorUnits !== proposal.feeReserve.minorUnits) throw new Error("FEE_RESERVE_MISMATCH");
   const fresh = await quotePaymentFees(context, call);
-  if (!fresh || BigInt(fresh.gasLimit) > BigInt(approved.gasLimit) || BigInt(fresh.maxFeePerGasWei) > BigInt(approved.maxFeePerGasWei) || BigInt(fresh.priorityFeePerGasWei) > BigInt(approved.priorityFeePerGasWei)) throw new Error("FRESH_FEE_EXCEEDS_QUOTE");
+  if (!fresh || BigInt(fresh.gasLimit) > BigInt(approved.gasLimit)) throw new Error("FRESH_FEE_EXCEEDS_QUOTE");
+  // An EOA quote already carries the 2x price buffer: compare the raw network price
+  // with it, never a second buffered price (a small price move would fail spuriously).
+  if (approved.source === "ARC_EOA") quotedSigningGasPrice(await arcClient.getGasPrice(), BigInt(approved.maxFeePerGasWei));
+  else if (BigInt(fresh.maxFeePerGasWei) > BigInt(approved.maxFeePerGasWei) || BigInt(fresh.priorityFeePerGasWei) > BigInt(approved.priorityFeePerGasWei)) throw new Error("FRESH_FEE_EXCEEDS_QUOTE");
   if (approved.userOperation) {
     const expected = approved.userOperation; const current = fresh.userOperation;
     if (!current || current.nonce !== expected.nonce || current.callData.toLowerCase() !== expected.callData.toLowerCase() || current.factory?.toLowerCase() !== expected.factory?.toLowerCase() || current.factoryData?.toLowerCase() !== expected.factoryData?.toLowerCase() || current.paymaster.toLowerCase() !== expected.paymaster.toLowerCase()) throw new Error("USER_OPERATION_CHANGED");
@@ -97,7 +102,8 @@ export async function startPayment(context: PaymentContext, mode: ExecutionMode,
   if (row.policy_digest !== context.policyDigest || record.state !== "REVIEW_REQUIRED" || Date.parse(record.proposal.expiresAt) <= Date.now()) throw new EarnAccessError("PROPOSAL_NOT_AVAILABLE", "Request a fresh payment proposal.", 409);
   const live = await freshPaymentWorkspace(context); const obligation = live.obligations.find((item) => item.id === record.proposal.obligationId);
   if (!obligation || assessPayment(live, obligation, record.proposal.feeReserve).status !== "PASS") throw new EarnAccessError("POLICY_BLOCKED", "Fresh policy does not permit this payment.", 409);
-  await validateFreshFees(context, record.proposal);
+  try { await validateFreshFees(context, record.proposal); }
+  catch { throw new EarnAccessError("FEE_QUOTE_EXCEEDED", "Network fees changed beyond the approved quote. Review a fresh payment proposal; nothing was sent.", 409); }
   const { error } = await admin().rpc("hodd_claim_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_binding: context.binding });
   if (error) {
     if (/wallet busy/i.test(error.message)) throw new EarnAccessError("WALLET_BUSY", "Another Earn or payment execution on this wallet needs completion or review.", 409);
@@ -110,7 +116,13 @@ export async function startPayment(context: PaymentContext, mode: ExecutionMode,
     await validateClaimedPolicy(await earnServerContext(context.scope), record.proposal);
     const call = transferCall(record.proposal);
     const pending: Pending = { id: randomUUID(), calls: [call], gasBudgetWei: record.proposal.gasBudgetWei, expiresAt: record.proposal.expiresAt };
-    if (context.wallet.accountType === "EOA") pending.nonce = BigInt(await arcClient.getTransactionCount({ address: getAddress(context.wallet.address), blockTag: "pending" })).toString();
+    if (context.wallet.accountType === "EOA") {
+      pending.nonce = BigInt(await arcClient.getTransactionCount({ address: getAddress(context.wallet.address), blockTag: "pending" })).toString();
+      // A server-bound ceiling, like Earn: the browser signs at this price without its own RPC reads.
+      const fee = record.proposal.feeQuote!; const gasPriceWei = quotedSigningGasPrice(await arcClient.getGasPrice(), BigInt(fee.maxFeePerGasWei));
+      if (BigInt(fee.gasLimit) * gasPriceWei > BigInt(record.proposal.gasBudgetWei)) throw new Error("FEE_RESERVE_EXCEEDED");
+      pending.gasCeiling = { gasLimit: fee.gasLimit, gasPriceWei: gasPriceWei.toString() };
+    }
     else if (context.wallet.provider === "CIRCLE_MODULAR") pending.nonce = (await (await modularReadClient(context.wallet)).account.getNonce()).toString();
     else if (context.wallet.provider === "CIRCLE_USER_CONTROLLED") {
       const circle = circleUserWalletClient();
@@ -153,7 +165,7 @@ export async function inspectPayment(context: PaymentContext, id: string, recove
   const { row, record } = await readPayment(context, id, recovery);
   const pending = pendingOf(row);
   const visible = record.state === "AWAITING_SIGNATURE" && pending && !answered(row, pending) && row.binding === context.binding ? pending : null;
-  return { status: "READY" as const, record, pending: visible ? { id: visible.id, calls: visible.calls, gasBudgetWei: visible.gasBudgetWei, ...(visible.challengeId ? { challengeId: visible.challengeId } : {}), expiresAt: visible.expiresAt } : null };
+  return { status: "READY" as const, record, pending: visible ? { id: visible.id, calls: visible.calls, gasBudgetWei: visible.gasBudgetWei, ...(visible.gasCeiling ? { gasCeiling: visible.gasCeiling } : {}), ...(visible.challengeId ? { challengeId: visible.challengeId } : {}), expiresAt: visible.expiresAt } : null };
 }
 
 export async function replyPayment(context: PaymentContext, id: string, input: { requestId: string; txHash?: string; userOperationHash?: string; cancelled?: boolean; uncertain?: boolean; challengeApproved?: boolean }) {
