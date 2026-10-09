@@ -24,7 +24,7 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
 
       <SectionCard>
         <SectionHeading index="05.1" title="Decision ledger" description="Expand a record to inspect rationale, policy and authorization state" />
-        {visible.length === 0 ? <EmptyState title="No matching records" description="Choose another actor type to inspect local activity." /> : (
+        {visible.length === 0 ? <EmptyState title="No matching records" description="Choose another actor type to inspect treasury activity." /> : (
           <div className="divide-y divide-white/10">
             {visible.map((entry) => {
               const Icon = actorIcon[entry.actor];
@@ -39,7 +39,7 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
                   <div className="grid gap-px border-t border-white/10 bg-white/10 sm:grid-cols-3">
                     <div className="bg-[#101319] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-white/50">Why this record exists</p><p className="mt-3 text-xs leading-5 text-white/70">{entry.reason}</p></div>
                     <div className="bg-[#101319] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-white/50">Policy state</p><div className="mt-3"><PolicyPill policy={entry.policy} /></div><p className="mt-3 text-xs leading-5 text-white/70">{entry.policy.reason}</p></div>
-                    <div className="bg-[#101319] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-white/50">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p>{entry.transactionHash && entry.explorerUrl ? <><p className="mono mt-3 break-all text-[10px] text-white/70">{entry.transactionHash}</p><a href={entry.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-semibold text-[#8fb0ff] underline">Open onchain receipt</a></> : <p className="mt-3 text-xs leading-5 text-white/70">Local audit record only. No onchain receipt is attached.</p>}</div>
+                    <div className="bg-[#101319] p-5"><p className="text-[10px] uppercase tracking-[0.13em] text-white/50">Authorization</p><p className="mono mt-3 text-xs">{entry.approval.replace("_", " ")}</p>{entry.transactionHash && entry.explorerUrl ? <><p className="mono mt-3 break-all text-[10px] text-white/70">{entry.transactionHash}</p><a href={entry.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-semibold text-[#8fb0ff] underline">Open onchain receipt</a></> : <p className="mt-3 text-xs leading-5 text-white/70">Workspace audit record. No onchain receipt is attached.</p>}</div>
                   </div>
                 </details>
               );
@@ -49,8 +49,8 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
       </SectionCard>
 
       <div className="mt-6 border border-white/[0.14] bg-[#0b0b0d] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
-        <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#7fa6ff]">Stage boundary</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
-        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Stage 4 attaches a real hash and explorer URL only after App Kit returns a confirmed result. Quotes, approvals and failures remain clearly labeled local audit records.</p>
+        <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#7fa6ff]">Audit trail</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
+        <p className="mt-4 max-w-xl text-xs leading-5 text-white/50 md:mt-0">Confirmed transactions include a receipt and Arc Testnet explorer link. Quotes, approvals and failures are labeled separately from confirmed transactions.</p>
       </div>
     </PageBody>
   );

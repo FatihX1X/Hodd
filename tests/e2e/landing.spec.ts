@@ -8,6 +8,7 @@ test("landing page is reachable at /landing on any host and does not overflow", 
   await expect(page.getByRole("heading", { level: 1, name: /your capital,\s*ahead of time/i })).toBeVisible();
   // Same-origin hosts (previews, localhost) link straight into the console.
   await expect(page.getByRole("link", { name: /launch app/i }).first()).toHaveAttribute("href", "/");
+  await expect(page.getByRole("link", { name: /try the demo/i }).first()).toHaveAttribute("href", "/?demo=1");
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   expect(errors).toEqual([]);
 });
@@ -32,6 +33,8 @@ test("the marketing host serves the landing page and nothing else", async ({ req
   // The landing page links to the console on its own subdomain.
   expect(await home.text()).toContain('href="https://app.hoddfinance.xyz/"');
 
+  expect(await home.text()).toContain('href="https://app.hoddfinance.xyz/?demo=1"');
+
   const consolePage = await request.get("/invest?tab=vaults", { headers: host, maxRedirects: 0 });
   expect(consolePage.status()).toBe(308);
   expect(consolePage.headers().location).toBe("https://app.hoddfinance.xyz/invest?tab=vaults");
@@ -53,7 +56,7 @@ test("the app host serves the console and stays out of search indexes", async ({
   const host = { host: "app.hoddfinance.xyz" };
   const home = await request.get("/", { headers: host, maxRedirects: 0 });
   expect(home.status()).toBe(200);
-  expect(await home.text()).toContain("Liquidity before yield.");
+  expect(await home.text()).toContain("Loading treasury workspace");
   const robots = await request.get("/robots.txt", { headers: host });
   expect(await robots.text()).toMatch(/Disallow:\s*\//);
   const marketingRobots = await request.get("/robots.txt", { headers: { host: "hoddfinance.xyz" } });
