@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowRight, ShieldCheck, TriangleAlert } from "lucide-react";
 import { AllocationBar, RunwayChart } from "@/components/charts";
 import { DemoNotice, Kpi, KpiGrid, MoneyValue, PageBody, PageHeader, PolicyPill, SectionCard, SectionHeading, StatusPill, buttonClass, labelClass } from "@/components/primitives";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { PolicyPanel } from "@/components/policy-panel";
 import { useTreasuryWorkspace } from "@/components/treasury-workspace-provider";
 import { WalletPanel } from "@/components/wallet-panel";
@@ -30,11 +31,11 @@ function HeroFigure({ money }: { money: Money }) {
 }
 
 export default function PortfolioPage() {
-  const { workspace, operationalWorkspace, assessment, walletState, earnState, hydrated } = useTreasuryWorkspace();
+  const { workspace, operationalWorkspace, assessment, walletState, earnState, hydrated, mode } = useTreasuryWorkspace();
   if (!assessment || !operationalWorkspace) return <>
     <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Treasury Engine</p><p className="mt-2 text-lg text-[#ff9a92]">Awaiting verified balance</p><div className="mt-2"><StatusPill label="PAUSED" tone="danger" /></div></div>} />
-    <DemoNotice>Arc Testnet live mode is fail-closed. Demo and stale balances are excluded until the RPC adapter returns a verified USDC snapshot.</DemoNotice>
-    <PageBody><WalletPanel /><AgentRequests /><div role="status" className="mt-6 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-5 text-sm text-[#ff9a92]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></PageBody>
+    <DemoNotice>Connect your own Arc Testnet wallet to see live USDC balances. Financial calculations wait for a verified balance.</DemoNotice>
+    <PageBody><OnboardingChecklist /><div id="treasury-wallet"><WalletPanel /></div><AgentRequests /><div role="status" className="mt-6 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-5 text-sm text-[#ff9a92]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></PageBody>
   </>;
 
   const evaluatedAt = new Date(assessment.evaluatedAt);
@@ -47,6 +48,7 @@ export default function PortfolioPage() {
   const belowBuffer = runway.points.find((point) => point.day === runway.firstBelowBufferDay);
   const integrationRows = workspace.integrations.map((item) => {
     if (item.name === "Morpho") {
+      if (mode === "DEMO") return { ...item, label: "SAMPLE", tone: "neutral" as const, message: "Sample strategy data only. Exit demo to discover live Arc Testnet vaults." };
       if (earnState.status === "READY") return { ...item, label: earnState.portfolio.integration.execution.replaceAll("_", " "), tone: isExecutionAvailable(earnState.portfolio.integration.execution) ? "success" as const : "info" as const, message: earnState.portfolio.integration.message };
       if (earnState.status === "ERROR") return { ...item, label: "UNAVAILABLE", tone: "danger" as const, message: earnState.message };
       return { ...item, label: "SYNCING", tone: "info" as const, message: "Loading the verified Arc Earn allowlist." };
@@ -59,17 +61,18 @@ export default function PortfolioPage() {
 
   return <>
     <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="space-y-3"><div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Liquidity coverage</p><p className="mono mt-2 text-3xl text-[#9ec5f4]">{assessment.liquidityCoverageBps === null ? "No obligations" : formatPercentFromBps(assessment.liquidityCoverageBps)}</p><div className="mt-2"><StatusPill label={assessment.coverageStatus.replace("_", " ")} tone={assessment.coverageStatus === "SAFE" ? "success" : assessment.coverageStatus === "AT_RISK" ? "danger" : "warning"} /></div></div><PolicyPanel /></div>} />
-    <DemoNotice>{hydrated ? workspace.treasuryMode === "ARC_TESTNET_WALLET" ? "One user-owned Arc Testnet wallet is authoritative at a time. Balances are never pooled; every future write must be approved by that wallet." : "Local demo workspace. Choose Circle Embedded, Circle Passkey, MetaMask or Rabby to inspect live wallet data." : "Loading the local treasury workspace…"}</DemoNotice>
+    <DemoNotice>{hydrated ? mode === "LIVE" ? "Live Arc Testnet balances from your own wallet. Your wallet signs every transaction." : "Read-only demo · sample balances and bills · nothing is saved." : "Loading your treasury workspace…"}</DemoNotice>
     <PageBody>
-      <WalletPanel />
-      <AgentRequests />
+      <OnboardingChecklist />
+      {mode === "DEMO" ? <button disabled className={buttonClass.ghost}>Choose wallet · exit demo first</button> : <div id="treasury-wallet"><WalletPanel /></div>}
+      {mode === "LIVE" && <AgentRequests />}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_1fr]">
         <section aria-label="Total treasury" className="flex flex-col justify-between border border-white/[0.14] bg-[#101319] p-6 md:p-8">
           <div>
             <p className={labelClass}>Total treasury</p>
             <HeroFigure money={operationalWorkspace.totalTreasury} />
-            <p className="mt-5 max-w-lg text-sm leading-6 text-white/55">{workspace.treasuryMode === "ARC_TESTNET_WALLET" ? "Liquid USDC + verified Morpho positions" : "Local demo USDC balance"}. Obligations and the safety buffer are protected before anything is deployable.</p>
+            <p className="mt-5 max-w-lg text-sm leading-6 text-white/55">{workspace.treasuryMode === "ARC_TESTNET_WALLET" ? "Liquid USDC + verified Morpho positions" : "Sample USDC balance"}. Obligations and the safety buffer are protected before anything is deployable.</p>
           </div>
           <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-white/10 pt-5">
             <StatusPill label={assessment.coverageStatus.replace("_", " ")} tone={assessment.coverageStatus === "SAFE" ? "success" : assessment.coverageStatus === "AT_RISK" ? "danger" : "warning"} />
@@ -169,7 +172,7 @@ export default function PortfolioPage() {
           <Link href="/activity" className="flex items-center justify-between border-t border-white/[0.14] px-5 py-4 text-sm font-semibold hover:text-[#8fb0ff]">Open audit view <ArrowRight aria-hidden="true" className="size-4" /></Link>
         </SectionCard>
         <SectionCard>
-          <SectionHeading index="01.6" title="Integration boundaries" description="Live reads plus guarded local-only Earn execution" />
+          <SectionHeading index="01.6" title="Integration boundaries" description="Arc Testnet balances ? wallet-approved transactions" />
           <div className="divide-y divide-white/10">{integrationRows.map((item) => (
             <article key={item.name} className="p-5">
               <div className="flex justify-between gap-3"><h3 className="text-sm font-semibold">{item.name}</h3><StatusPill label={item.label} tone={item.tone} /></div>

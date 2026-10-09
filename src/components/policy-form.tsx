@@ -8,7 +8,7 @@ const fieldClass = "mt-2 w-full border border-white/20 bg-[#0b0b0d] text-[#f4f1e
 
 /** Edits the treasury policy. Shared by the quick-edit dialog and the Policy page. */
 export function PolicyForm({ onSaved }: { onSaved?: () => void }) {
-  const { workspace, updatePolicy, storageIssue } = useTreasuryWorkspace();
+  const { workspace, updatePolicy, storageIssue, readOnly } = useTreasuryWorkspace();
   const [buffer, setBuffer] = useState(moneyToInput(workspace.policy.safetyBuffer));
   const [coverage, setCoverage] = useState(String(workspace.policy.minimumLiquidityCoverageBps / 100));
   const [morpho, setMorpho] = useState(String(workspace.policy.strategyCapsBps.MORPHO / 100));
@@ -27,7 +27,7 @@ export function PolicyForm({ onSaved }: { onSaved?: () => void }) {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-5 p-5">
+    <form onSubmit={submit}><fieldset disabled={readOnly || Boolean(storageIssue)} className="space-y-5 p-5">
       <label className="block text-xs font-semibold">Safety buffer (USDC)<input aria-label="Safety buffer" value={buffer} onChange={(event) => setBuffer(event.target.value)} inputMode="decimal" className={fieldClass} /></label>
       <label className="block text-xs font-semibold">Minimum liquidity coverage (%)<input aria-label="Minimum liquidity coverage" value={coverage} onChange={(event) => setCoverage(event.target.value)} inputMode="decimal" className={fieldClass} /></label>
       <fieldset className="border border-white/[0.14] p-4"><legend className="px-2 text-xs font-semibold">Maximum deployable allocation</legend><div className="grid gap-4 sm:grid-cols-3">
@@ -36,6 +36,6 @@ export function PolicyForm({ onSaved }: { onSaved?: () => void }) {
       <p className="text-xs text-white/55">Obligation horizon is fixed at 30 days. Disabled integrations remain unavailable regardless of their cap.</p>
       {error && <p role="alert" className="border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-xs text-[#ff9a92]">{error}</p>}
       <button type="submit" disabled={Boolean(storageIssue)} className="w-full bg-[#f4f1e8] px-5 py-4 text-sm font-semibold text-[#0b0b0d] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40">Save policy and recalculate</button>
-    </form>
+    </fieldset></form>
   );
 }

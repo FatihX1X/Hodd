@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Pencil, Plus, X } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { getAddress, isAddress } from "viem";
 import { PaymentDialog } from "./payment-dialog";
 import { PaymentHistory } from "./payment-history";
@@ -14,6 +14,7 @@ import { assessPayment } from "@/lib/treasury/engine";
 import { formatDate } from "@/lib/treasury/format";
 import { moneyToInput, parseMoneyInput } from "@/lib/treasury/money";
 import type { Obligation, ObligationInput } from "@/lib/treasury/models";
+import { canDeleteObligation } from "@/lib/treasury/sample-cleanup";
 import { weeklyOutflows } from "@/lib/treasury/views";
 
 type Filter = "ALL" | Obligation["status"];
@@ -28,8 +29,11 @@ const emptyForm = (): FormState => ({ title: "", category: "VENDOR", amount: "",
 const toForm = (item: Obligation): FormState => ({ title: item.title, category: item.category, amount: moneyToInput(item.amount), dueDate: item.dueAt.slice(0, 10), recipient: item.recipient ?? "", recipientAddress: item.recipientAddress ?? "", priority: item.priority, status: item.status === "DRAFT" ? "DRAFT" : "UPCOMING", description: item.description });
 
 export function ObligationExplorer() {
-  const { workspace, operationalWorkspace, assessment, createObligation, updateObligation, storageIssue } = useTreasuryWorkspace();
+  const { workspace, operationalWorkspace, assessment, createObligation, updateObligation, deleteObligation, storageIssue, readOnly, mode } = useTreasuryWorkspace();
   const [filter, setFilter] = useState<Filter>("ALL"); const [selectedId, setSelectedId] = useState<string | null>(null); const [open, setOpen] = useState(false); const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm); const [error, setError] = useState("");
   const visible = useMemo(() => filter === "ALL" ? workspace.obligations : workspace.obligations.filter((item) => item.status === filter), [filter, workspace.obligations]);
   const openCreate = () => { setEditingId(null); setForm(emptyForm()); setError(""); setOpen(true); };
@@ -55,7 +59,7 @@ export function ObligationExplorer() {
   return <PageBody>
     <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
       <FilterGroup label="Filter obligations" options={filters} value={filter} onChange={setFilter} />
-      <button onClick={openCreate} disabled={Boolean(storageIssue)} className={buttonClass.primary}><Plus aria-hidden="true" className="size-4" />New obligation</button>
+      <button onClick={openCreate} disabled={readOnly || Boolean(storageIssue)} className={buttonClass.primary}><Plus aria-hidden="true" className="size-4" />New obligation</button>
     </div>
 
     <SectionCard>
@@ -89,7 +93,7 @@ export function ObligationExplorer() {
                   <td className="px-5 py-3"><MoneyValue money={item.amount} className="whitespace-nowrap text-sm font-semibold" /></td>
                   <td className="px-5 py-3"><StatusPill label={item.priority} tone={priorityTone(item.priority)} /></td>
                   <td className="px-5 py-3"><StatusPill label={item.status} tone={statusTone(item.status)} /></td>
-                  <td className="px-5 py-3"><button onClick={() => openEdit(item)} disabled={item.status === "PAID" || Boolean(storageIssue)} aria-label={`Edit ${item.title}`} className="grid size-10 place-items-center border border-white/[0.14] hover:bg-white/5 disabled:opacity-30"><Pencil aria-hidden="true" className="size-4" /></button></td>
+                  <td className="px-5 py-3"><button onClick={() => openEdit(item)} disabled={readOnly || !canDeleteObligation(workspace, item) || Boolean(storageIssue)} aria-label={`Edit ${item.title}`} className="grid size-10 place-items-center border border-white/[0.14] hover:bg-white/5 disabled:opacity-30"><Pencil aria-hidden="true" className="size-4" /></button>{canDeleteObligation(workspace, item) && <button disabled={readOnly || Boolean(storageIssue)} onClick={() => { setDeleteError(""); setDeletingId(item.id); }} aria-label={`Delete ${item.title}`} className="mt-2 grid size-10 place-items-center border border-white/20 text-[#ff9a92] disabled:opacity-30"><Trash2 aria-hidden="true" className="size-4" /></button>}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -121,12 +125,13 @@ export function ObligationExplorer() {
         </div>
       )}
     </SectionCard>
-    <Dialog.Root open={open} onOpenChange={setOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" /><Dialog.Content aria-describedby="obligation-form-description" className="fixed inset-y-0 right-0 z-50 w-full max-w-xl overflow-y-auto bg-[#101319] shadow-2xl focus:outline-none"><div className="sticky top-0 flex items-start justify-between border-b border-white/[0.14] bg-[#101319] px-5 py-4"><div><p className="mono text-[9px] uppercase tracking-[0.15em] text-white/50">Local workspace</p><Dialog.Title className="mt-1 text-xl font-semibold">{editingId ? "Edit obligation" : "New obligation"}</Dialog.Title></div><Dialog.Close aria-label="Close obligation form" className="grid size-10 place-items-center border border-white/[0.14] hover:bg-white/5"><X className="size-4" /></Dialog.Close></div><Dialog.Description id="obligation-form-description" className="px-5 pt-5 text-sm text-white/65">Saving recalculates the Treasury Engine. It does not create a payment or contact a wallet.</Dialog.Description>
+    <Dialog.Root open={open} onOpenChange={setOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" /><Dialog.Content aria-describedby="obligation-form-description" className="fixed inset-y-0 right-0 z-50 w-full max-w-xl overflow-y-auto bg-[#101319] shadow-2xl focus:outline-none"><div className="sticky top-0 flex items-start justify-between border-b border-white/[0.14] bg-[#101319] px-5 py-4"><div><p className="mono text-[9px] uppercase tracking-[0.15em] text-white/50">Your treasury workspace</p><Dialog.Title className="mt-1 text-xl font-semibold">{editingId ? "Edit obligation" : "New obligation"}</Dialog.Title></div><Dialog.Close aria-label="Close obligation form" className="grid size-10 place-items-center border border-white/[0.14] hover:bg-white/5"><X className="size-4" /></Dialog.Close></div><Dialog.Description id="obligation-form-description" className="px-5 pt-5 text-sm text-white/65">Saving recalculates the Treasury Engine. It does not create a payment or contact a wallet.</Dialog.Description>
       <form onSubmit={submit} className="grid gap-4 p-5 sm:grid-cols-2"><label className="text-xs font-semibold sm:col-span-2">Title<input aria-label="Obligation title" value={form.title} onChange={(event) => set("title", event.target.value)} maxLength={80} className={inputClass} /></label><label className="text-xs font-semibold">Amount (USDC)<input aria-label="Obligation amount" value={form.amount} onChange={(event) => set("amount", event.target.value)} inputMode="decimal" className={inputClass} /></label><label className="text-xs font-semibold">Due date<input aria-label="Due date" type="date" value={form.dueDate} onChange={(event) => set("dueDate", event.target.value)} className={inputClass} /></label>
       <label className="text-xs font-semibold sm:col-span-2">Arc Testnet recipient address (optional)<input aria-label="Recipient address" value={form.recipientAddress} onChange={(event) => set("recipientAddress", event.target.value)} maxLength={42} className={`${inputClass} mono`} placeholder="0x…" /><span className="mt-2 block font-normal text-white/65">A label is not a payment address. Adding an address does not move funds.</span></label>
       <label className="text-xs font-semibold">Category<select aria-label="Category" value={form.category} onChange={(event) => set("category", event.target.value as FormState["category"])} className={inputClass}>{["PAYROLL", "VENDOR", "SUBSCRIPTION", "RENT", "TAX", "OTHER"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="text-xs font-semibold">Priority<select aria-label="Priority" value={form.priority} onChange={(event) => set("priority", event.target.value as FormState["priority"])} className={inputClass}>{["CRITICAL", "HIGH", "NORMAL", "LOW"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="text-xs font-semibold">Status<select aria-label="Status" value={form.status} onChange={(event) => set("status", event.target.value as FormState["status"])} className={inputClass}><option>UPCOMING</option><option>DRAFT</option></select></label><label className="text-xs font-semibold">Recipient<input aria-label="Recipient" value={form.recipient} onChange={(event) => set("recipient", event.target.value)} maxLength={120} className={inputClass} /></label><label className="text-xs font-semibold sm:col-span-2">Description<textarea aria-label="Description" value={form.description} onChange={(event) => set("description", event.target.value)} maxLength={500} rows={3} className={inputClass} /></label>{error && <p role="alert" className="border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-xs text-[#ff9a92] sm:col-span-2">{error}</p>}<button type="submit" className="bg-[#f4f1e8] px-5 py-4 text-sm font-semibold text-[#0b0b0d] sm:col-span-2">Save and recalculate</button></form>
     </Dialog.Content></Dialog.Portal></Dialog.Root>
-    <SectionCard className="mt-6"><SectionHeading index="03.3" title="User-approved payments" description="Local development only · full single-obligation USDC Send · no automatic retry" /><div className="space-y-3 p-5">{visible.map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3"><div className="min-w-0"><p className="text-sm font-semibold">Payment for {item.title}</p><p className="break-all text-xs text-white/65">{item.recipientAddress ?? "Add a recipient address to review a payment."}</p>{item.status === "PAID" && <p className="text-xs">{item.paymentReference ? "Server receipt reference available" : "Historical/demo status · no verified payment receipt"}</p>}</div><PaymentDialog obligation={item} /></div>)}</div></SectionCard>
-    <PaymentHistory />
+    <SectionCard className="mt-6"><SectionHeading index="03.3" title="User-approved payments" description="Arc Testnet USDC - your wallet approves each payment" /><div className="space-y-3 p-5">{visible.map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3"><div className="min-w-0"><p className="text-sm font-semibold">Payment for {item.title}</p><p className="break-all text-xs text-white/65">{item.recipientAddress ?? "Add a recipient address to review a payment."}</p>{item.status === "PAID" && <p className="text-xs">{item.paymentReference ? "Server receipt reference available" : "Historical record - no verified payment receipt"}</p>}</div>{mode === "DEMO" ? <button disabled className={buttonClass.ghost}>Pay - exit demo first</button> : <PaymentDialog obligation={item} />}</div>)}</div></SectionCard>
+    {mode === "LIVE" && <PaymentHistory />}
+    <Dialog.Root open={Boolean(deletingId)} onOpenChange={(value) => { if (!value && !deleting) setDeletingId(null); }}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" /><Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%_-_2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 border border-white/20 bg-[#101319] p-6 text-[#f4f1e8]"><Dialog.Title className="text-lg">Delete bill?</Dialog.Title><Dialog.Description className="mt-3 text-sm text-white/65">Remove {workspace.obligations.find((item) => item.id === deletingId)?.title} from your treasury. Bills with payment history are kept for your audit trail.</Dialog.Description>{deleteError && <p role="alert" className="mt-4 text-sm text-[#ff9a92]">{deleteError}</p>}<div className="mt-6 flex gap-3"><button disabled={deleting || readOnly} className={buttonClass.primary} onClick={async () => { if (!deletingId) return; setDeleting(true); setDeleteError(""); try { await deleteObligation(deletingId); setDeletingId(null); } catch (cause) { setDeleteError(cause instanceof Error ? cause.message : "Bill could not be deleted."); } finally { setDeleting(false); } }}>Confirm deletion</button><Dialog.Close disabled={deleting} className={buttonClass.ghost}>Cancel</Dialog.Close></div></Dialog.Content></Dialog.Portal></Dialog.Root>
   </PageBody>;
 }

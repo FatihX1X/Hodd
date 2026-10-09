@@ -12,7 +12,7 @@ export function PolicyView() {
   return (
     <>
       <PageHeader eyebrow="04 · Policy" title="The rules behind every number." description="The treasury policy in plain language, the checks it passes today and the values you can change." />
-      <DemoNotice>Policy values change local calculations only. They cannot authorize or execute a transaction.</DemoNotice>
+      <DemoNotice>Policy protects your bills and safety buffer before investment planning. Your wallet signs every transaction.</DemoNotice>
       <PageBody>
         <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-6">
