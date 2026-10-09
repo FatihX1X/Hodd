@@ -1,32 +1,40 @@
 import { paymentRequestSchema } from "@/lib/payments/models";
 import { createPaymentProposal } from "@/lib/payments/server";
-import { assertLocalPaymentRequest } from "@/lib/payments/security";
-import { inspectPayment, recheckPayment, replyPayment, startPayment } from "@/lib/payments/jobs";
+import { advancePayment, recoverPayment, replyPayment, startPayment } from "@/lib/payments/jobs";
 import { earnServerContext } from "@/lib/earn/server-context";
-import { EarnAccessError } from "@/lib/earn/security";
+import { assertRequestAccess, EarnAccessError } from "@/lib/earn/security";
+import { assertLiveReady, reserveLiveUsage } from "@/lib/execution/live-readiness";
 export const runtime = "nodejs";
+export const maxDuration = 60;
+const EXECUTION_ACTIONS = new Set(["CONFIRM", "REPLY", "RECOVER"]);
 export async function POST(request: Request) {
   try {
-    assertLocalPaymentRequest(request);
-    const input = paymentRequestSchema.safeParse(await request.json());
+    const body: unknown = await request.json().catch(() => null);
+    const input = paymentRequestSchema.safeParse(body);
+    // Reviews, status and receipt rechecks need same-origin JSON and a session; only
+    // actions that can lead to a signature need an open execution mode.
+    const mode = await assertRequestAccess(request, "PAYMENT", input.success && EXECUTION_ACTIONS.has(input.data.action));
     if (!input.success) throw new EarnAccessError("INVALID_REQUEST", "The payment request is invalid.", 400);
     const value = input.data;
+    const context = await earnServerContext(value.scope);
     let result;
     if (value.action === "REVIEW") {
       if (!value.obligationId) throw new EarnAccessError("INVALID_REQUEST", "Select an obligation.", 400);
-      result = await createPaymentProposal(value.scope, value.obligationId);
+      await assertLiveReady(context, mode, "QUOTE");
+      result = await createPaymentProposal(context, value.obligationId, mode);
     } else {
       if (!value.proposalId) throw new EarnAccessError("INVALID_REQUEST", "Select a payment proposal.", 400);
-      const context = await earnServerContext(value.scope);
       if (value.action === "CONFIRM") {
-        assertLocalPaymentRequest(request, true);
         if (!value.confirmed) throw new EarnAccessError("CONFIRMATION_REQUIRED", "Separate payment confirmation is required.", 400);
-        result = await startPayment(context, value.proposalId);
-      } else if (value.action === "REPLY") {
-        assertLocalPaymentRequest(request, true);
-        if (!value.requestId || (!value.txHash && !value.userOperationHash && !value.cancelled && !value.challengeApproved)) throw new EarnAccessError("INVALID_REQUEST", "A valid signature reply is required.", 400);
-        result = await replyPayment(context, value.proposalId, { ...value, requestId: value.requestId });
-      } else result = value.action === "RECHECK" ? await recheckPayment(context, value.proposalId, value.txHash) : await inspectPayment(context, value.proposalId);
+        result = await startPayment(context, mode, value.proposalId);
+      } else {
+        await reserveLiveUsage(context.client, mode, "ADVANCE");
+        if (value.action === "REPLY") {
+          if (!value.requestId || (!value.txHash && !value.userOperationHash && !value.cancelled && !value.challengeApproved)) throw new EarnAccessError("INVALID_REQUEST", "A valid signature reply is required.", 400);
+          result = await replyPayment(context, value.proposalId, { ...value, requestId: value.requestId });
+        } else if (value.action === "RECOVER") result = await recoverPayment(context, value.proposalId, value.acknowledgeNoPendingTransaction === true);
+        else result = await advancePayment(context, value.proposalId, value.action === "RECHECK" ? value.txHash : undefined, value.action === "RECHECK");
+      }
     }
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

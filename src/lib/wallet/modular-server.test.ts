@@ -6,7 +6,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("viem", async (original) => ({ ...await original<typeof import("viem")>(), createPublicClient: () => ({ getChainId: fake.chain }) }));
 vi.mock("viem/account-abstraction", () => ({ toWebAuthnAccount: () => ({ sign: fake.sign }), createBundlerClient: () => ({ prepareUserOperation: fake.prepare, sendUserOperation: fake.send }) }));
 vi.mock("@circle-fin/modular-wallets-core", () => ({ toModularTransport: vi.fn(), toCircleSmartAccount: fake.account }));
-vi.mock("@/lib/earn/durable-quotes", () => ({ digest: () => "call" }));
+vi.mock("@/lib/earn/digest", () => ({ digest: () => "call" }));
 import { quoteModularPayment } from "./modular-server";
 import { ARC_GAS_STATION_PAYMASTER } from "./fee-quote";
 const wallet = { provider: "CIRCLE_MODULAR", accountType: "MSCA", address: "0x0000000000000000000000000000000000000001", passkey: { id: "public-id", publicKey: `0x04${"1".repeat(128)}` } } as WalletConnection;

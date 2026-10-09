@@ -5,12 +5,12 @@ import { earnServerContext, assertEarnContextCurrent } from "@/lib/earn/server-c
 import { arcClient, discoverAllowedVaults, getEarnPosition } from "@/lib/earn/gateway";
 import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { addUsdc } from "@/lib/earn/money";
-import { hasVerifiedEarnProvider } from "@/lib/earn/provider-evidence";
+import { isExecutionAvailable, type ExecutionMode } from "@/lib/earn/access-policy";
+import { assertLiveAmount } from "@/lib/execution/live-readiness";
 import { quotePaymentFees } from "./fees";
 import { ViemArcTreasuryReader } from "@/lib/arc/reader";
 import { EarnAccessError } from "@/lib/earn/security";
 import { obligationSchema } from "@/lib/treasury/models";
-import type { WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 import { paymentAdmin } from "./admin";
 import { assessPayment, paymentRecipient } from "./policy";
 import { paymentProposalSchema, paymentRecordSchema, type PaymentProposal } from "./models";
@@ -18,7 +18,7 @@ export type PaymentContext = Awaited<ReturnType<typeof earnServerContext>>;
 export async function freshPaymentWorkspace(context: PaymentContext) {
   await assertEarnContextCurrent(context);
   const vaults = await discoverAllowedVaults();
-  const [snapshot, positions] = await Promise.all([new ViemArcTreasuryReader("https://rpc.testnet.arc.io").readSnapshot(context.wallet.address), Promise.all(vaults.map((vault) => getEarnPosition(context.wallet.address, vault)))]);
+  const [snapshot, positions] = await Promise.all([new ViemArcTreasuryReader().readSnapshot(context.wallet.address), Promise.all(vaults.map((vault) => getEarnPosition(context.wallet.address, vault)))]);
   const now = Date.now();
   if ([snapshot, ...positions].some((item) => now - Date.parse(item.observedAt) > 60_000 || Date.parse(item.observedAt) > now + 5_000) || positions.some((item) => item.liquidityStatus !== "READY")) throw new EarnAccessError("STALE_PAYMENT_INPUTS", "Fresh wallet and vault positions are required before payment review.", 409);
   const balance = addUsdc(positions.map((item) => item.currentBalance)); const redeemable = addUsdc(positions.map((item) => item.redeemable));
@@ -32,21 +32,23 @@ export async function readPayment(context: PaymentContext, id: string, recovery 
   if ((!recovery && data.binding !== context.binding) || record.proposal.wallet.address.toLowerCase() !== context.wallet.address.toLowerCase() || record.proposal.wallet.provider !== context.wallet.provider || record.proposal.wallet.chainId !== context.wallet.chainId) throw new EarnAccessError("PAYMENT_NOT_FOUND", "Reconnect the original wallet for payment recovery.", 404);
   return { row: data, record };
 }
-export async function createPaymentProposal(scope: WorkspaceScope, obligationId: string) {
-  const context = await earnServerContext(scope); const admin = paymentAdmin();
+export async function createPaymentProposal(context: PaymentContext, obligationId: string, mode: ExecutionMode) {
+  const scope = context.scope; const admin = paymentAdmin();
   const { data: row, error } = await context.client.from("payment_obligations").select("*").eq("user_id", context.userId).eq("scope", scope).eq("id", obligationId).single();
   if (error || !row) throw new EarnAccessError("OBLIGATION_NOT_FOUND", "Sync the obligation before reviewing a payment.", 409);
   const obligation = obligationSchema.parse(row.body); const recipient = paymentRecipient(obligation.recipientAddress, context.wallet.address);
   if (scope === "SMOKE_TEST" && BigInt(obligation.amount.minorUnits) > 1_000_000n) throw new EarnAccessError("SMOKE_AMOUNT_LIMIT", "Smoke payments are limited to 1 USDC.", 409);
+  assertLiveAmount(mode, obligation.amount.minorUnits);
   const workspace = await freshPaymentWorkspace(context);
   const call = transferCall({ recipientAddress: recipient, amount: addUsdc([obligation.amount]) });
-  const [feeQuote, block, verified] = await Promise.all([quotePaymentFees(context, call), arcClient.getBlockNumber(), hasVerifiedEarnProvider(context)]);
+  const [feeQuote, block] = await Promise.all([quotePaymentFees(context, call), arcClient.getBlockNumber()]);
   const budget = feeQuote?.maxNativeFeeWei ?? "0";
   const feeReserve = feeQuote?.maxWalletDebit ?? addUsdc([]);
   let policy = assessPayment(workspace, obligation, feeReserve);
   if (!feeQuote) policy = { status: "BLOCKED", label: "Provider fee quote", reason: "Server-verified deployment, verification and paymaster fee ceilings are not available. No zero-fee assumption is used." };
-  const executionEnabled = verified && Boolean(feeQuote) && process.env.HODD_PAYMENT_EXECUTION_ENABLED === "true";
-  const executionReason = !feeQuote ? "A provider-specific smart-account fee ceiling must be verified before payment execution." : !verified ? "Verified Stage 4 deposit, partial withdrawal and full redemption receipts are still required for this wallet/provider." : "Local execution is available only with the payment feature flag and your separate approval.";
+  // Each payment is proven by its own verified receipt; no per-wallet smoke ritual.
+  const executionEnabled = Boolean(feeQuote) && isExecutionAvailable(mode);
+  const executionReason = !feeQuote ? "A provider-specific fee ceiling must be verified before payment execution." : !isExecutionAvailable(mode) ? "Payment execution is not available on this host." : "Confirm separately, then approve the exact transfer in your own wallet.";
   if (Date.now() - Date.parse(workspace.updatedAt) < -5000) policy = { status: "BLOCKED", label: "Workspace", reason: "Workspace timestamp is invalid." };
   const remaining = BigInt(workspace.liquidUsdc.minorUnits) - BigInt(obligation.amount.minorUnits) - BigInt(feeReserve.minorUnits);
   const proposal = paymentProposalSchema.parse({ id: randomUUID(), obligationId, obligationRevision: row.revision, scope, wallet: context.wallet, recipientAddress: recipient, recipientLabel: obligation.recipient, amount: obligation.amount, feeReserve, feeQuote, gasBudgetWei: budget, balanceAfter: { ...workspace.liquidUsdc, minorUnits: (remaining > 0n ? remaining : 0n).toString() }, policy, expiresAt: feeQuote?.expiresAt ?? new Date(Date.now()+300000).toISOString(), startBlock: block.toString(), executionEnabled, executionReason });

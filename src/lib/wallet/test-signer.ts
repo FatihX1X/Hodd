@@ -5,7 +5,8 @@ import { arcTestnet } from "viem/chains";
 import { quotedSigningGasPrice } from "@/lib/earn/gas";
 
 const LOOPBACK = ["localhost", "127.0.0.1", "[::1]", "::1"];
-const RPC = "https://rpc.testnet.arc.io";
+import { arcRpcUrl } from "@/lib/arc/rpc";
+const RPC = arcRpcUrl();
 
 /**
  * Local-development test signer. The key lives only in the git-ignored
