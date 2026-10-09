@@ -9,7 +9,7 @@ import { PaymentDialog } from "./payment-dialog";
 import { SectionCard, SectionHeading, StatusPill } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
-type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST"; summary: string; change: Record<string, unknown>; created_at: string; expires_at: string | null };
+type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST"; source?: "CLAUDE_MCP" | "HODDIE"; summary: string; change: Record<string, unknown>; created_at: string; expires_at: string | null };
 
 /**
  * Payment and Morpho requests approved in Claude. Claude never moves money: each
@@ -27,7 +27,7 @@ export function AgentRequests() {
     if (!client) return;
     const { data: auth } = await client.auth.getUser();
     if (!auth.user) { setRequests([]); return; }
-    const { data } = await client.from("agent_actions").select("id,kind,summary,change,created_at,expires_at").eq("user_id", auth.user.id).eq("scope", workspaceScope).eq("status", "OPEN").order("created_at", { ascending: false }).limit(20);
+    const { data } = await client.from("agent_actions").select("id,kind,source,summary,change,created_at,expires_at").eq("user_id", auth.user.id).eq("scope", workspaceScope).eq("status", "OPEN").order("created_at", { ascending: false }).limit(20);
     setRequests((data ?? []) as AgentRequest[]); setLoadedAt(Date.now());
   }, [workspaceScope]);
 
@@ -47,7 +47,8 @@ export function AgentRequests() {
     const first = window.setTimeout(refresh, 0);
     const interval = window.setInterval(refresh, 30_000);
     window.addEventListener("focus", refresh);
-    return () => { window.clearTimeout(first); window.clearInterval(interval); window.removeEventListener("focus", refresh); };
+    window.addEventListener("hodd:agent-actions", refresh);
+    return () => { window.clearTimeout(first); window.clearInterval(interval); window.removeEventListener("focus", refresh); window.removeEventListener("hodd:agent-actions", refresh); };
   }, [hydrated, load]);
 
   // A requested bill that is now PAID (verified receipt) completes its request.
@@ -65,7 +66,7 @@ export function AgentRequests() {
   const depositLimit = assessment && operationalWorkspace && morpho ? minMoney(assessment.deployableCapital, subtractMoneyFloor(multiplyBps(operationalWorkspace.totalTreasury, workspace.policy.strategyCapsBps.MORPHO), morpho.balance)) : null;
 
   return <SectionCard className="mt-6">
-    <SectionHeading index="00" title="Claude requests" description="Approved in Claude · finish here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
+    <SectionHeading index="00" title="Agent requests" description="Reviewed requests · finish here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
     <div className="divide-y divide-white/10">
       {requests.map((request) => {
         const expired = request.expires_at !== null && Date.parse(request.expires_at) <= loadedAt;
@@ -84,6 +85,7 @@ export function AgentRequests() {
         return <article key={request.id} className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
           <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#8fb0ff]" /><div>
             <p className="text-sm font-semibold">{request.summary}</p>
+            <p className="mt-1 text-xs text-white/55">Source: {request.source === "HODDIE" ? "Hoddie" : "Claude connector"}</p>
             <p className="mono mt-1 text-[10px] uppercase tracking-[0.1em] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"} · requested {new Date(request.created_at).toLocaleString()}{expired ? " · expired" : request.expires_at ? ` · expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
             {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Signing runs only in local Hodd for now; open this request there to finish it.</p>}
           </div></div>

@@ -9,7 +9,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "pnpm exec next start -p 3107",
+    command: "corepack pnpm exec next start -p 3107",
     url: "http://127.0.0.1:3107",
     reuseExistingServer: false,
     env: { HODD_EARN_EXECUTION_ENABLED: "true", HODD_PAYMENT_EXECUTION_ENABLED: "true" },
