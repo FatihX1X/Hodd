@@ -1,5 +1,6 @@
 "use client";
 
+import { isExecutionAvailable } from "@/lib/earn/access-policy";
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ShieldCheck, TriangleAlert } from "lucide-react";
@@ -46,7 +47,7 @@ export default function PortfolioPage() {
   const belowBuffer = runway.points.find((point) => point.day === runway.firstBelowBufferDay);
   const integrationRows = workspace.integrations.map((item) => {
     if (item.name === "Morpho") {
-      if (earnState.status === "READY") return { ...item, label: earnState.portfolio.integration.execution.replaceAll("_", " "), tone: earnState.portfolio.integration.execution === "LOCAL_ENABLED" ? "success" as const : "info" as const, message: earnState.portfolio.integration.message };
+      if (earnState.status === "READY") return { ...item, label: earnState.portfolio.integration.execution.replaceAll("_", " "), tone: isExecutionAvailable(earnState.portfolio.integration.execution) ? "success" as const : "info" as const, message: earnState.portfolio.integration.message };
       if (earnState.status === "ERROR") return { ...item, label: "UNAVAILABLE", tone: "danger" as const, message: earnState.message };
       return { ...item, label: "SYNCING", tone: "info" as const, message: "Loading the verified Arc Earn allowlist." };
     }

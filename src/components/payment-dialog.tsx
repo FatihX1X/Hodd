@@ -11,12 +11,19 @@ import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 export function PaymentDialog({ obligation }: { obligation: Obligation }) {
   const { workspace, workspaceScope, syncForEarn, refreshPaymentLedger } = useTreasuryWorkspace();
   const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false);
-  const [record, setRecord] = useState<PaymentRecord | null>(null); const [error, setError] = useState("");
+  const [record, setRecord] = useState<PaymentRecord | null>(null); const [error, setError] = useState(""); const [candidate, setCandidate] = useState("");
   const request = async (body: object) => {
     const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: workspaceScope, ...body }) });
     const result = paymentResponseSchema.parse(await response.json());
     if (result.status === "ERROR") throw new Error(result.message);
     setRecord(result.record); return result;
+  };
+  // Recheck, verify a pasted hash, or release with a nonce proof; never a new transfer.
+  const resolve = async (body: object) => {
+    setBusy(true); setError("");
+    try { await request(body); await refreshPaymentLedger(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "The payment remains unverified. Do not resubmit."); }
+    finally { setBusy(false); }
   };
   const review = async () => {
     setBusy(true); setError("");
@@ -37,6 +44,8 @@ export function PaymentDialog({ obligation }: { obligation: Obligation }) {
       while (["AWAITING_SIGNATURE", "SUBMITTED"].includes(job.record.state) && Date.now() < deadline) {
         if (job.pending && !answered.has(job.pending.id)) {
           const pending = job.pending; answered.add(pending.id);
+          // Never open the wallet for a request the server no longer accepts.
+          if (pending.expiresAt && Date.parse(pending.expiresAt) <= Date.now()) { await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, cancelled: true }); throw new Error("The signing window expired before the wallet opened. Review a fresh proposal."); }
           const signer = getActiveWalletRuntime();
           if (!signer || signer.connection.provider !== record.proposal.wallet.provider || signer.connection.chainId !== record.proposal.wallet.chainId || signer.connection.connectedAt !== record.proposal.wallet.connectedAt || signer.connection.address.toLowerCase() !== record.proposal.wallet.address.toLowerCase() || (pending.challengeId ? !signer.approveChallenge : !signer.sendCalls)) {
             await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, cancelled: true }); throw new Error("Signer changed. Reconnect and inspect the pending payment; do not retry automatically.");
@@ -70,7 +79,14 @@ export function PaymentDialog({ obligation }: { obligation: Obligation }) {
       {record && <div className="mt-5 space-y-4"><p role="status" className="border border-white/20 p-3 text-sm">{record.state.replaceAll("_", " ")}</p><dl className="grid grid-cols-2 gap-4 text-sm"><div><dt>Fee reserve</dt><dd>{formatMoney(record.proposal.feeReserve, { fractionDigits: 6 })}</dd></div><div><dt>Liquid after payment</dt><dd>{formatMoney(record.proposal.balanceAfter, { fractionDigits: 6 })}</dd></div></dl><p className="text-sm">{record.proposal.policy.status}: {record.proposal.policy.reason}</p><p className="text-xs text-white/70">{record.proposal.executionReason}</p><p className="text-xs">Expires {new Date(record.proposal.expiresAt).toLocaleTimeString()}</p>
         {record.state === "REVIEW_REQUIRED" && <button disabled={busy || !record.proposal.executionEnabled || record.proposal.policy.status !== "PASS"} onClick={confirm} className="w-full bg-[#f4f1e8] p-4 text-sm text-[#0b0b0d] disabled:opacity-35">Confirm full testnet payment</button>}
         {record.txHash && <a className="block break-all text-xs underline" href={`https://testnet.arcscan.app/tx/${record.txHash}`} target="_blank" rel="noreferrer">Inspect transaction: {record.txHash}</a>}
-        {["SUBMITTED", "UNKNOWN"].includes(record.state) && <button disabled={busy} onClick={async () => { setBusy(true); try { await request({ action: "RECHECK", proposalId: record.id }); await refreshPaymentLedger(); } catch { setError("Receipt or workspace remains unverified. Do not resubmit."); } finally { setBusy(false); } }} className="border border-white/20 p-3 text-sm">Recheck existing receipt (no new transaction)</button>}
+        {["SUBMITTED", "UNKNOWN", "AWAITING_SIGNATURE"].includes(record.state) && !busy && <div role="group" aria-label="Resolve payment outcome" className="space-y-3 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs text-[#ffd27f]">
+          <p>{record.state === "UNKNOWN" ? "Outcome unknown. The bill and this wallet stay locked until it is resolved — never send the payment again by hand." : "Waiting for the transaction. You can recheck it here."}</p>
+          <button onClick={() => void resolve({ action: "RECHECK", proposalId: record.id })} className="border border-white/20 p-2 text-[#f4f1e8]">Recheck existing receipt (no new transaction)</button>
+          <label className="block">Transaction hash from your wallet<input value={candidate} onChange={(event) => setCandidate(event.target.value.trim())} placeholder="0x…" className="mono mt-1 w-full border border-white/20 bg-[#0b0b0d] p-2 text-[#f4f1e8]" /></label>
+          <button disabled={!/^0x[\da-fA-F]{64}$/.test(candidate)} onClick={() => void resolve({ action: "RECHECK", proposalId: record.id, txHash: candidate })} className="border border-white/20 p-2 text-[#f4f1e8] disabled:opacity-40">Verify this transaction</button>
+          {/* The server releases only after expiry and with an unchanged wallet nonce. */}
+          {!record.txHash && !record.userOperationHash && <button onClick={() => void resolve({ action: "RECOVER", proposalId: record.id, acknowledgeNoPendingTransaction: true })} className="block border border-white/20 p-2 text-[#f4f1e8]">I rejected or closed the wallet request — release this payment</button>}
+        </div>}
         {record.state === "CONFIRMED" && <p className="text-sm">The server verified the canonical USDC receipt. The authoritative PAID record is loaded without a page reload.</p>}
       </div>}
       {error && <p role="alert" className="mt-4 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-xs text-[#ff9a92]">{error}</p>}

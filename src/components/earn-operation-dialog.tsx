@@ -19,12 +19,28 @@ const formatMoney = (money: Money) => formatTreasuryMoney(money, { fractionDigit
 export function EarnOperationDialog({ operation, vault, position, policyLimit, enabled, initialAmount = "", onComplete }: { operation: EarnOperation; vault: EarnVault; position?: EarnPosition; policyLimit: Money; enabled: boolean; initialAmount?: string; onComplete?: (result: EarnExecutionResult) => void }) {
   const { workspaceScope, workspace, syncForEarn, recordEarnActivity, recordEarnEvent, refreshEarn, refreshWallet } = useTreasuryWorkspace();
   const [timeline, setTimeline] = useState<string[]>([]);
-  const [open, setOpen] = useState(false); const [amount, setAmount] = useState(initialAmount); const [quote, setQuote] = useState<EarnQuote | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [acknowledged, setAcknowledged] = useState(false); const [result, setResult] = useState<{ txHash: string; explorerUrl: string; status: string } | null>(null);
+  const [open, setOpen] = useState(false); const [amount, setAmount] = useState(initialAmount); const [quote, setQuote] = useState<EarnQuote | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [acknowledged, setAcknowledged] = useState(false); const [result, setResult] = useState<{ txHash: string; explorerUrl: string; status: string } | null>(null); const [unknownId, setUnknownId] = useState<string | null>(null); const [candidate, setCandidate] = useState("");
   const walletAddress = workspace.walletConnection?.address;
   // The signer lives only in memory; a persisted connection alone cannot sign.
   const hasSigner = useHasActiveSigner(workspace.walletConnection);
   const signerMissing = "Signer session is not active (page reload, expiry or workspace switch). Reconnect the wallet, then request a fresh quote. No quote was used.";
-  const reset = () => { setAmount(initialAmount); setQuote(null); setError(""); setBusy(false); setAcknowledged(false); setResult(null); setTimeline([]); };
+  const reset = () => { setAmount(initialAmount); setQuote(null); setError(""); setBusy(false); setAcknowledged(false); setResult(null); setTimeline([]); setUnknownId(null); setCandidate(""); };
+  const executionRequest = async (executionId: string, body: object) => {
+    const reply = await fetch("/api/earn/execution", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceScope, executionId, ...body }) });
+    const next = earnJobApiSchema.parse(await reply.json()); if (next.status === "ERROR") throw new Error(next.message); return next;
+  };
+  const finished = (execution: EarnExecutionResult) => { setResult(execution); setUnknownId(null); recordEarnActivity(`Earn ${labels[operation].toLowerCase()} confirmed`, `${formatMoney(execution.amount)} completed with status ${execution.status}.`, "A successful Arc receipt was checked against the selected vault, operation, amount and receiving wallet.", execution); refreshEarn(); refreshWallet(); onComplete?.(execution); };
+  // Uncertain outcomes move only with evidence: a mined hash, or an unchanged wallet nonce the user confirms.
+  const recover = async (body: object) => {
+    if (!unknownId) return; setBusy(true); setError("");
+    try {
+      const job = await executionRequest(unknownId, body);
+      setTimeline(job.events.map((event) => `${event.stage.replaceAll("_", " ")}${event.hash ? ` · ${event.hash}` : ""}`));
+      if (job.result) finished(job.result);
+      else if (job.state === "FAILED") { setUnknownId(null); setError("Released: nothing was submitted from this request. Request a new quote to try again."); }
+      else setError(job.state === "UNKNOWN" ? "The outcome is still unknown. Check your wallet activity or paste the transaction hash." : "Verification is in progress. Check again in a moment.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Recovery could not be verified."); } finally { setBusy(false); }
+  };
   const requestQuote = async (event: React.FormEvent) => {
     event.preventDefault(); if (!walletAddress) return; if (!hasSigner) { setError(signerMissing); return; } setBusy(true); setError(""); setQuote(null); setResult(null);
     try {
@@ -45,26 +61,26 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
       const response = await fetch("/api/earn/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceScope, quoteId: quote.quoteId, confirmed: true, warningsAcknowledged: acknowledged }) });
       const parsed = earnJobApiSchema.parse(await response.json()); if (parsed.status === "ERROR") throw new Error(parsed.message);
       let job = parsed; const deadline = Date.now() + 7 * 60_000; const answered = new Set<string>(); let recordedEvents = 0;
-      const status = async (body: object) => {
-        const reply = await fetch("/api/earn/execution", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceScope, executionId: job.executionId, ...body }) });
-        const next = earnJobApiSchema.parse(await reply.json()); if (next.status === "ERROR") throw new Error(next.message); return next;
-      };
+      const status = (body: object) => executionRequest(job.executionId, body);
       while (!job.result && Date.now() < deadline) {
         for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
         recordedEvents = job.events.length;
         setTimeline(job.events.map((event) => `${event.stage.replaceAll("_", " ")}${event.hash ? ` · ${event.hash}` : ""}`));
+        if (job.state === "UNKNOWN") setUnknownId(job.executionId);
         if (job.state === "FAILED" || job.state === "UNKNOWN") {
           const details = job.failure ? ` Diagnostic: ${job.failure.stage} / ${job.failure.code}${job.failure.providerCode ? ` / Circle ${job.failure.providerCode}` : ""}.` : "";
           throw new Error((job.state === "FAILED" ? "The operation did not complete. Review any approvals before creating a new quote." : "Submission outcome is unknown. Check the explorer; Hodd will not retry automatically.") + details);
         }
         if (job.pending && !answered.has(job.pending.id)) {
           const pending = job.pending; answered.add(pending.id);
+          // Never open the wallet for a request the server no longer accepts.
+          if (pending.expiresAt && Date.parse(pending.expiresAt) <= Date.now()) { await status({ requestId: pending.id, cancelled: true }); throw new Error("The signing window expired before the wallet opened. Request a new quote."); }
           const signer = getActiveWalletRuntime();
           if (!isSignerFor(signer, workspace.walletConnection) || (!pending.challengeId && !signer.sendCalls) || (pending.challengeId && !signer.approveChallenge) || signer.connection.address.toLowerCase() !== quote.walletAddress.toLowerCase()) { await status({ requestId: pending.id, cancelled: true }); throw new Error("The signer session changed or expired. Reconnect and request a fresh quote."); }
           if (pending.challengeId) {
             try { await signer.approveChallenge!(pending.challengeId); }
             catch { await status({ requestId: pending.id, cancelled: true, uncertain: true }); throw new Error("PIN approval did not complete. Review the wallet before retrying."); }
-            job = await status({}); continue;
+            job = await status({ requestId: pending.id, challengeApproved: true }); continue;
           }
           let hash: string;
           try { hash = await signer.sendCalls!(pending.calls, pending.gasBudgetWei, (userOperationHash) => { void status({ requestId: pending.id, userOperationHash }).catch(() => undefined); }, undefined, pending.gasCeiling); }
@@ -76,11 +92,11 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
             throw new Error("Wallet approval was cancelled or could not be verified. Inspect the wallet before retrying.");
           }
           job = await status({ requestId: pending.id, txHash: hash });
-        } else { await new Promise((resolve) => window.setTimeout(resolve, 1500)); job = await status({}); }
+        } else { await new Promise((resolve) => window.setTimeout(resolve, 2000)); job = await status({}); }
       }
-      if (!job.result) throw new Error("Receipt verification timed out. Check the explorer; do not resubmit automatically.");
+      if (!job.result) { setUnknownId(job.executionId); throw new Error("Receipt verification is taking longer than expected. Use “Check again” below; do not resubmit."); }
       for (const event of job.events.slice(recordedEvents)) recordEarnEvent(event.stage, event.hash);
-      const execution = job.result; setResult(execution); recordEarnActivity(`Earn ${labels[operation].toLowerCase()} confirmed`, `${formatMoney(execution.amount)} completed with status ${execution.status}.`, "A successful Arc receipt was checked against the selected vault, operation, amount and receiving wallet.", execution); refreshEarn(); refreshWallet(); onComplete?.(execution);
+      finished(job.result);
     } catch (caught) { const message = caught instanceof Error ? caught.message : "Execution status is unknown. Check the explorer before retrying."; setError(message); setQuote((current) => current ? { ...current, quoteId: null } : current); recordEarnActivity("Earn execution requires review", `${labels[operation]} did not return a confirmed receipt.`, message, undefined, { approval: "APPROVED", execution: "UNKNOWN" }); } finally { setBusy(false); }
   };
   const unavailable = !enabled || !walletAddress || (operation !== "DEPOSIT" && (!position || BigInt(position.currentBalance.minorUnits) === 0n));
@@ -91,6 +107,7 @@ export function EarnOperationDialog({ operation, vault, position, policyLimit, e
     {quote && !result && <div className="space-y-4 px-5 pb-5"><div className="border border-white/[0.14] p-4"><div className="flex items-center justify-between gap-4"><p className="text-sm font-semibold">Quote result</p><StatusPill label={quote.policy.status} tone={quote.policy.status === "PASS" ? "success" : quote.policy.status === "BLOCKED" ? "danger" : "warning"} /></div><dl className="mt-4 grid grid-cols-2 gap-4 text-xs"><div><dt className="text-white/50">Amount</dt><dd className="mono mt-1">{formatMoney(quote.amount)}</dd></div><div><dt className="text-white/50">Fee reserve</dt><dd className="mono mt-1">{formatMoney(quote.fees)}</dd></div>{quote.expectedShares && <div><dt className="text-white/50">Expected shares</dt><dd className="mono mt-1 break-all">{quote.expectedShares}</dd></div>}{quote.sharesToRedeem && <div><dt className="text-white/50">Shares to redeem</dt><dd className="mono mt-1 break-all">{quote.sharesToRedeem}</dd></div>}</dl><p className="mt-4 text-xs leading-5 text-white/65">{quote.policy.reason}</p></div>{quote.warnings.length > 0 && <label className="block border border-[#fab219]/30 bg-[#fab219]/10 p-4 text-xs leading-5 text-[#ffd27f]"><span className="font-semibold">Quote warnings</span>{quote.warnings.map((warning) => <span key={warning} className="mt-1 block">{warning}</span>)}<span className="mt-3 flex items-start gap-2"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} className="mt-1" />I understand these warnings and want to continue.</span></label>}<button onClick={execute} disabled={busy || !hasSigner || !quote.quoteId || quote.policy.status === "BLOCKED" || (quote.requiresWarningAcknowledgement && !acknowledged)} className="flex w-full items-center justify-center gap-2 bg-[#f4f1e8] px-5 py-4 text-sm font-semibold text-[#0b0b0d] disabled:cursor-not-allowed disabled:opacity-35">{busy && <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />}Confirm onchain {labels[operation].toLowerCase()}</button><p className="text-[10px] leading-4 text-white/50">Quote expires at {quote.expiresAt ? new Date(quote.expiresAt).toLocaleTimeString() : "—"}. Confirmation is single-use.</p></div>}
     {result && <div role="status" className="m-5 border border-[#2fcf2f]/30 bg-[#2fcf2f]/10 p-5 text-[#7fe3a8]"><StatusPill label={result.status} tone={result.status === "COMPLETE" ? "success" : "warning"} /><p className="mt-3 text-sm font-semibold">Arc Testnet receipt returned.</p><a href={result.explorerUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-semibold">Open transaction <ArrowUpRight className="size-3" /></a></div>}
     {timeline.length > 0 && <ol aria-label="Execution timeline" aria-live="polite" className="m-5 space-y-2 text-xs">{timeline.map((entry, index) => <li key={`${index}-${entry}`} className="break-all border border-white/[0.14] p-3">{entry}</li>)}</ol>}
+    {unknownId && !result && <div role="group" aria-label="Resolve unknown outcome" className="m-5 space-y-3 border border-[#fab219]/30 bg-[#fab219]/10 p-4 text-xs leading-5 text-[#ffd27f]"><p className="font-semibold">Outcome unknown. This wallet stays locked for Earn and payments until it is resolved.</p><div className="flex flex-wrap gap-2"><button disabled={busy} onClick={() => void recover({})} className="border border-white/20 px-3 py-2 text-[#f4f1e8]">Check again</button><button disabled={busy} onClick={() => void recover({ action: "RECOVER", acknowledgeNoPendingTransaction: true })} className="border border-white/20 px-3 py-2 text-[#f4f1e8]">I rejected or closed the wallet request</button></div><label className="block">Transaction hash from your wallet<input value={candidate} onChange={(event) => setCandidate(event.target.value.trim())} placeholder="0x…" className={`${inputClass} mono`} /></label><button disabled={busy || !/^0x[\da-fA-F]{64}$/.test(candidate)} onClick={() => void recover({ action: "RECOVER", candidateTxHash: candidate })} className="border border-white/20 px-3 py-2 text-[#f4f1e8] disabled:opacity-40">Verify this transaction</button></div>}
     {error && <p role="alert" className="mx-5 mb-5 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-xs leading-5 text-[#ff9a92]">{error}</p>}
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
