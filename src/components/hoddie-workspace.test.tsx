@@ -34,11 +34,11 @@ describe("Hoddie user-only approval UI", () => {
     const message = proposalMessage(); const part = message.parts[0]; if (part.type === "data-hoddie") part.data.proposal!.expiresAt = "2020-01-01T00:00:00Z";
     fake.messages = [message]; view.rerender(<HoddieWorkspace />); expect(screen.getByRole("button", { name: "Apply change" })).toBeDisabled();
   });
-  it("requires sign-in and configured provider, and examples only fill input", async () => {
+  it("keeps read-only questions enabled without a provider, and examples only fill input", async () => {
     fake.ready = false; render(<HoddieWorkspace />);
     await userEvent.setup().click(screen.getByRole("button", { name: "Summarize my treasury" }));
     expect(screen.getByLabelText("Your command")).toHaveValue("Summarize my treasury"); expect(screen.getByLabelText("Your command")).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Send command" })).toBeDisabled(); expect(fake.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Send command" })).toBeEnabled(); expect(fake.send).not.toHaveBeenCalled();
   });
   it("renders untrusted result text without interpreting HTML", () => {
     fake.messages = [{ id: "safe", role: "assistant", parts: [{ type: "data-hoddie", data: { language: "en", message: '<img src=x onerror="alert(1)">', cards: [] } }] }];
