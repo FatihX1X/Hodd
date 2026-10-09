@@ -65,19 +65,51 @@ test("mocked interpretation shows sourced cards, user-only confirmation and sess
   });
   await page.route("**/api/hoddie/confirm", (route) => { confirms++; return route.fulfill({ json: { status: "READY", request: false } }); });
   await page.goto("/hoddie"); await page.getByRole("button", { name: "Allow Hoddie for this session" }).click();
-  await page.getByLabel("Your command").fill("Hesabımı özetle"); await page.getByRole("button", { name: "Send command" }).click();
+  await page.getByLabel("Your command").fill("Güvenlik tamponunu 1500 USDC olarak değiştir"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(page.getByText("4500 USDC", { exact: true })).toBeVisible(); expect(confirms).toBe(0);
   await page.screenshot({ path: testInfo.outputPath("hoddie-change-review.png"), fullPage: true });
-  expect(bodies[0]).toMatchObject({ mode: "MESSAGE", message: "Hesabımı özetle", provider: "AUTO" });
+  expect(bodies[0]).toMatchObject({ mode: "MESSAGE", message: "Güvenlik tamponunu 1500 USDC olarak değiştir", provider: "AUTO" });
   expect(bodies[0]).not.toHaveProperty("messages"); expect(JSON.stringify(bodies[0])).not.toContain("4500");
   const apply = page.getByRole("button", { name: "Apply change" }); await apply.focus(); await apply.press("Enter");
   await expect(apply).toBeDisabled(); expect(confirms).toBe(1);
   await page.getByRole("link", { name: "Overview", exact: true }).filter({ visible: true }).first().click(); await page.goto("/hoddie");
   // A full document navigation deliberately clears memory; SPA navigation is tested below.
   await expect(page.getByText("Canonical server result")).toHaveCount(0);
-  await page.getByLabel("Your command").fill("summary"); await page.getByRole("button", { name: "Send command" }).click();
+  await page.getByLabel("Your command").fill("Update safety buffer to 1500 USDC"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(page.getByText("Canonical server result")).toBeVisible();
   await page.getByRole("link", { name: "Overview", exact: true }).filter({ visible: true }).first().click();
   await page.getByRole("link", { name: /^(Open )?Hoddie$/ }).filter({ visible: true }).first().click(); await expect(page.getByText("Canonical server result")).toBeVisible();
   await page.reload(); await expect(page.getByText("Canonical server result")).toHaveCount(0);
+});
+
+test("demo answers locally in English and Turkish without interpretation or writes, and matches the console at 1280/375", async ({ page }, testInfo) => {
+  const width = testInfo.project.name === "desktop" ? 1280 : 375;
+  await page.setViewportSize({ width, height: 900 });
+  const posts: string[] = [];
+  await page.route("**/api/hoddie/**", (route) => {
+    if (route.request().method() !== "GET") posts.push(route.request().url());
+    return route.fulfill({ json: { status: "READY", providers: [{ id: "GEMINI", ready: true }] } });
+  });
+  await page.goto("/hoddie?demo=1");
+  await page.getByLabel("Your command").fill("Summarize my treasury"); await page.getByRole("button", { name: "Send command" }).click();
+  const log = page.getByRole("log", { name: "Conversation messages" });
+  await expect(log).toContainText("10,000.00 USDC"); await expect(log).toContainText("DEMO");
+  await expect(log.getByRole("navigation", { name: "Answer sources" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.screenshot({ path: "test-results/hoddie-demo-" + width + ".png", fullPage: true, scale: "css" });
+  await page.getByLabel("Your command").fill("Hesabımı özetle"); await page.getByRole("button", { name: "Send command" }).click();
+  await expect(log).toContainText("Hazinenizde 10,000.00 USDC var"); await expect(log).toContainText("Toplam hazine");
+  await page.getByLabel("Your command").fill("Create a 500 USDC obligation due tomorrow"); await page.getByRole("button", { name: "Send command" }).click();
+  await expect(log).toContainText("cannot change it or move funds");
+  await expect(page.getByRole("button", { name: "Apply change" })).toHaveCount(0);
+  expect(posts).toEqual([]); await expect(page.getByRole("main")).not.toContainText(/Gemini|OpenRouter|NVIDIA|Nemotron/);
+  await page.goto("/?demo=1"); await expect(page.getByRole("heading", { name: "Liquidity before yield." })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+  await page.screenshot({ path: "test-results/overview-demo-" + width + ".png", fullPage: true });
+});
+test("signed-out Hoddie is available and reports zero disconnected balances", async ({ page }) => {
+  await page.goto("/hoddie"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
+  await page.getByLabel("Your command").fill("Summarize my treasury"); await page.getByRole("button", { name: "Send command" }).click();
+  const log = page.getByRole("log"); await expect(log).toContainText("0.00 USDC"); await expect(log).toContainText("NOT CONNECTED"); await expect(log).not.toContainText("10,000");
 });
