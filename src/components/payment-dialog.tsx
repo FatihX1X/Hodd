@@ -6,6 +6,7 @@ import type { Obligation } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 import { paymentResponseSchema, type PaymentRecord } from "@/lib/payments/models";
 import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
+import { WalletPreflightError } from "@/lib/wallet/preflight";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 export function PaymentDialog({ obligation }: { obligation: Obligation }) {
@@ -57,8 +58,17 @@ export function PaymentDialog({ obligation }: { obligation: Obligation }) {
             continue;
           }
           let hash: string;
-          try { hash = await signer.sendCalls!(pending.calls.map((call) => ({ ...call, to: call.to as `0x${string}`, data: call.data as `0x${string}` })), pending.gasBudgetWei, async (userOperationHash) => { await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, userOperationHash }); }, record.proposal.feeQuote ?? undefined); }
-          catch { await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, cancelled: true }); throw new Error("Signing did not return a verified hash. The payment is held for review."); }
+          // Browser wallets sign at the server-bound gas ceiling; smart accounts and the dev signer use the fee quote.
+          const injected = signer.connection.provider === "INJECTED_METAMASK" || signer.connection.provider === "INJECTED_RABBY";
+          try { hash = await signer.sendCalls!(pending.calls.map((call) => ({ ...call, to: call.to as `0x${string}`, data: call.data as `0x${string}` })), pending.gasBudgetWei, async (userOperationHash) => { await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, userOperationHash }); }, injected && pending.gasCeiling ? undefined : record.proposal.feeQuote ?? undefined, injected ? pending.gasCeiling : undefined); }
+          catch (caught) {
+            // A rejection or a failed check before the wallet API sent nothing; anything else may have reached the chain.
+            const denied = typeof caught === "object" && caught !== null && "code" in caught && caught.code === 4001;
+            const preflight = caught instanceof WalletPreflightError;
+            await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, cancelled: true, uncertain: !denied && !preflight });
+            if (preflight) throw new Error(`Wallet check (${caught.code}): ${caught.message}`);
+            throw new Error(denied ? "The payment was rejected in the wallet. Nothing was sent." : "Signing did not return a verified hash. The payment is held for review; use Recheck before trying again.");
+          }
           job = await request({ action: "REPLY", proposalId: record.id, requestId: pending.id, txHash: hash });
         } else {
           await new Promise((resolve) => window.setTimeout(resolve, 1500));

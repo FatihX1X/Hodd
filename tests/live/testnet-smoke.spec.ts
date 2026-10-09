@@ -27,7 +27,7 @@ test("sign in once (manual, only when no saved session)", async ({ browser }) =>
   test.skip(existsSync(STATE), "saved session present");
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto("/login");
+  await page.goto("/login"); await page.bringToFront();
   // The owner signs in by hand in this window; no credential is typed by the test.
   await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible({ timeout: 600_000 });
   await context.storageState({ path: STATE });

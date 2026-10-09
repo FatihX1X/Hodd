@@ -10,7 +10,7 @@ const fake = vi.hoisted(() => ({
   db: null as unknown as ReturnType<typeof import("@/test/fake-supabase").fakeSupabase>,
   receipts: new Map<string, { status: "success" | "reverted"; blockNumber: bigint; gasUsed: bigint; effectiveGasPrice: bigint }>(),
   transactions: new Map<string, { from: string; to: string; input: string; value: bigint }>(),
-  nonce: { latest: 4, pending: 4 }, claimError: null as string | null, policy: vi.fn(), finish: vi.fn(),
+  nonce: { latest: 4, pending: 4 }, gasPrice: 15_000_000_000n, claimError: null as string | null, policy: vi.fn(), finish: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("./admin", () => ({ paymentAdmin: () => fake.db }));
@@ -26,6 +26,7 @@ vi.mock("@/lib/circle/user-wallet-server", () => ({ circleUserWalletClient: () =
 vi.mock("@/lib/earn/gateway", () => ({
   arcClient: {
     getChainId: vi.fn(async () => 5042002),
+    getGasPrice: vi.fn(async () => fake.gasPrice),
     getTransactionCount: vi.fn(async ({ blockTag }: { blockTag: "latest" | "pending" }) => fake.nonce[blockTag]),
     getTransactionReceipt: vi.fn(async ({ hash }: { hash: string }) => { const receipt = fake.receipts.get(hash); if (!receipt) throw new Error("not found"); return receipt; }),
     getTransaction: vi.fn(async ({ hash }: { hash: string }) => fake.transactions.get(hash)),
@@ -72,7 +73,7 @@ function mine(txHash: string, status: "success" | "reverted" = "success", input 
 }
 const state = (id: string) => fake.db.tables.payment_proposals.find((row) => row.id === id)!.state;
 
-beforeEach(() => { vi.clearAllMocks(); fake.receipts.clear(); fake.transactions.clear(); fake.nonce = { latest: 4, pending: 4 }; fake.claimError = null; fake.policy.mockReturnValue({ status: "PASS" }); });
+beforeEach(() => { vi.clearAllMocks(); fake.receipts.clear(); fake.transactions.clear(); fake.nonce = { latest: 4, pending: 4 }; fake.gasPrice = 15_000_000_000n; fake.claimError = null; fake.policy.mockReturnValue({ status: "PASS" }); });
 
 describe("stateless payment execution", () => {
   it("claims, exposes the exact transfer, and confirms only after a verified receipt", async () => {
@@ -80,7 +81,9 @@ describe("stateless payment execution", () => {
     const started = await startPayment(ctx, "LOCAL_ENABLED", id);
     expect(started.record.state).toBe("AWAITING_SIGNATURE");
     expect(started.pending).toMatchObject({ calls: [call()], gasBudgetWei: "1000000000000000" });
-    expect(fake.db.tables.payment_proposals[0].pending).toMatchObject({ nonce: "4" });
+    // The browser signs at a server-bound price: the network price rebuffered, capped by the quote.
+    expect(fake.db.tables.payment_proposals[0].pending).toMatchObject({ nonce: "4", gasCeiling: { gasLimit: "50000", gasPriceWei: "20000000000" } });
+    expect(started.pending).toMatchObject({ gasCeiling: { gasLimit: "50000" } });
     mine(hash("1"));
     const done = await replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("1") });
     expect(done.record.state).toBe("CONFIRMED"); expect(fake.finish).toHaveBeenCalledTimes(1);
@@ -158,5 +161,17 @@ describe("stateless payment execution", () => {
   it("refuses execution when the proposal was not enabled for this host", async () => {
     const { id, ctx } = setup(); (fake.db.tables.payment_proposals[0].proposal as { executionEnabled: boolean }).executionEnabled = false;
     await expect(startPayment(ctx, "LOCAL_ENABLED", id)).rejects.toMatchObject({ code: "EXECUTION_NOT_ENABLED" });
+  });
+
+  it("accepts a small network price rise after review instead of buffering it twice", async () => {
+    const { id, ctx } = setup(); fake.gasPrice = 19_000_000_000n;
+    const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    expect(started.pending).toMatchObject({ gasCeiling: { gasPriceWei: "20000000000" } });
+  });
+
+  it("refuses to sign when the network price exceeds the approved ceiling", async () => {
+    const { id, ctx } = setup(); fake.gasPrice = 21_000_000_000n;
+    await expect(startPayment(ctx, "LOCAL_ENABLED", id)).rejects.toMatchObject({ code: "FEE_QUOTE_EXCEEDED" });
+    expect(state(id)).toBe("REVIEW_REQUIRED");
   });
 });

@@ -30,17 +30,26 @@ export async function freshEarnInputs(context: EarnContext, vaultAddress: string
 
 export async function prepareServerQuote(context: EarnContext, intent: EarnOperationIntent, mode: ExecutionMode) {
   const live = await freshEarnInputs(context, intent.vaultAddress);
-  const amount = intent.operation === "REDEEM_ALL" ? live.position.redeemable : decimalStringToMoney(intent.amount ?? "0");
+  let amount = intent.operation === "REDEEM_ALL" ? live.position.redeemable : decimalStringToMoney(intent.amount ?? "0");
   if (context.scope === "SMOKE_TEST" && intent.operation === "DEPOSIT" && BigInt(amount.minorUnits) > 1_000_000n) throw new EarnGatewayError("SMOKE_AMOUNT_LIMIT", "Smoke-test deposits are limited to 1 USDC.");
   if (BigInt(amount.minorUnits) <= 0n) throw new EarnGatewayError("INVALID_AMOUNT", "Enter a positive amount or connect a funded position.");
   if (intent.operation === "DEPOSIT") assertLiveAmount(mode, amount.minorUnits);
   const from = { adapter: readEarnAdapter(context.wallet.address), chain: "Arc_Testnet" as const };
   const params = { from, vaultAddress: live.vault.address, amount: formatUnits(BigInt(amount.minorUnits), 6), config: operationConfig() };
-  const raw = intent.operation === "DEPOSIT" ? await earnKit.earn.getDepositQuote(params) : await earnKit.earn.getWithdrawalQuote(params);
+  let raw = intent.operation === "DEPOSIT" ? await earnKit.earn.getDepositQuote(params) : await earnKit.earn.getWithdrawalQuote(params);
   const asset = (value: { symbol: string; amount: string }) => {
     if (value.symbol !== "USDC") throw new EarnGatewayError("INVALID_QUOTE_ASSET", "Quote fees must be canonical USDC.");
     return decimalStringToMoney(value.amount);
   };
+  // Our position read rounds shares to assets up; Earn Kit's maximum rounds down.
+  // Redeem-all takes the smaller of the two instead of blocking on one unit.
+  if (intent.operation === "REDEEM_ALL" && "maxWithdrawable" in raw) {
+    const providerMax = asset(raw.maxWithdrawable);
+    if (BigInt(providerMax.minorUnits) > 0n && BigInt(providerMax.minorUnits) < BigInt(amount.minorUnits)) {
+      amount = providerMax;
+      raw = await earnKit.earn.getWithdrawalQuote({ ...params, amount: formatUnits(BigInt(amount.minorUnits), 6) });
+    }
+  }
   // A deposit quoted behind a pending approval was not simulated against real allowance.
   const unsimulatedDeposit = intent.operation === "DEPOSIT" && (raw.gasFees ?? []).some((item) => /^approv/i.test(item.name));
   const gasFees = (raw.gasFees ?? []).map((item) => {
