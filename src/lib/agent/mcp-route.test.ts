@@ -11,7 +11,7 @@ vi.mock("@/lib/agent/auth", async (original) => {
 vi.mock("@/lib/agent/context", () => ({
   tableFor: () => "treasury_workspaces",
   agentContext: vi.fn(async () => ({ userId: "user-1", clientId: "claude", sessionId: null, scope: "TREASURY", revision: fake.revision, workspace: structuredClone(initialWorkspace), client: { rpc: fake.rpc } })),
-  liveWorkspace: vi.fn(async (workspace) => ({ workspace, source: "DEMO", note: "demo", snapshot: null, portfolio: null })),
+  liveWorkspace: vi.fn(async (workspace) => ({ workspace, source: "NOT_CONNECTED", note: "no wallet", snapshot: null, portfolio: null })),
 }));
 vi.mock("@/lib/earn/gateway", () => ({ arcClient: { estimateGas: vi.fn(async () => 60_000n), getGasPrice: vi.fn(async () => 20_000_000_000n) }, discoverAllowedVaults: vi.fn(async () => [{ address: "0xAabbeF1D3971c710276ed41eC791BbE14CdB8E88" }]) }));
 
@@ -51,7 +51,7 @@ describe("Hodd MCP endpoint", () => {
   it("answers a read question with live-policy numbers", async () => {
     const { body } = await call("tools/call", { name: "hodd_get_overview", arguments: {} });
     const overview = JSON.parse(toolText(body));
-    expect(overview).toMatchObject({ dataSource: "DEMO", totalTreasury: expect.stringContaining("USDC"), deployableCapital: expect.stringContaining("USDC") });
+    expect(overview).toMatchObject({ dataSource: "NOT_CONNECTED", totalTreasury: expect.stringContaining("USDC"), deployableCapital: expect.stringContaining("USDC") });
   });
 
   it("prepares, then applies only the exact approved change, once", async () => {

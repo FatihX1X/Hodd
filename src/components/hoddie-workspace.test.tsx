@@ -6,7 +6,7 @@ const fake = vi.hoisted(() => ({ confirm: vi.fn(), dismiss: vi.fn(), send: vi.fn
 vi.mock("./hoddie-provider", () => ({ useHoddie: () => ({ provider: "GEMINI", providers: [{ id: "GEMINI", model: "gemini-test", ready: fake.ready, note: "Configure the server key" }], allowed: true, signedIn: fake.signedIn, busy: false, status: "ready", issue: "", handled: [], workspaceScope: "TREASURY", messages: fake.messages, confirm: fake.confirm, dismiss: fake.dismiss, send: fake.send, clear: vi.fn(), chooseProvider: vi.fn() }) }));
 vi.mock("./agent-requests", () => ({ AgentRequests: () => <div>Existing wallet review</div> }));
 import { HoddieWorkspace } from "./hoddie-workspace";
-const proposalMessage = (): HoddieMessage => ({ id: "review", role: "assistant", parts: [{ type: "data-hoddie", data: { language: "en", message: "Review only", cards: [{ title: "Treasury overview", fields: [{ label: "Liquid USDC", value: "10000 USDC" }] }], source: "DEMO", observedAt: "2026-10-08T12:00:00Z", proposal: { handle: "signed-review", kind: "UPDATE_POLICY", summary: "Buffer 1000 → 1500 USDC", lines: ["Nothing applied yet"], expiresAt: new Date(Date.now() + 600000).toISOString(), impact: [{ label: "Deployable capital", before: "4500 USDC", after: "4000 USDC" }] } } }] });
+const proposalMessage = (): HoddieMessage => ({ id: "review", role: "assistant", parts: [{ type: "data-hoddie", data: { language: "en", message: "Review only", cards: [{ title: "Treasury overview", fields: [{ label: "Liquid USDC", value: "10000 USDC" }] }], source: "NOT_CONNECTED", observedAt: "2026-10-08T12:00:00Z", proposal: { handle: "signed-review", kind: "UPDATE_POLICY", summary: "Buffer 1000 → 1500 USDC", lines: ["Nothing applied yet"], expiresAt: new Date(Date.now() + 600000).toISOString(), impact: [{ label: "Deployable capital", before: "4500 USDC", after: "4000 USDC" }] } } }] });
 beforeEach(() => { vi.clearAllMocks(); fake.messages = []; fake.ready = true; fake.signedIn = true; });
 afterEach(cleanup);
 describe("Hoddie user-only approval UI", () => {
@@ -24,7 +24,7 @@ describe("Hoddie user-only approval UI", () => {
   });
   it("shows source/time and does not apply a result until a keyboard approval", async () => {
     fake.messages = [proposalMessage()]; render(<HoddieWorkspace />);
-    expect(screen.getByText(/DEMO ·/)).toBeVisible(); expect(fake.confirm).not.toHaveBeenCalled();
+    expect(screen.getByText(/NOT CONNECTED ·/)).toBeVisible(); expect(fake.confirm).not.toHaveBeenCalled();
     const apply = screen.getByRole("button", { name: "Apply change" }); apply.focus(); expect(apply).toHaveFocus(); await userEvent.setup().keyboard("{Enter}");
     expect(fake.confirm).toHaveBeenCalledWith("signed-review");
   });
