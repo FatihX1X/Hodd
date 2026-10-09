@@ -38,7 +38,7 @@ const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true,
 const WRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
 
 /** Rough USDC fee for a USDC transfer from this wallet (EOA ceiling, like Hodd's payment quote). */
-async function estimateTransferFee(workspace: TreasuryWorkspace, recipient: string | null | undefined, amount: Money): Promise<Money> {
+export async function estimateTransferFee(workspace: TreasuryWorkspace, recipient: string | null | undefined, amount: Money): Promise<Money> {
   const zero: Money = { currency: "USDC", decimals: 6, minorUnits: "0" };
   const wallet = workspace.walletConnection;
   if (!wallet) return zero;
