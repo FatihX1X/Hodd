@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { onboardingStates } from "@/lib/treasury/onboarding";
+import { useWalletOwnership } from "@/lib/wallet/use-wallet-ownership";
 import { buttonClass, SectionCard, SectionHeading } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
@@ -10,12 +11,16 @@ export function OnboardingChecklist() {
   const { mode, signedIn, workspace, walletState, earnState } = useTreasuryWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const [copyState, setCopyState] = useState("");
+  const live = earnState.status === "READY" && earnState.portfolio.integration.execution === "TESTNET_LIVE";
+  const ownership = useWalletOwnership(workspace.walletConnection, live);
   if (mode !== "LIVE") return null;
   const state = onboardingStates(signedIn, workspace, walletState, earnState.status === "READY" ? earnState.portfolio : undefined);
-  const complete = Object.values(state).every(Boolean);
+  const verified = Boolean(workspace.walletConnection) && (ownership.status === "VERIFIED" || ownership.status === "NOT_REQUIRED");
+  const complete = Object.values(state).every(Boolean) && verified;
   const steps = [
     { title: "Sign in", done: state.signedIn, href: "/login" },
     { title: "Connect a wallet", done: state.connected, href: "/#treasury-wallet" },
+    { title: "Verify wallet ownership", done: verified, href: "/#treasury-wallet" },
     { title: "Get free testnet USDC", done: state.funded, href: "https://faucet.circle.com" },
     { title: "Add your first bill", done: state.billAdded, href: "/obligations" },
     { title: "Make a first Morpho deposit", done: state.deposited, href: "/invest" },

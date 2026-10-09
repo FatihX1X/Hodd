@@ -5,7 +5,8 @@ test.beforeEach(async ({ page }) => {
 });
 test("Hoddie navigation and read-only setup reflow without console errors", async ({ page }, testInfo) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message)); page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-  await page.goto("/hoddie"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
+  // Signed-out visitors get the live welcome gate; the read-only demo shows the assistant layout.
+  await page.goto("/hoddie?demo=1"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
   await expect(page.locator('[data-theme="dark"]')).toBeVisible();
   await expect(page.getByRole("region", { name: "Hoddie conversation" })).toHaveCSS("background-color", "rgb(16, 19, 25)");
   if (testInfo.project.name === "desktop") {
