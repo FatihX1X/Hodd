@@ -15,8 +15,8 @@ afterEach(cleanup);
 
 it("shows real pending steps and the Arc Testnet faucet instruction", () => {
   render(<OnboardingChecklist />);
-  expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(5);
-  expect(screen.getAllByText("Not done")).toHaveLength(4); expect(screen.getByText("Done")).toBeVisible();
+  expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(6);
+  expect(screen.getAllByText("Not done")).toHaveLength(5); expect(screen.getByText("Done")).toBeVisible();
   expect(screen.getByRole("link", { name: "Get free testnet USDC" })).toHaveAttribute("href", "https://faucet.circle.com");
   expect(screen.getByText("Choose Arc Testnet in the Circle faucet.")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Collapse checklist" })).not.toBeInTheDocument();
@@ -32,7 +32,7 @@ it("copies the connected public address and collapses only when complete", async
   render(<OnboardingChecklist />);
   await user.click(screen.getByRole("button", { name: "Copy address" }));
   expect(await navigator.clipboard.readText()).toBe(address); expect(screen.getByRole("status")).toHaveTextContent("Address copied");
-  expect(screen.getAllByText("Done")).toHaveLength(5);
+  expect(screen.getAllByText("Done")).toHaveLength(6);
   await user.click(screen.getByRole("button", { name: "Collapse checklist" })); expect(screen.queryByRole("list")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Show checklist" })); expect(screen.getByRole("list")).toBeVisible();
 });
