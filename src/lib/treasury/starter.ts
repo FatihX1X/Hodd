@@ -11,7 +11,10 @@ export function createLiveStarterWorkspace(now: Date | string = new Date()): Tre
     walletConnection: null,
     totalTreasury: usdc("0"), liquidUsdc: usdc("0"), pendingTransactions: usdc("0"),
     obligations: [], decisions: [], paymentReservations: [],
-    policy: { ...sampleWorkspace.policy, safetyBuffer: usdc("1000000") },
+    policy: { safetyBuffer: usdc("1000000"), minimumLiquidityCoverageBps: 10000, obligationHorizonDays: 30,
+      strategyCapsBps: { LIQUID: 10000, MORPHO: 6000, USYC: 0, BTC_RESERVE: 0 },
+      enabledStrategies: { LIQUID: true, MORPHO: true, USYC: false, BTC_RESERVE: false },
+      liquidityWaterfall: ["LIQUID_USDC", "MORPHO", "USYC", "BTC_CREDIT", "BTC_SALE"] },
     targetAllocationsBps: { LIQUID: 5000, MORPHO: 5000, USYC: 0, BTC_RESERVE: 0 },
     strategies: sampleWorkspace.strategies.map((strategy) => ({
       ...strategy, balance: usdc("0"), redeemable: usdc("0"), apyBps: null,
