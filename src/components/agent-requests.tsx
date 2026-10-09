@@ -4,7 +4,9 @@ import { isExecutionAvailable } from "@/lib/earn/access-policy";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { minMoney, multiplyBps, subtractMoneyFloor } from "@/lib/treasury/money";
+import { moneyToInput } from "@/lib/treasury/money";
+import { planEarn, type EarnChange } from "@/lib/hoddie/earn";
+import { earnRequestChange } from "@/lib/agent/changes";
 import { EarnOperationDialog } from "./earn-operation-dialog";
 import { PaymentDialog } from "./payment-dialog";
 import { SectionCard, SectionHeading, StatusPill } from "./primitives";
@@ -17,22 +19,24 @@ type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST"; sour
  * request opens the normal Hodd flow (fresh quote, confirmation, wallet signature).
  */
 export function AgentRequests() {
-  const { workspaceScope, workspace, assessment, operationalWorkspace, earnState, hydrated } = useTreasuryWorkspace();
+  const { workspaceScope, workspace, assessment, operationalWorkspace, earnState, hydrated, mode, readOnly } = useTreasuryWorkspace();
   const [requests, setRequests] = useState<AgentRequest[]>([]);
   const [error, setError] = useState("");
   const [loadedAt, setLoadedAt] = useState(0);
   const resolving = useRef(new Set<string>());
 
   const load = useCallback(async () => {
+    if (mode === "DEMO" || readOnly) return;
     const client = createSupabaseBrowserClient();
     if (!client) return;
     const { data: auth } = await client.auth.getUser();
     if (!auth.user) { setRequests([]); return; }
     const { data } = await client.from("agent_actions").select("id,kind,source,summary,change,created_at,expires_at").eq("user_id", auth.user.id).eq("scope", workspaceScope).eq("status", "OPEN").order("created_at", { ascending: false }).limit(20);
     setRequests((data ?? []) as AgentRequest[]); setLoadedAt(Date.now());
-  }, [workspaceScope]);
+  }, [workspaceScope, mode, readOnly]);
 
   const resolve = useCallback(async (id: string, status: "DONE" | "DISMISSED") => {
+    if (mode === "DEMO" || readOnly) return;
     if (resolving.current.has(id)) return;
     resolving.current.add(id);
     const client = createSupabaseBrowserClient();
@@ -40,7 +44,7 @@ export function AgentRequests() {
     resolving.current.delete(id);
     if (rpcError) setError("The request could not be updated. Reload and try again."); else setError("");
     await load();
-  }, [load]);
+  }, [load, mode, readOnly]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -60,11 +64,9 @@ export function AgentRequests() {
     return () => window.clearTimeout(timer);
   }, [requests, workspace.obligations, resolve]);
 
-  if (!requests.length) return null;
+  if (!requests.length || mode === "DEMO" || readOnly) return null;
   const portfolio = earnState.status === "READY" ? earnState.portfolio : null;
   const localExecution = portfolio ? isExecutionAvailable(portfolio.integration.execution) : false;
-  const morpho = operationalWorkspace?.strategies.find((strategy) => strategy.kind === "MORPHO");
-  const depositLimit = assessment && operationalWorkspace && morpho ? minMoney(assessment.deployableCapital, subtractMoneyFloor(multiplyBps(operationalWorkspace.totalTreasury, workspace.policy.strategyCapsBps.MORPHO), morpho.balance)) : null;
 
   return <SectionCard className="mt-6">
     <SectionHeading index="00" title="Agent requests" description="Reviewed requests · finish here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
@@ -77,11 +79,11 @@ export function AgentRequests() {
           action = obligation ? <PaymentDialog obligation={obligation} /> : <span className="text-xs text-white/60">Obligation not found in this workspace.</span>;
         }
         if (!expired && request.kind === "EARN_REQUEST") {
-          const operation = request.change.operation as "DEPOSIT" | "WITHDRAW" | "REDEEM_ALL";
-          const vault = portfolio?.vaults.find((item) => item.address.toLowerCase() === String(request.change.vaultAddress ?? "").toLowerCase()) ?? portfolio?.vaults[0];
-          const position = vault ? portfolio?.positions.find((item) => item.vaultAddress.toLowerCase() === vault.address.toLowerCase()) : undefined;
-          const limit = operation === "DEPOSIT" ? depositLimit : position?.liquidityStatus === "READY" ? position.redeemable : null;
-          action = vault && limit ? <EarnOperationDialog operation={operation} vault={vault} position={position} policyLimit={limit} enabled={localExecution} initialAmount={typeof request.change.amount === "string" ? request.change.amount : ""} onComplete={() => void resolve(request.id, "DONE")} /> : <span className="text-xs text-white/60">Waiting for live Morpho data…</span>;
+          try {
+            const change = earnRequestChange.parse(request.change) as EarnChange;
+            const plan = planEarn({ workspace, operationalWorkspace, assessment, portfolio }, change);
+            action = <EarnOperationDialog operation={plan.operation} vault={plan.vault} position={plan.position} policyLimit={plan.limit} enabled={localExecution} initialAmount={plan.amount ? moneyToInput(plan.amount) : ""} onComplete={() => void resolve(request.id, "DONE")} />;
+          } catch (cause) { action = <span role="status" className="text-xs text-white/60">{cause instanceof Error ? cause.message : "Waiting for live Morpho data…"}</span>; }
         }
         return <article key={request.id} className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
           <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#8fb0ff]" /><div>

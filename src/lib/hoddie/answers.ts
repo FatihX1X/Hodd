@@ -14,7 +14,7 @@ export type HoddieReply = Readonly<{
   paragraphs: readonly string[];
   facts?: readonly { label: string; value: string }[];
   status?: Readonly<{ label: string; tone: HoddieTone }>;
-  sources: readonly { label: string; href: string }[];
+  sources: readonly { label: string; href: "/" | "/obligations" | "/invest" | "/policy" | "/activity" }[];
   followUps: readonly string[];
 }>;
 export type HoddieContext = Readonly<{ question: string; workspace: TreasuryWorkspace; assessment: TreasuryAssessment | null; evaluatedAt: Date }>;
@@ -36,7 +36,7 @@ const src = {
 
 const shortDate = (iso: string) => formatDate(iso, { year: undefined, month: "short", day: "numeric" });
 const dayLabel = (ms: number) => shortDate(new Date(ms).toISOString());
-const words = (text: string) => text.toLowerCase().replace(/[^a-z0-9#\s]/g, " ").split(/\s+/).filter(Boolean);
+const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}#\s]/gu, " ").split(/\s+/).filter(Boolean);
 const has = (text: string, pattern: RegExp) => pattern.test(text);
 
 /** The obligation a question names, if any: every meaningful word of its title appears in the question. */
@@ -191,7 +191,7 @@ function helpAnswer(prefix = "I can answer questions about your treasury."): Hod
   };
 }
 
-export function answerQuestion(ctx: HoddieContext): HoddieReply {
+function answerEnglish(ctx: HoddieContext): HoddieReply {
   const question = ctx.question.trim().toLowerCase();
   if (!question) return helpAnswer();
   if (!ctx.assessment) return { paragraphs: ["Treasury figures are paused until the linked Arc Testnet balance is verified, so I cannot answer from stale data."], status: { label: "PAUSED", tone: "danger" }, sources: [src.overview], followUps: [] };
@@ -210,4 +210,76 @@ export function answerQuestion(ctx: HoddieContext): HoddieReply {
   if (has(question, /\b(balance|how much|total|treasury|cash|liquid|funds|money|worth|usdc)\b/)) return balanceAnswer(ctx);
   if (has(question, /^(hi|hello|hey|help|what can you|who are you)\b/)) return helpAnswer("Hi, I am Hoddie.");
   return helpAnswer("I did not catch that.");
+}
+
+export function questionLanguage(question: string): "en" | "tr" {
+  return /[çğıöşü]|\b(merhaba|nedir|diyor|hareket\w*|gecmis|bakiye\w*|nakit|ne kadar|fatura\w*|borc\w*|politika\w*|hesab\w*|ozet\w*|onay\w*|yatir\w*|cek|yarin|odeme\w*|ode|olustur\w*|degistir\w*)\b/i.test(question) ? "tr" : "en";
+}
+
+function normalizedQuestion(question: string): string {
+  return question.toLowerCase().replace(/[çğıöşü]/g, (letter) => ({ ç: "c", ğ: "g", ı: "i", ö: "o", ş: "s", ü: "u" })[letter]!)
+    .replace(/odeyebilir\w*|karsilayabilir\w*/g, "can I pay")
+    .replace(/ne kadar dayan\w*|kac gun|nakit omru/g, "how long")
+    .replace(/gecik\w*|vadesi gec\w*/g, "overdue")
+    .replace(/yatirilabilir|degerlendir\w*|dagilim|getiri|strateji\w*/g, "deployable")
+    .replace(/politika\w*|kural\w*|tampon|limit\w*/g, "policy")
+    .replace(/hareket\w*|gecmis|son islemler/g, "activity")
+    .replace(/fatura\w*|borc\w*|yukumluluk\w*|vade\w*/g, "obligations")
+    .replace(/bakiye\w*|hazine\w*|hesab\w*|ozet\w*|nakit|param|ne kadar/g, "treasury")
+    .replace(/merhaba|yardim/g, "help");
+}
+
+/** Only recognizable read questions skip interpretation. Commands, including polite
+ * requests and typed approvals, always stay behind the secure review pipeline. */
+export function canAnswerInstantly(question: string): boolean {
+  if (/\b(create|add|delete|remove|update|change|edit|set|transfer|send|deposit|withdraw|approve|execute|move|buy|sell|pay)\b|ekle|sil\b|guncelle|güncelle|degistir|değiştir|olustur|oluştur|yatir|yatır|çek|cek\b|onay|gonder|gönder/i.test(question)
+    && !/\b(can|could|afford|enough)\b.*\b(pay|cover|afford)\b|ödeyebilir|odeyebilir|karşılayabilir|karsilayabilir/i.test(question)) return false;
+  return /runway|forecast|projection|cash flow|how long|overdue|late|deployable|invest|yield|earn|allocation|strateg|morpho|apy|put to work|polic|rules|buffer|coverage|limits|caps|activity|history|recent|audit|due|bill|obligation|pay|afford|balance|how much|total|treasury|cash|liquid|funds|money|worth|usdc|summary|summarize|help|hello|^hi\b/.test(normalizedQuestion(question));
+}
+
+const trLabels: Record<string, string> = {
+  "Total treasury": "Toplam hazine", "Liquid USDC": "Likit USDC", "Protected capital": "Korunan sermaye", "Deployable capital": "Yatırılabilir sermaye",
+  "Amount": "Tutar", "Due": "Vade", "Available after reserves": "Rezervlerden sonra kullanılabilir", "Shortfall": "Eksik tutar",
+  "Today": "Bugün", "Safety buffer": "Güvenlik tamponu", "Morpho cap": "Morpho sınırı", "Morpho APY": "Morpho yıllık getirisi",
+  "Overview": "Genel bakış", "Obligations": "Yükümlülükler", "Strategies": "Stratejiler", "Policy": "Politika", "Activity": "Hareketler",
+  "PAUSED": "DURAKLATILDI", "SAFE": "UYGUN", "SHORTFALL": "EKSİK", "OVERDUE": "GECİKMİŞ", "ON TIME": "ZAMANINDA", "ATTENTION": "DİKKAT",
+  "ALL CHECKS PASS": "TÜM KONTROLLER UYGUN", "BELOW ZERO": "SIFIRIN ALTINDA", "BELOW BUFFER": "TAMPONUN ALTINDA", "ABOVE BUFFER": "TAMPONUN ÜZERİNDE",
+};
+
+/** Localized templates retain every amount and decision from the deterministic engine. */
+export function answerQuestion(ctx: HoddieContext): HoddieReply {
+  const normalized = normalizedQuestion(ctx.question);
+  const reply = answerEnglish({ ...ctx, question: normalized.replace(/summary|summarize/g, "treasury") });
+  if (questionLanguage(ctx.question) === "en") return reply;
+  let paragraphs: string[];
+  const { workspace, assessment } = ctx;
+  if (!assessment) paragraphs = ["Bağlı Arc Testnet bakiyesi doğrulanana kadar hazine hesapları duraklatıldı. Eski verilerle yanıt veremem."];
+  else if (!canAnswerInstantly(ctx.question)) paragraphs = ["Bu yanıt salt okunur. Değişiklik için oturum açıp yorumlama izni verin ve ayrı inceleme düğmesini kullanın. Para hareketi ayrıca güncel teklif ve cüzdan imzası gerektirir. Sohbete yazılan onay işlem başlatmaz."];
+  else if (reply.sources[0]?.href === "/policy") paragraphs = [
+    `${formatMoney(workspace.policy.safetyBuffer)} güvenlik tamponu korunur. Önümüzdeki ${workspace.policy.obligationHorizonDays} günün yükümlülükleri ayrılır. Asgari likidite karşılama oranı ${formatPercentFromBps(workspace.policy.minimumLiquidityCoverageBps)}.`,
+    `Morpho sınırı ${formatPercentFromBps(workspace.policy.strategyCapsBps.MORPHO)}; strateji ${workspace.policy.enabledStrategies.MORPHO ? "etkin" : "devre dışı"}.`,
+    reply.status?.tone === "danger" ? "Bazı politika kontrolleri dikkat gerektiriyor." : "Mevcut politika kontrolleri uygun.",
+  ];
+  else if (reply.sources[0]?.href === "/invest") paragraphs = [
+    `${formatMoney(assessment.deployableCapital)} yükümlülükler, güvenlik tamponu ve bekleyen işlemler korunduktan sonra yatırılabilir.`,
+    "İşlem otomatik yapılmaz. Stratejiler sayfasında güncel teklifi inceleyip kendi cüzdanınızla imzalayın.",
+  ];
+  else if (reply.sources[0]?.href === "/activity") paragraphs = [workspace.activities.length ? "Son kayıtlar aşağıda. Yerel denetim kayıtları zincir üzerinde ödeme kanıtı değildir." : "Henüz kayıtlı hareket yok."];
+  else if (/how long|runway|forecast|projection/.test(normalized)) {
+    const series = runwayProjection(workspace, ctx.evaluatedAt);
+    const below = series.points.find((point) => point.day === (series.firstBelowZeroDay ?? series.firstBelowBufferDay));
+    paragraphs = [below ? `Bakiye ${dayLabel(below.at)} tarihinde ${series.firstBelowZeroDay !== null ? "sıfırın" : "güvenlik tamponunun"} altına düşüyor.` : `Bakiye ${series.horizonDays} gün boyunca güvenlik tamponunun üzerinde kalıyor.`, "Bu öngörü mevcut bakiye ve planlanmış yükümlülükleri kullanır. Getiri ve yeni girişler içermez."];
+  } else if (reply.sources[0]?.href === "/obligations") {
+    if (/can I pay|afford/.test(normalized)) paragraphs = [reply.status?.tone === "success" ? "Evet. Önceki yükümlülükler ve güvenlik tamponu ayrıldıktan sonra ödeme karşılanıyor. Bu hesap son işlem ücretini içermez; ödeme için güncel teklif gerekir." : "Ödeme uygunluğu aşağıdaki hazine verilerine bağlıdır. Eksik tutarı ve vade bilgilerini inceleyin; ödeme için güncel teklif gerekir."];
+    else if (/overdue/.test(normalized)) paragraphs = [reply.status?.tone === "danger" ? "Vadesi geçmiş ve ödenmemiş yükümlülükler aşağıda." : "Gecikmiş yükümlülük yok."];
+    else paragraphs = [`Önümüzdeki ${workspace.policy.obligationHorizonDays} gün için korunan yükümlülükler: ${formatMoney(assessment.upcomingObligations)}.`, "Güncel vade ve tutarlar aşağıda."];
+  } else if (reply.facts?.some((fact) => fact.label === "Total treasury")) paragraphs = [`Hazinenizde ${formatMoney(workspace.totalTreasury)} var. Bunun ${formatMoney(workspace.liquidUsdc)} tutarı likit USDC.`];
+  else paragraphs = ["Merhaba, ben Hoddie. Faturalar, nakit ömrü, yatırılabilir sermaye ve hazine politikası hakkında sorabilirsiniz."];
+  return {
+    ...reply, paragraphs,
+    facts: reply.facts?.map((fact) => ({ label: trLabels[fact.label] ?? fact.label.replace(/^After (\d+) days$/, "$1 gün sonra"), value: fact.value === "Disabled" ? "Devre dışı" : fact.value })),
+    status: reply.status ? { ...reply.status, label: trLabels[reply.status.label] ?? reply.status.label } : undefined,
+    sources: reply.sources.map((source) => ({ ...source, label: trLabels[source.label] ?? source.label })),
+    followUps: ["Sonraki faturayı ödeyebilir miyim?", "Hesabımı özetle", "Politikam ne diyor?"],
+  };
 }
