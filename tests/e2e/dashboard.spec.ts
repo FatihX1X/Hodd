@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
 test.beforeEach(async ({ page }) => { await page.route("**/api/earn/portfolio*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(earnReadOnlyResponse) })); });
 
-const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/policy", "The rules behind every number."], ["/activity", "Every decision leaves a trace."], ["/connections", "Ask Hodd from Claude."]] as const;
+const routes = [["/", "Liquidity before yield."], ["/invest", "Deploy idle capital deliberately."], ["/obligations", "Know what is due."], ["/hoddie", "Ask Hoddie."], ["/policy", "The rules behind every number."], ["/activity", "Every decision leaves a trace."], ["/connections", "Ask Hodd from Claude."]] as const;
 for (const [route, heading] of routes) {
   test(`${route} renders without console errors or horizontal overflow`, async ({ page }) => {
     const errors: string[] = []; page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(route); await expect(page.getByRole("heading", { name: heading, level: 1 })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|policy values change|quotes and approvals|connector uses your hodd sign-in/i);
+    await expect(page.getByRole("note")).toContainText(/local demo workspace|changes persist|vault data is live|policy values change|hoddie reads your local|quotes and approvals|connector uses your hodd sign-in/i);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false); expect(errors).toEqual([]);
   });
 }
@@ -101,4 +101,16 @@ test("obligation detail follows the selected row and charts reveal values only o
   const plan = page.getByRole("complementary", { name: "Payment plan" }); await expect(plan).toContainText(/plan for october payroll/i);
   await page.getByRole("button", { name: "AWS infrastructure", exact: true }).click(); await expect(plan).toContainText(/plan for aws infrastructure/i);
   await expect(page.getByRole("status")).toHaveCount(0);
+});
+
+test("Hoddie answers from the workspace, never changes it and never names a model", async ({ page }) => {
+  await page.goto("/hoddie");
+  await page.getByRole("button", { name: "Can I pay the next bill?" }).click();
+  await expect(page.getByRole("log", { name: "Conversation" })).toContainText(/is covered/i, { timeout: 5000 });
+  await page.getByRole("textbox", { name: "Message Hoddie" }).fill("Send 500 USDC to the landlord"); await page.keyboard.press("Enter");
+  await expect(page.getByRole("log", { name: "Conversation" })).toContainText(/cannot change it or move funds/i, { timeout: 5000 });
+  expect(await page.locator("body").innerText()).not.toMatch(/gemini|nvidia|gpt|llama|openai/i);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+  await page.reload(); await expect(page.getByRole("log", { name: "Conversation" })).toContainText(/is covered/i);
+  await page.getByRole("button", { name: /new chat/i }).click(); await expect(page.getByText("Ask about your treasury.")).toBeVisible();
 });
