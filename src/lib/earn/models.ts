@@ -76,7 +76,7 @@ export const earnExecutionResultSchema = z.object({
 export const earnIntegrationStatusSchema = z.object({
   discovery: z.enum(["READY", "UNAVAILABLE"]),
   positionAccess: z.enum(["READY", "NOT_CONFIGURED", "ADDRESS_MISMATCH", "UNAVAILABLE"]),
-  execution: z.enum(["LOCAL_ENABLED", "READ_ONLY", "PRODUCTION_DISABLED"]),
+  execution: z.enum(["TESTNET_LIVE", "LOCAL_ENABLED", "READ_ONLY", "PRODUCTION_DISABLED", "PAUSED"]),
   configuredWalletAddress: arcAddressSchema.nullable(),
   message: z.string(),
 });
@@ -102,11 +102,11 @@ export const earnExecuteRequestSchema = z.object({ workspaceScope: z.enum(["TREA
 export const earnExecuteApiSchema = z.union([z.object({ status: z.literal("READY"), result: earnExecutionResultSchema }), earnErrorResponseSchema]);
 export const earnJobSchema = z.object({
   status: z.literal("PENDING"), executionId: z.string().uuid(),
-  state: z.enum(["AWAITING_SIGNATURE", "SUBMITTED", "COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"]),
+  state: z.enum(["PREPARING", "AWAITING_SIGNATURE", "SUBMITTED", "COMPLETE", "PARTIAL", "FAILED", "UNKNOWN"]),
   events: z.array(z.object({ stage: z.string(), hash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional() })),
-  pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).optional(), challengeId: z.string().optional() }).nullable(),
+  pending: z.object({ id: z.string().uuid(), stage: z.enum(["APPROVAL", "EARN"]), calls: z.array(z.object({ to: arcAddressSchema.transform((value) => value as `0x${string}`), data: z.string().regex(/^0x[\da-fA-F]*$/).transform((value) => value as `0x${string}`).optional(), value: z.string().regex(/^\d+$/).optional() })), gasBudgetWei: z.string().regex(/^\d+$/), gasCeiling: z.object({ gasLimit: z.string().regex(/^\d+$/), gasPriceWei: z.string().regex(/^\d+$/) }).optional(), challengeId: z.string().optional(), expiresAt: z.string().datetime().optional() }).nullable(),
   result: earnExecutionResultSchema.nullable(),
-  failure: z.object({ code: z.string().regex(/^[A-Z_]+$/), stage: z.enum(["ADAPTER_SETUP", "EARN_SDK", "SIGNING_PREPARATION", "CHALLENGE_PREPARATION", "CHALLENGE_CREATION", "RECEIPT_VERIFICATION"]), providerCode: z.string().regex(/^\d{6}$/).optional() }).nullable().optional(),
+  failure: z.object({ code: z.string().regex(/^[A-Z_]+$/), stage: z.enum(["ADAPTER_SETUP", "EARN_SDK", "SIGNING_PREPARATION", "CHALLENGE_PREPARATION", "CHALLENGE_CREATION", "RECEIPT_VERIFICATION", "CAPTURE", "RECOVERY"]), providerCode: z.string().regex(/^\d{6}$/).optional() }).nullable().optional(),
 });
 export const earnJobApiSchema = z.union([earnJobSchema, earnErrorResponseSchema]);
 

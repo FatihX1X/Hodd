@@ -7,7 +7,7 @@ import { modularReadTransport } from "./modular-read-transport";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { WalletCall } from "./runtime";
 import { sponsoredUserOperationSchema, walletFeeQuoteSchema } from "./fee-quote";
-import { digest } from "@/lib/earn/durable-quotes";
+import { digest } from "@/lib/earn/digest";
 
 export async function modularReadClient(wallet: WalletConnection) {
   const clientKey = process.env.NEXT_PUBLIC_CLIENT_KEY?.trim();

@@ -1,170 +1,162 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
-import type { PaymentRecord } from "./models";
-import type { PaymentContext } from "./server";
+import { fakeSupabase } from "@/test/fake-supabase";
 
-const fake = vi.hoisted(() => ({ records: new Map<string, PaymentRecord>(), leases: new Set<string>(), current: null as unknown, policy: vi.fn(), proof: vi.fn(), revert: vi.fn(), receipt: vi.fn(), transaction: vi.fn(), readiness: vi.fn(), fee: vi.fn(), circleCreate: vi.fn(), circleAdapter: vi.fn(), authorize: undefined as (() => void) | undefined, cancelFails: false, claimed: false }));
+const wallet = "0x00000000000000000000000000000000000000aa";
+const recipient = "0x00000000000000000000000000000000000000bb";
+const usdc = (minorUnits: string) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits });
+const fake = vi.hoisted(() => ({
+  db: null as unknown as ReturnType<typeof import("@/test/fake-supabase").fakeSupabase>,
+  receipts: new Map<string, { status: "success" | "reverted"; blockNumber: bigint; gasUsed: bigint; effectiveGasPrice: bigint }>(),
+  transactions: new Map<string, { from: string; to: string; input: string; value: bigint }>(),
+  nonce: { latest: 4, pending: 4 }, claimError: null as string | null, policy: vi.fn(), finish: vi.fn(),
+}));
 vi.mock("server-only", () => ({}));
-vi.mock("node:fs/promises", async (importOriginal) => ({ ...(await importOriginal<typeof import("node:fs/promises")>()), mkdir: vi.fn(), unlink: vi.fn(async (path: string) => fake.leases.delete(path)), writeFile: vi.fn(async (path: string) => { if (fake.leases.has(path)) throw new Error("exists"); fake.leases.add(path); }) }));
-vi.mock("@/lib/earn/durable-quotes", () => ({ digest: (value: unknown) => typeof value === "string" ? value : JSON.stringify(value) }));
-vi.mock("@/lib/earn/server-context", () => ({ earnServerContext: vi.fn(async () => { if (!fake.current) throw new Error("expired"); return fake.current; }) }));
-vi.mock("./policy", () => ({ assessPayment: fake.policy }));
-vi.mock("./receipts", () => ({ verifyPaymentReceipt: fake.proof, verifyPaymentRevert: fake.revert }));
-vi.mock("./fees", () => ({ quotePaymentFees: fake.fee }));
-vi.mock("@/lib/earn/provider-evidence", () => ({ hasVerifiedEarnProvider: fake.readiness }));
-vi.mock("@/lib/circle/user-wallet-server", () => ({ circleUserWalletClient: () => ({ createUserTransactionContractExecutionChallenge: fake.circleCreate }) }));
-vi.mock("@circle-fin/adapter-circle-wallets/ucw/server", () => ({ createCircleUserWalletAdapter: fake.circleAdapter }));
-vi.mock("./user-operation", () => ({ verifyPaymentUserOperation: vi.fn(async () => ({ success: true })), resolvePaymentUserOperation: vi.fn() }));
-vi.mock("@circle-fin/adapter-viem-v2/next", () => ({ createViemAdapter: (input: unknown) => input, externalSigning: (input: unknown) => input }));
-vi.mock("@/lib/earn/gateway", () => ({ arcClient: { getChainId: vi.fn(async () => 5042002), waitForTransactionReceipt: fake.receipt, getTransaction: fake.transaction }, earnKit: { send: async ({ from }: { from: { adapter: { signing: { sign: (payload: object) => Promise<{ txHash: string }> } } } }) => ({ state: "success", ...(await from.adapter.signing.sign({ chain: { chainId: 5042002 }, fromAddress: "0x0000000000000000000000000000000000000001", calls: [{ to: "0x3600000000000000000000000000000000000000", data: "0x1234", value: 0n }] })) }) } }));
-vi.mock("./server", () => ({ transferCall: () => ({ to: "0x3600000000000000000000000000000000000000", data: "0x1234", value: "0" }), readPayment: async (context: PaymentContext, id: string) => {
-  const record = fake.records.get(id);
-  if (!record || context.binding !== "alice") throw new Error("unavailable");
-  return { record, row: { policy_digest: "policy" } };
-}, freshPaymentWorkspace: async () => {
-  const workspace = structuredClone(initialWorkspace); workspace.obligations[0].revision = 1;
-  if (fake.claimed) { const record = [...fake.records.values()].find((item) => item.state === "AWAITING_SIGNATURE")!; workspace.paymentReservations = [{ proposalId: record.id, obligationId: record.proposal.obligationId, amount: record.proposal.amount, feeReserve: record.proposal.feeReserve }]; workspace.pendingTransactions = usdc((BigInt(record.proposal.amount.minorUnits) + BigInt(record.proposal.feeReserve.minorUnits)).toString()); }
-  return workspace;
-} }));
-vi.mock("./admin", () => ({ paymentAdmin: () => ({ rpc: async (name: string, params: Record<string, string>) => {
-  const record = fake.records.get(params.p_id)!;
-  if (name === "hodd_cancel_payment" && fake.cancelFails) return { error: {} };
-  if (name === "hodd_claim_payment") {
-    if (record.state !== "REVIEW_REQUIRED") return { error: {} };
-    record.state = "AWAITING_SIGNATURE"; fake.claimed = true;
-  } else if (name === "hodd_finish_payment") { record.state = "CONFIRMED"; record.txHash = params.p_hash; }
-  else record.state = "FAILED";
-  return { error: null };
-}, from: () => ({ update: (values: Partial<PaymentRecord> & { tx_hash?: string; user_operation_hash?: string }) => {
-  let id = "";
-  const query = { eq: (key: string, value: string) => { if (key === "id") id = value; return query; }, in: () => query, is: () => query, then: (resolve: (value: object) => void) => { const record = fake.records.get(id)!; Object.assign(record, values, values.tx_hash ? { txHash: values.tx_hash } : {}, values.user_operation_hash ? { userOperationHash: values.user_operation_hash } : {}); resolve({ error: null }); } };
-  return query;
-} }) }) }));
-import { inspectPayment, replyPayment, startPayment, recheckPayment, claimTestSignerPayment } from "./jobs";
-import { ARC_GAS_STATION_PAYMASTER } from "@/lib/wallet/fee-quote";
-const hash = `0x${"1".repeat(64)}`;
-const context = { binding: "alice", policyDigest: "policy", scope: "TREASURY", userId: "alice", wallet: { provider: "INJECTED_METAMASK", accountType: "EOA", address: "0x0000000000000000000000000000000000000001" } } as PaymentContext;
-const fee = () => { const now = Date.now(); return { provider: context.wallet.provider as "INJECTED_METAMASK", walletAddress: context.wallet.address, chainId: 5042002 as const, source: "ARC_EOA" as const, operationDigest: JSON.stringify({ to: "0x3600000000000000000000000000000000000000", data: "0x1234", value: "0" }), observedAt: new Date(now).toISOString(), expiresAt: new Date(now+300000).toISOString(), sponsorship: "NOT_ASSUMED" as const, gasLimit: "50000", maxFeePerGasWei: "20000000000", priorityFeePerGasWei: "0", maxNativeFeeWei: "1000000000000000", maxWalletDebit: { currency: "USDC" as const, decimals: 6 as const, minorUnits: "1000" } }; };
-function record() {
-  const id = randomUUID();
-  fake.records.set(id, { id, state: "REVIEW_REQUIRED", txHash: null, userOperationHash: null, receipt: null, proposal: { id, obligationId: "obl-payroll-oct", obligationRevision: 1, wallet: context.wallet, amount: usdc("4000000000"), feeReserve: usdc("1000"), feeQuote: fee(), gasBudgetWei: "1000000000000000", expiresAt: new Date(Date.now()+300000).toISOString(), executionEnabled: true, executionReason: "Verified", startBlock: "10" } } as PaymentRecord);
-  return id;
+vi.mock("./admin", () => ({ paymentAdmin: () => fake.db }));
+vi.mock("@/lib/execution/live-readiness", () => ({ assertLiveReady: vi.fn(async () => undefined), assertLiveAmount: vi.fn() }));
+vi.mock("@/lib/earn/server-context", () => ({ earnServerContext: vi.fn(async () => current), assertEarnContextCurrent: vi.fn(async () => undefined) }));
+vi.mock("./policy", () => ({ assessPayment: fake.policy, paymentRecipient: (value: string) => value }));
+vi.mock("./fees", () => ({ quotePaymentFees: vi.fn(async () => ({ gasLimit: "50000", maxFeePerGasWei: "20000000000", priorityFeePerGasWei: "0" })) }));
+vi.mock("@/lib/wallet/fee-quote", async (original) => ({ ...(await original<typeof import("@/lib/wallet/fee-quote")>()), assertFeeBinding: vi.fn((quote: unknown) => quote) }));
+vi.mock("./receipts", () => ({ verifyPaymentReceipt: vi.fn(() => ({ blockNumber: "101", logIndex: 0, networkFee: usdc("1") })), verifyPaymentRevert: vi.fn(() => ({ status: "REVERTED" })) }));
+vi.mock("./user-operation", () => ({ verifyPaymentUserOperation: vi.fn(), resolvePaymentUserOperation: vi.fn() }));
+vi.mock("@/lib/wallet/modular-server", () => ({ modularReadClient: vi.fn() }));
+vi.mock("@/lib/circle/user-wallet-server", () => ({ circleUserWalletClient: () => null }));
+vi.mock("@/lib/earn/gateway", () => ({
+  arcClient: {
+    getChainId: vi.fn(async () => 5042002),
+    getTransactionCount: vi.fn(async ({ blockTag }: { blockTag: "latest" | "pending" }) => fake.nonce[blockTag]),
+    getTransactionReceipt: vi.fn(async ({ hash }: { hash: string }) => { const receipt = fake.receipts.get(hash); if (!receipt) throw new Error("not found"); return receipt; }),
+    getTransaction: vi.fn(async ({ hash }: { hash: string }) => fake.transactions.get(hash)),
+  },
+  discoverAllowedVaults: vi.fn(), getEarnPosition: vi.fn(),
+}));
+vi.mock("./server", async (original) => ({ ...(await original<typeof import("./server")>()), freshPaymentWorkspace: vi.fn(async () => {
+  const proposal = fake.db.tables.payment_proposals.find((row) => row.state === "AWAITING_SIGNATURE" || row.state === "REVIEW_REQUIRED") as { id: string; proposal: { amount: object; feeReserve: object } } | undefined;
+  return { obligations: [{ id: "bill", revision: 1 }], pendingTransactions: usdc("0"), paymentReservations: proposal ? [{ proposalId: proposal.id, obligationId: "bill", amount: usdc("0"), feeReserve: usdc("0") }] : [] };
+}) }));
+
+import { advancePayment, claimTestSignerPayment, inspectPayment, recoverPayment, replyPayment, startPayment } from "./jobs";
+import { transferCall } from "./server";
+
+let current: Record<string, unknown>;
+const hash = (digit: string) => `0x${digit.repeat(64)}`;
+const connection = (provider = "INJECTED_METAMASK") => ({ provider, custody: "USER_CONTROLLED", accountType: provider === "CIRCLE_USER_CONTROLLED" ? "SCA" : "EOA", ...(provider === "CIRCLE_USER_CONTROLLED" ? { walletId: "w1" } : {}), chain: "ARC-TESTNET", chainId: 5042002, address: wallet, label: "MetaMask", connectedAt: "2026-10-09T00:00:00.000Z" });
+
+function setup(provider?: string, expiresInMs = 300_000) {
+  const id = randomUUID(); const userId = randomUUID();
+  const proposal = { id, obligationId: "bill", obligationRevision: 1, scope: "TREASURY", wallet: connection(provider), recipientAddress: recipient, recipientLabel: "Vendor", amount: usdc("100000"), feeReserve: usdc("1000"), balanceAfter: usdc("1"), gasBudgetWei: "1000000000000000",
+    feeQuote: { provider: provider ?? "INJECTED_METAMASK", walletAddress: wallet, chainId: 5042002, operationDigest: "digest", observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 299_000).toISOString(), sponsorship: "NOT_ASSUMED", gasLimit: "50000", maxFeePerGasWei: "20000000000", priorityFeePerGasWei: "0", maxNativeFeeWei: "1000000000000000", maxWalletDebit: usdc("1000"), source: provider === "CIRCLE_USER_CONTROLLED" ? "CIRCLE_UCW" : "ARC_EOA" },
+    policy: { status: "PASS", label: "Policy", reason: "ok" }, expiresAt: new Date(Date.now() + expiresInMs).toISOString(), startBlock: "100", executionEnabled: true, executionReason: "ok" };
+  fake.db = fakeSupabase({ payment_proposals: [{ id, user_id: userId, scope: "TREASURY", binding: "binding-a", policy_digest: "policy-a", state: "REVIEW_REQUIRED", proposal, tx_hash: null, user_operation_hash: null, receipt: null, pending: null }] }, (name, params, tables) => {
+    const row = tables.payment_proposals.find((item) => item.id === params.p_id)!;
+    if (name === "hodd_claim_payment") {
+      if (fake.claimError) return { data: null, error: { message: fake.claimError } };
+      if (row.state !== "REVIEW_REQUIRED") return { data: null, error: { message: "proposal not executable" } };
+      row.state = "AWAITING_SIGNATURE"; return { data: null, error: null };
+    }
+    if (name === "hodd_cancel_payment") { if (row.tx_hash || !["REVIEW_REQUIRED", "AWAITING_SIGNATURE"].includes(row.state as string)) return { data: null, error: { message: "cannot release" } }; row.state = params.p_state; return { data: null, error: null }; }
+    if (name === "hodd_finish_payment") { fake.finish(params); row.state = "CONFIRMED"; row.tx_hash = params.p_hash; row.receipt = params.p_receipt; return { data: null, error: null }; }
+    if (name === "hodd_fail_payment_receipt") { row.state = "FAILED"; return { data: null, error: null }; }
+    if (name === "hodd_release_unsubmitted_payment") { if ((row.proposal as { expiresAt: string }).expiresAt > new Date().toISOString()) return { data: null, error: { message: "cannot release" } }; row.state = "EXPIRED"; row.release_proof = params.p_proof; return { data: null, error: null }; }
+    return { data: null, error: { message: "unknown" } };
+  });
+  current = { userId, scope: "TREASURY", binding: "binding-a", policyDigest: "policy-a", wallet: connection(provider), client: fake.db, userToken: null };
+  return { id, ctx: current as never };
 }
-async function pending(id: string) { await vi.waitFor(async () => expect((await inspectPayment(context, id)).pending).not.toBeNull()); return (await inspectPayment(context, id)).pending!; }
-beforeEach(() => { vi.clearAllMocks(); fake.records.clear(); fake.leases.clear(); fake.claimed = false; fake.cancelFails = false; fake.current = context; fake.readiness.mockResolvedValue(true); fake.fee.mockImplementation(async () => fee()); fake.policy.mockReturnValue({ status: "PASS" }); fake.proof.mockReturnValue({}); fake.revert.mockReturnValue({ status: "REVERTED" }); fake.receipt.mockResolvedValue({ status: "success" }); fake.transaction.mockResolvedValue({ from: context.wallet.address, to: "0x3600000000000000000000000000000000000000", input: "0x1234", value: 0n }); });
-describe("payment signing orchestration", () => {
-  it("claims once, waits for separate signing, verifies evidence and finalizes the server ledger", async () => {
-    const id = record(); await startPayment(context, id); const request = await pending(id);
-    await expect(startPayment(context, id)).rejects.toThrow("fresh");
-    await replyPayment(context, id, { requestId: request.id, txHash: hash });
-    await vi.waitFor(async () => expect((await inspectPayment(context, id)).record.state).toBe("CONFIRMED"));
-    expect(fake.proof).toHaveBeenCalled(); await vi.waitFor(() => expect(fake.leases.size).toBe(0));
-    await expect(replyPayment(context, id, { requestId: request.id, txHash: hash })).rejects.toThrow("already answered");
+const call = () => transferCall({ recipientAddress: recipient, amount: usdc("100000") });
+function mine(txHash: string, status: "success" | "reverted" = "success", input = call().data) {
+  fake.receipts.set(txHash, { status, blockNumber: 101n, gasUsed: 30_000n, effectiveGasPrice: 20_000_000_000n });
+  fake.transactions.set(txHash, { from: wallet, to: call().to, input, value: 0n });
+}
+const state = (id: string) => fake.db.tables.payment_proposals.find((row) => row.id === id)!.state;
+
+beforeEach(() => { vi.clearAllMocks(); fake.receipts.clear(); fake.transactions.clear(); fake.nonce = { latest: 4, pending: 4 }; fake.claimError = null; fake.policy.mockReturnValue({ status: "PASS" }); });
+
+describe("stateless payment execution", () => {
+  it("claims, exposes the exact transfer, and confirms only after a verified receipt", async () => {
+    const { id, ctx } = setup();
+    const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    expect(started.record.state).toBe("AWAITING_SIGNATURE");
+    expect(started.pending).toMatchObject({ calls: [call()], gasBudgetWei: "1000000000000000" });
+    expect(fake.db.tables.payment_proposals[0].pending).toMatchObject({ nonce: "4" });
+    mine(hash("1"));
+    const done = await replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("1") });
+    expect(done.record.state).toBe("CONFIRMED"); expect(fake.finish).toHaveBeenCalledTimes(1);
   });
-  it("lets the dev test signer claim only this session's exact pending transfer and fee quote, once", async () => {
-    const id = record(); await startPayment(context, id); const request = await pending(id);
-    const call = request.calls[0];
-    expect(() => claimTestSignerPayment("bob", [call])).toThrow("No matching");
-    expect(() => claimTestSignerPayment(context.binding, [{ ...call, data: "0xdeadbeef" }])).toThrow("No matching");
-    expect(() => claimTestSignerPayment(context.binding, [{ ...call, value: "1" }])).toThrow("No matching");
-    expect(claimTestSignerPayment(context.binding, [call])).toEqual({ call, feeQuote: fake.records.get(id)!.proposal.feeQuote });
-    expect(() => claimTestSignerPayment(context.binding, [call])).toThrow("No matching");
-    await replyPayment(context, id, { requestId: request.id, cancelled: true });
-    await vi.waitFor(async () => expect((await inspectPayment(context, id)).record.state).toBe("UNKNOWN"));
+
+  it("stays SUBMITTED until mined, then confirms on status", async () => {
+    const { id, ctx } = setup(); const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    expect((await replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("2") })).record.state).toBe("SUBMITTED");
+    mine(hash("2"));
+    expect((await advancePayment(ctx, id)).record.state).toBe("CONFIRMED");
   });
-  it.each([[false, "FAILED", 0], [true, "UNKNOWN", 1]] as const)("treats a test signer request the server never signed as FAILED (claimed=%s -> %s)", async (claimed, state, leases) => {
-    // The dev TEST_SIGNER key is held by this server, so an unclaimed request was provably never signed.
-    const signer = { ...context, wallet: { ...context.wallet, provider: "TEST_SIGNER" } } as PaymentContext; fake.current = signer;
-    const testFee = () => ({ ...fee(), provider: "TEST_SIGNER" as const });
-    fake.fee.mockImplementation(async () => testFee());
-    const id = record(); Object.assign(fake.records.get(id)!.proposal, { wallet: signer.wallet, feeQuote: testFee() });
-    await startPayment(signer, id); const request = await pending(id);
-    if (claimed) claimTestSignerPayment(signer.binding, request.calls);
-    await replyPayment(signer, id, { requestId: request.id, cancelled: true });
-    await vi.waitFor(async () => expect((await inspectPayment(signer, id)).record.state).toBe(state));
-    await vi.waitFor(() => expect(fake.leases.size).toBe(leases));
+
+  it("answers each signature request once and never re-exposes it", async () => {
+    const { id, ctx } = setup(); const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    await replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("3") });
+    await expect(replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("4") })).rejects.toMatchObject({ code: "REQUEST_ALREADY_ANSWERED" });
+    expect((await inspectPayment(ctx, id)).pending).toBeNull();
   });
-  it("keeps uncertain signing locked and rejects a parallel Earn/payment wallet lease", async () => {
-    const id = record(); await startPayment(context, id); const request = await pending(id);
-    await expect(startPayment(context, record())).rejects.toThrow("Another Earn");
-    await replyPayment(context, id, { requestId: request.id, cancelled: true });
-    await vi.waitFor(async () => expect((await inspectPayment(context, id)).record.state).toBe("UNKNOWN"));
-    expect(fake.leases.size).toBe(1);
-    await expect(inspectPayment({ ...context, binding: "bob" }, id)).rejects.toThrow("unavailable");
+
+  it("releases a wallet-rejected request and holds an uncertain one", async () => {
+    const a = setup(); const first = await startPayment(a.ctx, "LOCAL_ENABLED", a.id);
+    await replyPayment(a.ctx, a.id, { requestId: first.pending!.id, cancelled: true });
+    expect(state(a.id)).toBe("FAILED");
+    const b = setup(); const second = await startPayment(b.ctx, "LOCAL_ENABLED", b.id);
+    await replyPayment(b.ctx, b.id, { requestId: second.pending!.id, cancelled: true, uncertain: true });
+    expect(state(b.id)).toBe("UNKNOWN");
   });
-  it("does not consume an unverified provider or a changed policy", async () => {
-    const id = record(); fake.records.get(id)!.proposal.executionEnabled = false;
-    await expect(startPayment(context, id)).rejects.toThrow("Verified");
-    fake.records.get(id)!.proposal.executionEnabled = true; fake.policy.mockReturnValue({ status: "BLOCKED" });
-    await expect(startPayment(context, id)).rejects.toThrow("Fresh policy");
-    expect(fake.leases.size).toBe(0);
+
+  it("lets the dev test signer claim its exact request once", async () => {
+    const { id, ctx } = setup("TEST_SIGNER"); const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    await expect(claimTestSignerPayment("binding-a", [call()])).resolves.toMatchObject({ call: call() });
+    await expect(claimTestSignerPayment("binding-a", [call()])).rejects.toMatchObject({ code: "TEST_SIGNER_REQUEST_NOT_FOUND" });
+    await replyPayment(ctx, id, { requestId: started.pending!.id, cancelled: true, uncertain: true });
+    expect(state(id)).toBe("UNKNOWN");
   });
-  it("rejects stale, mismatched, higher fee and missing receipt readiness before claim", async () => {
-    const id = record(); const proposal = fake.records.get(id)!.proposal;
-    fake.readiness.mockResolvedValue(false);
-    await expect(startPayment(context, id)).rejects.toThrow("Verified");
-    fake.readiness.mockResolvedValue(true);
-    proposal.feeQuote!.expiresAt = new Date(Date.now()-1).toISOString();
-    await expect(startPayment(context, id)).rejects.toThrow("FEE_QUOTE_NOT_AVAILABLE");
-    proposal.feeQuote = fee(); proposal.feeReserve = { currency: "USDC", decimals: 6, minorUnits: "1" };
-    await expect(startPayment(context, id)).rejects.toThrow("FEE_RESERVE_MISMATCH");
-    proposal.feeReserve = fee().maxWalletDebit; fake.fee.mockResolvedValue({ ...fee(), gasLimit: "50001" });
-    await expect(startPayment(context, id)).rejects.toThrow("FRESH_FEE_EXCEEDS_QUOTE");
-    expect(fake.leases.size).toBe(0);
+
+  it("treats an unclaimed test-signer request as never signed", async () => {
+    const { id, ctx } = setup("TEST_SIGNER"); const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    await replyPayment(ctx, id, { requestId: started.pending!.id, cancelled: true, uncertain: true });
+    expect(state(id)).toBe("FAILED");
   });
-  it("retains the lease when pre-signing cancellation cannot update the ledger", async () => {
-    const id = record(); fake.current = null; fake.cancelFails = true;
-    await expect(startPayment(context, id)).rejects.toThrow("CLAIMED_SESSION_UNAVAILABLE");
-    expect(fake.leases.size).toBe(1);
+
+  it("never auto-releases an expired request, and releases it only with a nonce proof and acknowledgement", async () => {
+    const { id, ctx } = setup(undefined, 5_000); await startPayment(ctx, "LOCAL_ENABLED", id);
+    const row = fake.db.tables.payment_proposals[0];
+    (row.pending as { expiresAt: string }).expiresAt = new Date(Date.now() - 120_000).toISOString();
+    (row.proposal as { expiresAt: string }).expiresAt = new Date(Date.now() - 120_000).toISOString();
+    expect((await advancePayment(ctx, id)).record.state).toBe("UNKNOWN");
+    await expect(recoverPayment(ctx, id, false)).rejects.toMatchObject({ code: "RECOVERY_NOT_PROVEN" });
+    fake.nonce = { latest: 4, pending: 5 };
+    await expect(recoverPayment(ctx, id, true)).rejects.toMatchObject({ code: "RECOVERY_NOT_PROVEN" });
+    fake.nonce = { latest: 4, pending: 4 };
+    expect((await recoverPayment(ctx, id, true)).record.state).toBe("EXPIRED");
   });
-  it("releases a verified reverted EOA payment without confirming payment", async () => {
-    const id = record(); fake.records.get(id)!.state = "UNKNOWN";
-    fake.receipt.mockResolvedValue({ status: "reverted" });
-    const recovered = await recheckPayment(context, id, hash);
-    expect(recovered.record.state).toBe("FAILED"); expect(fake.revert).toHaveBeenCalled(); expect(fake.proof).not.toHaveBeenCalled();
+
+  it("reports a busy wallet without leaving a claim", async () => {
+    const { id, ctx } = setup(); fake.claimError = "wallet busy";
+    await expect(startPayment(ctx, "LOCAL_ENABLED", id)).rejects.toMatchObject({ code: "WALLET_BUSY" });
+    expect(state(id)).toBe("REVIEW_REQUIRED");
   });
-  it("cannot recover a hash with a different sender, payload or previously bound hash", async () => {
-    const id = record(); const value = fake.records.get(id)!; value.state = "UNKNOWN";
-    fake.transaction.mockResolvedValue({ from: "0x0000000000000000000000000000000000000002" });
-    await expect(recheckPayment(context, id, hash)).rejects.toThrow("PAYMENT_TRANSACTION_MISMATCH");
-    value.txHash = hash;
-    await expect(recheckPayment(context, id, `0x${"2".repeat(64)}`)).rejects.toThrow("different submitted hash");
+
+  it("releases the claim when the signing request cannot be prepared", async () => {
+    const { id, ctx } = setup("CIRCLE_USER_CONTROLLED");
+    await expect(startPayment(ctx, "LOCAL_ENABLED", id)).rejects.toMatchObject({ code: "PAYMENT_PREPARATION_FAILED" });
+    expect(state(id)).toBe("FAILED");
   });
-  it("caps PIN execution, separates PIN acknowledgement from Circle submission and verifies the receipt", async () => {
-    const id = record(); const ctx = { ...context, userToken: "mock-circle-session", wallet: { ...context.wallet, walletId: "circle-id", provider: "CIRCLE_USER_CONTROLLED" as const, accountType: "SCA" as const } };
-    const proposal = fake.records.get(id)!.proposal; proposal.wallet = ctx.wallet; proposal.feeQuote = { ...fee(), provider: "CIRCLE_USER_CONTROLLED", source: "CIRCLE_UCW" };
-    fake.fee.mockResolvedValue(proposal.feeQuote); fake.current = ctx;
-    fake.circleCreate.mockResolvedValue({ data: { challengeId: "mock-challenge" } });
-    fake.circleAdapter.mockImplementation(async (options) => ({ signing: { sign: async () => {
-      await options.client.createUserTransactionContractExecutionChallenge({ walletId: ctx.wallet.walletId, contractAddress: "0x3600000000000000000000000000000000000000", callData: "0x1234", fee: { type: "level", config: { feeLevel: "MEDIUM" } } });
-      options.onChallenge({ challengeId: "mock-challenge" });
-      await new Promise<void>((resolve) => { fake.authorize = resolve; });
-      options.onProgress({ stage: "transaction", status: "CONFIRMED", txHash: hash, transactionId: "circle-transaction-id" });
-      return { txHash: hash };
-    } } }));
-    await startPayment(ctx, id); const request = await pending(id);
-    expect(request.challengeId).toBe("mock-challenge"); expect(request.calls).toEqual([]);
-    expect(fake.circleCreate).toHaveBeenCalledWith(expect.objectContaining({ fee: { type: "absolute", config: { gasLimit: "50000", maxFee: "20", priorityFee: "0" } } }));
-    await expect(replyPayment(ctx, id, { requestId: request.id, txHash: hash })).rejects.toThrow("PIN replies");
-    const ack = await replyPayment(ctx, id, { requestId: request.id, challengeApproved: true }); expect(ack.record.state).toBe("AWAITING_SIGNATURE"); expect(ack.pending).toBeNull();
-    fake.authorize!();
-    await vi.waitFor(async () => expect((await inspectPayment(ctx, id)).record.state).toBe("CONFIRMED"));
-    expect(fake.proof).toHaveBeenCalled(); expect(fake.transaction).not.toHaveBeenCalled();
+
+  it("holds a mined transaction that is not this transfer", async () => {
+    const { id, ctx } = setup(); const started = await startPayment(ctx, "LOCAL_ENABLED", id);
+    mine(hash("5"), "success", "0xdeadbeef");
+    expect((await replyPayment(ctx, id, { requestId: started.pending!.id, txHash: hash("5") })).record.state).toBe("UNKNOWN");
+    expect(fake.finish).not.toHaveBeenCalled();
   });
-  it("persists a passkey UserOperation once, independently of the later transaction hash", async () => {
-    const id = record(); const ctx = { ...context, wallet: { ...context.wallet, provider: "CIRCLE_MODULAR" as const, accountType: "MSCA" as const } };
-    const proposal = fake.records.get(id)!.proposal; proposal.wallet = ctx.wallet;
-    proposal.feeReserve = { currency: "USDC", decimals: 6, minorUnits: "0" };
-    proposal.feeQuote = { ...fee(), provider: "CIRCLE_MODULAR", source: "CIRCLE_MSCA", sponsorship: "VERIFIED", maxWalletDebit: proposal.feeReserve, userOperation: { sender: ctx.wallet.address, nonce: "0", callData: "0x1234", callGasLimit: "10000", verificationGasLimit: "10000", preVerificationGas: "10000", maxFeePerGas: "20000000000", maxPriorityFeePerGas: "0", paymaster: ARC_GAS_STATION_PAYMASTER, paymasterData: "0xabcd", paymasterVerificationGasLimit: "10000", paymasterPostOpGasLimit: "10000" } };
-    fake.fee.mockResolvedValue(proposal.feeQuote); fake.current = ctx;
-    await startPayment(ctx, id); const request = await pending(id);
-    await replyPayment(ctx, id, { requestId: request.id, userOperationHash: hash });
-    expect((await inspectPayment(ctx, id)).record.userOperationHash).toBe(hash);
-    expect((await inspectPayment(ctx, id)).record.state).toBe("AWAITING_SIGNATURE");
-    await expect(replyPayment(ctx, id, { requestId: request.id, userOperationHash: hash })).rejects.toThrow("already recorded");
-    await replyPayment(ctx, id, { requestId: request.id, txHash: `0x${"2".repeat(64)}` });
-    await vi.waitFor(async () => expect((await inspectPayment(ctx, id)).record.state).toBe("CONFIRMED"));
+
+  it("refuses execution when the proposal was not enabled for this host", async () => {
+    const { id, ctx } = setup(); (fake.db.tables.payment_proposals[0].proposal as { executionEnabled: boolean }).executionEnabled = false;
+    await expect(startPayment(ctx, "LOCAL_ENABLED", id)).rejects.toMatchObject({ code: "EXECUTION_NOT_ENABLED" });
   });
 });

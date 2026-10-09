@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { earnServerContext } from "@/lib/earn/server-context";
-import { claimTestSignerRequest } from "@/lib/earn/jobs";
+import { claimTestSignerEarnRequest } from "@/lib/earn/executions";
 import { claimTestSignerPayment } from "@/lib/payments/jobs";
-import { assertLocalEarnExecution, EarnAccessError } from "@/lib/earn/security";
+import { assertRequestAccess, EarnAccessError } from "@/lib/earn/security";
 import { requestHostOrigin } from "@/lib/earn/access-policy";
 import { paymentGasCeiling, sendTestSignerTransaction, testSignerAccount } from "@/lib/wallet/test-signer";
 
@@ -26,7 +26,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    assertLocalEarnExecution(request);
+    // Local development only: testSignerAccount() is null on any hosted build.
+    if (await assertRequestAccess(request, "EARN", true) !== "LOCAL_ENABLED") throw new EarnAccessError("TEST_SIGNER_DISABLED", "The local test signer is not enabled.", 404);
     const account = testSignerAccount(requestHostOrigin(request).hostname);
     if (!account) throw new EarnAccessError("TEST_SIGNER_DISABLED", "The local test signer is not enabled.", 404);
     const input = schema.safeParse(await request.json());
@@ -40,10 +41,10 @@ export async function POST(request: Request) {
     if (!context) throw new EarnAccessError("TEST_SIGNER_NOT_SELECTED", "No signed-in workspace has selected the local test signer.", 409);
     let txHash: `0x${string}`;
     if (input.data.kind === "EARN") {
-      const claimed = claimTestSignerRequest(context.binding, input.data.calls, input.data.gasCeiling);
+      const claimed = await claimTestSignerEarnRequest(context.binding, input.data.calls[0], input.data.gasCeiling);
       txHash = await sendTestSignerTransaction(account, claimed.call, claimed.gasCeiling);
     } else {
-      const claimed = claimTestSignerPayment(context.binding, input.data.calls);
+      const claimed = await claimTestSignerPayment(context.binding, input.data.calls);
       txHash = await sendTestSignerTransaction(account, claimed.call, await paymentGasCeiling(claimed.feeQuote));
     }
     return Response.json({ status: "SIGNED", txHash }, { headers });

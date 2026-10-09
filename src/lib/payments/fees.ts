@@ -3,7 +3,7 @@ import { getAddress } from "viem";
 import { arcClient } from "@/lib/earn/gateway";
 import { boundedArcGasPrice } from "@/lib/earn/gas";
 import { nativeWeiToUsdcCeil } from "@/lib/earn/money";
-import { digest } from "@/lib/earn/durable-quotes";
+import { digest } from "@/lib/earn/digest";
 import { circleUserWalletClient } from "@/lib/circle/user-wallet-server";
 import { decimalToIntegerCeil, walletFeeQuoteSchema } from "@/lib/wallet/fee-quote";
 import type { PaymentContext } from "./server";

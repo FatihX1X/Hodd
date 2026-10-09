@@ -8,11 +8,13 @@ import { arcClient, discoverAllowedVaults, earnKit, getEarnPosition, operationCo
 import { addUsdc, decimalStringToMoney, minUsdc, nativeWeiToUsdcCeil } from "./money";
 import { earnQuoteSchema, type EarnOperationIntent } from "./models";
 import { assessEarnOperation } from "./server-policy";
-import { durableEarnQuotes } from "./durable-quotes";
-import { QUOTE_TTL_MS } from "./quote-store";
+import { paymentAdmin } from "@/lib/payments/admin";
+import type { ExecutionMode } from "./access-policy";
+import { EarnAccessError } from "./security";
+import { assertLiveAmount } from "@/lib/execution/live-readiness";
+export const QUOTE_TTL_MS = 5 * 60 * 1000;
 import type { earnServerContext } from "./server-context";
 import { boundedArcGasPrice, earnStepGasLimit } from "./gas";
-import { assertBoundedEarnFeeProvider } from "./circle-fees";
 
 export type EarnContext = Awaited<ReturnType<typeof earnServerContext>>;
 export const readEarnAdapter = (address: string) => createViemAdapter({ capabilities: { addressContext: "user-controlled", supportedChains: [ArcTestnet] }, address: getAddress(address), getPublicClient: () => arcClient });
@@ -21,17 +23,17 @@ export async function freshEarnInputs(context: EarnContext, vaultAddress: string
   const vaults = await discoverAllowedVaults();
   const vault = vaults.find((item) => item.address.toLowerCase() === vaultAddress.toLowerCase());
   if (!vault) throw new EarnGatewayError("VAULT_NOT_ALLOWED", "Only freshly verified allowlisted vaults can be used.");
-  const [snapshot, positions] = await Promise.all([new ViemArcTreasuryReader("https://rpc.testnet.arc.io").readSnapshot(context.wallet.address), Promise.all(vaults.map((item) => getEarnPosition(context.wallet.address, item)))]);
+  const [snapshot, positions] = await Promise.all([new ViemArcTreasuryReader().readSnapshot(context.wallet.address), Promise.all(vaults.map((item) => getEarnPosition(context.wallet.address, item)))]);
   const position = positions.find((item) => item.vaultAddress === vault.address)!;
   return { vault, positions, position, workspace: { ...context.workspace, liquidUsdc: snapshot.balance } };
 }
 
-export async function prepareServerQuote(context: EarnContext, intent: EarnOperationIntent) {
-  assertBoundedEarnFeeProvider(context.wallet);
+export async function prepareServerQuote(context: EarnContext, intent: EarnOperationIntent, mode: ExecutionMode) {
   const live = await freshEarnInputs(context, intent.vaultAddress);
   const amount = intent.operation === "REDEEM_ALL" ? live.position.redeemable : decimalStringToMoney(intent.amount ?? "0");
   if (context.scope === "SMOKE_TEST" && intent.operation === "DEPOSIT" && BigInt(amount.minorUnits) > 1_000_000n) throw new EarnGatewayError("SMOKE_AMOUNT_LIMIT", "Smoke-test deposits are limited to 1 USDC.");
   if (BigInt(amount.minorUnits) <= 0n) throw new EarnGatewayError("INVALID_AMOUNT", "Enter a positive amount or connect a funded position.");
+  if (intent.operation === "DEPOSIT") assertLiveAmount(mode, amount.minorUnits);
   const from = { adapter: readEarnAdapter(context.wallet.address), chain: "Arc_Testnet" as const };
   const params = { from, vaultAddress: live.vault.address, amount: formatUnits(BigInt(amount.minorUnits), 6), config: operationConfig() };
   const raw = intent.operation === "DEPOSIT" ? await earnKit.earn.getDepositQuote(params) : await earnKit.earn.getWithdrawalQuote(params);
@@ -56,6 +58,10 @@ export async function prepareServerQuote(context: EarnContext, intent: EarnOpera
   if (BigInt(fees.minorUnits) > BigInt(live.workspace.liquidUsdc.minorUnits)) policy = { status: "BLOCKED", label: "Fee reserve", reason: "Liquid USDC is insufficient to reserve the operation fees." };
   if (warnings.length && policy.status === "PASS") policy = { ...policy, status: "REVIEW", reason: "Policy passed; acknowledge the protocol and liquidity warnings separately." };
   const quote = earnQuoteSchema.parse({ quoteId: policy.status === "BLOCKED" ? null : randomUUID(), operation: intent.operation, walletAddress: context.wallet.address, vaultAddress: live.vault.address, vaultName: live.vault.name, amount, expectedShares: "expectedShares" in raw ? raw.expectedShares.amount : null, sharesToRedeem: "sharesToRedeem" in raw ? raw.sharesToRedeem.amount : null, maxWithdrawable, fees, gasFees, warnings, policy, expiresAt: new Date(Date.now() + QUOTE_TTL_MS).toISOString(), requiresWarningAcknowledgement: warnings.length > 0 });
-  if (quote.quoteId) await durableEarnQuotes.put({ quote, binding: context.binding, policyDigest: context.policyDigest });
+  if (quote.quoteId) {
+    // Durable and single-use: the execution start consumes it atomically in the database.
+    const { error } = await paymentAdmin().from("earn_quotes").insert({ id: quote.quoteId, user_id: context.userId, scope: context.scope, wallet_address: context.wallet.address.toLowerCase(), binding: context.binding, policy_digest: context.policyDigest, quote, expires_at: quote.expiresAt });
+    if (error) throw new EarnAccessError("QUOTE_STORE_UNAVAILABLE", "The quote could not be saved. Nothing was submitted.", 503);
+  }
   return quote;
 }

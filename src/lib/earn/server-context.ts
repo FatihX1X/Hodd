@@ -2,7 +2,7 @@ import "server-only";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { treasuryWorkspaceSchema } from "@/lib/treasury/models";
 import { EarnAccessError } from "./security";
-import { digest } from "./durable-quotes";
+import { digest } from "./digest";
 import { boundUserToken, circleUserWalletClient } from "@/lib/circle/user-wallet-server";
 import { Blockchain } from "@circle-fin/user-controlled-wallets";
 import type { WorkspaceScope } from "@/lib/treasury/smoke-workspace";

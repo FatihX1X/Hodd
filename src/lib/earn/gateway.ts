@@ -7,11 +7,12 @@ import { arcTestnet } from "viem/chains";
 import { EARN_VAULT_ALLOWLIST, ARC_TESTNET_USDC, allowedVault, isAllowedVault } from "./allowlist";
 import { decimalStringToMoney, minUsdc } from "./money";
 import { earnPositionSchema, earnVaultSchema, type EarnPosition, type EarnVault } from "./models";
-import { executionMode } from "./security";
+import { arcRpcUrl } from "@/lib/arc/rpc";
+import type { ExecutionMode } from "./access-policy";
 
 export const earnKit = new AppKit();
 const kit = earnKit;
-export const arcClient = createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io", { timeout: 10_000, retryCount: 0 }) });
+export const arcClient = createPublicClient({ chain: arcTestnet, transport: http(arcRpcUrl(), { timeout: 10_000, retryCount: 0 }) });
 const erc4626PositionAbi = [
   { type: "function", name: "asset", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -74,14 +75,13 @@ export async function getEarnPosition(walletAddress: string, vault: EarnVault): 
   } catch { throw new EarnGatewayError("POSITION_UNAVAILABLE", "The Morpho position could not be read from Arc Testnet.", 503); }
 }
 
-export async function getEarnPortfolio(walletAddress?: string | null) {
+export async function getEarnPortfolio(walletAddress?: string | null, mode: ExecutionMode = "PRODUCTION_DISABLED") {
   const vaults = await discoverAllowedVaults();
-  const mode = executionMode();
-  if (!walletAddress || !isAddress(walletAddress, { strict: false })) return { vaults, positions: [] as EarnPosition[], integration: { discovery: "READY" as const, positionAccess: "NOT_CONFIGURED" as const, execution: mode, configuredWalletAddress: null, message: "Vault discovery is live. Connect a user-owned wallet to load its public positions." } };
+  if (!walletAddress || !isAddress(walletAddress, { strict: false })) return { vaults, positions: [] as EarnPosition[], integration: { discovery: "READY" as const, positionAccess: "NOT_CONFIGURED" as const, execution: mode, configuredWalletAddress: null, message: "Vault discovery is live. Connect your own wallet to load its public positions." } };
   const address = getAddress(walletAddress);
   const positions: EarnPosition[] = [];
   for (const vault of vaults) { try { positions.push(await getEarnPosition(address, vault)); } catch { /* one unavailable position must not hide verified vault discovery */ } }
-  return { vaults, positions, integration: { discovery: "READY" as const, positionAccess: positions.length === vaults.length ? "READY" as const : "UNAVAILABLE" as const, execution: mode, configuredWalletAddress: null, message: positions.length === vaults.length ? "Live positions are available. Earn requires a fresh server-policy quote, separate confirmation and user-owned signing; each provider is awaiting live verification." : "Some vault positions could not be verified. Missing positions are excluded; treasury value may be incomplete." } };
+  return { vaults, positions, integration: { discovery: "READY" as const, positionAccess: positions.length === vaults.length ? "READY" as const : "UNAVAILABLE" as const, execution: mode, configuredWalletAddress: null, message: positions.length === vaults.length ? "Live positions are available. Each operation needs a fresh server-policy quote, your separate confirmation and your own wallet signature." : "Some vault positions could not be verified. Missing positions are excluded; treasury value may be incomplete." } };
 }
 
 export { EARN_VAULT_ALLOWLIST };

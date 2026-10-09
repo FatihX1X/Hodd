@@ -1,16 +1,20 @@
 import { earnQuoteRequestSchema } from "@/lib/earn/models";
 import { earnServerContext } from "@/lib/earn/server-context";
 import { prepareServerQuote } from "@/lib/earn/server-quotes";
-import { assertLocalEarnExecution, EarnAccessError } from "@/lib/earn/security";
+import { assertRequestAccess, EarnAccessError } from "@/lib/earn/security";
 import { EarnGatewayError } from "@/lib/earn/gateway";
+import { assertLiveReady } from "@/lib/execution/live-readiness";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
-    assertLocalEarnExecution(request);
+    const mode = await assertRequestAccess(request, "EARN", true);
     const input = earnQuoteRequestSchema.safeParse(await request.json());
     if (!input.success) return Response.json({ status: "ERROR", code: "INVALID_REQUEST", message: "The quote request is invalid." }, { status: 400 });
-    const quote = await prepareServerQuote(await earnServerContext(input.data.workspaceScope), input.data);
+    const context = await earnServerContext(input.data.workspaceScope);
+    await assertLiveReady(context, mode, "QUOTE");
+    const quote = await prepareServerQuote(context, input.data, mode);
     return Response.json({ status: "READY", quote }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const known = error instanceof EarnAccessError || error instanceof EarnGatewayError;

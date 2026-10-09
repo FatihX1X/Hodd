@@ -4,7 +4,7 @@ const fake = vi.hoisted(() => ({ estimate: vi.fn(), gas: vi.fn(), price: vi.fn()
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/earn/gateway", () => ({ arcClient: { getChainId: fake.chain, estimateGas: fake.gas, getGasPrice: fake.price } }));
 vi.mock("@/lib/circle/user-wallet-server", () => ({ circleUserWalletClient: () => ({ estimateContractExecutionFee: fake.estimate }) }));
-vi.mock("@/lib/earn/durable-quotes", () => ({ digest: () => "call-digest" }));
+vi.mock("@/lib/earn/digest", () => ({ digest: () => "call-digest" }));
 import { quotePaymentFees } from "./fees";
 import type { PaymentContext } from "./server";
 const context = (provider: string, accountType: string) => ({ userToken: "mock-session", wallet: { address: "0x0000000000000000000000000000000000000001", walletId: "public-wallet-id", provider, accountType } }) as PaymentContext;
