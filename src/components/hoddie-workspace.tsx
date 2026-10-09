@@ -23,7 +23,8 @@ function Proposal({ proposal }: { proposal: NonNullable<HoddieResult["proposal"]
 }
 function Result({ result }: { result: HoddieResult }) {
   const { manual, send, busy } = useHoddie();
-  return <div className="min-w-0">
+  // The reply's language drives correct casing in uppercase labels (Turkish dotted İ).
+  return <div className="min-w-0" lang={result.language}>
     <p className="whitespace-pre-wrap text-sm leading-6">{result.message}</p>
     {result.status && <div className="mt-3"><StatusPill {...result.status} /></div>}
     {result.source && <p className="mono mt-3 text-[10px] uppercase tracking-wider text-white/55">{result.source.replaceAll("_", " ")} · {result.observedAt ? new Date(result.observedAt).toLocaleString() : "No timestamp"} · Hodd treasury data</p>}
