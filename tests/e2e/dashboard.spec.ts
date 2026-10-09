@@ -114,3 +114,17 @@ test("Hoddie answers from the workspace, never changes it and never names a mode
   await page.reload(); await expect(page.getByRole("log", { name: "Conversation" })).toContainText(/is covered/i);
   await page.getByRole("button", { name: /new chat/i }).click(); await expect(page.getByText("Ask about your treasury.")).toBeVisible();
 });
+
+test("Hoddie replies in the user's language and applies a proposed change only after approval", async ({ page }) => {
+  let requestBody = "";
+  const reply = { text: "Kira faturasını hazırladım. Onaylıyor musun?", language: "tr", followUps: [], labels: { approve: "Onaylıyorum", decline: "Vazgeç", proposal: "Önerilen değişiklik", applied: "Uygulandı" }, action: { kind: "CREATE_OBLIGATION", change: { title: "Kira", amount: "500", dueDate: "2026-12-30", category: "RENT", priority: "HIGH" } }, actionRejected: false, approvesPending: false };
+  await page.route("**/api/hoddie", async (route) => { requestBody = route.request().postData() ?? ""; await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "READY", reply }) }); });
+  await page.goto("/hoddie");
+  await page.getByRole("textbox", { name: "Message Hoddie" }).fill("30 Aralık için 500 USDC kira ekle"); await page.keyboard.press("Enter");
+  await expect(page.getByText("Kira faturasını hazırladım")).toBeVisible({ timeout: 5000 });
+  expect(requestBody).toContain("30 Aralık için 500 USDC kira ekle"); expect(requestBody).not.toMatch(/recipientAddress|paymentReference/);
+  await page.goto("/obligations"); await expect(page.getByRole("button", { name: "Kira", exact: true })).toHaveCount(0);
+  await page.goto("/hoddie"); await page.getByRole("button", { name: "Onaylıyorum" }).click(); await expect(page.getByText("Uygulandı")).toBeVisible();
+  await page.goto("/obligations"); await expect(page.getByRole("button", { name: "Kira", exact: true })).toBeVisible();
+  await page.goto("/activity"); await expect(page.getByText("Obligation created via Hoddie")).toBeVisible();
+});

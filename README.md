@@ -149,6 +149,15 @@ Live verification (2026-10-08, production `app.hoddfinance.xyz`): a client regis
 
 One-time setup (done for the hosted project): in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. No host variable is required: the confirmation key comes from `HODD_MCP_HANDLE_SECRET` if set, else HKDF of `SUPABASE_SECRET_KEY`/`CIRCLE_API_KEY` (label `hodd-mcp-confirmation-v1`), else a random key the database generated (`hodd_agent_confirmation_key()`, connector tokens only). Without Supabase variables the app falls back to the hosted project's public URL and publishable key. Apply `20261008125003_agent_actions.sql` and `20261008133206_agent_confirmation_key.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction.
 
+## Hoddie chat
+
+`/hoddie` is a treasury assistant that answers in whatever language the user writes in.
+
+- **Language service.** `POST /api/hoddie` sends the conversation and a read-only workspace summary (amounts, dates, policy; never recipient addresses, payment references or wallet details) to the configured language services in `HODDIE_PROVIDERS` order and returns one validated reply. Keys are server-only environment variables (`GEMINI_API_KEY`, `NVIDIA_API_KEY`; see `.env.example`). The route needs a signed-in user on any deployed host, checks the request origin and rate limits per user. Nothing about the services is shown in the interface.
+- **Basic mode.** With no key, no sign-in or a provider outage, the chat falls back to deterministic English answers from the Treasury Engine (`src/lib/hoddie/answers.ts`) and labels them "Basic mode".
+- **Changes need approval.** Hoddie can only *propose* `CREATE_OBLIGATION`, `UPDATE_OBLIGATION`, `UPDATE_POLICY` or `SET_TARGETS`. The proposal is validated with the same schemas and `applyChange` logic as the Claude connector, shown as an exact before/after card, and applied only when the user presses the approve button (labelled in their language) or sends a short typed approval. A proposal is bound to the workspace revision it was prepared against and expires if the workspace changes; only one proposal waits at a time. Approved changes are recorded as `AGENT` activity "via Hoddie".
+- **No money movement.** Payments, Morpho operations and recipient addresses are never proposed; the user finishes those on their own pages with a wallet signature.
+
 ## Next work
 
 Complete live testnet verification for Circle Passkey and MetaMask before declaring Stage 4 complete. Stage 5 is in progress; it is not a completed payment product. Deployment remains out of scope. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.

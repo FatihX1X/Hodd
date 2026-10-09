@@ -72,10 +72,11 @@ function activeObligation(workspace: TreasuryWorkspace, id: string): Obligation 
 export type AppliedChange = { workspace: TreasuryWorkspace; summary: string; lines: string[] };
 
 /** Validates and applies one change. Throws a user-readable Error when the change is not allowed. */
-export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawChange: unknown, now: Date, newId: () => string = () => crypto.randomUUID()): AppliedChange {
+export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawChange: unknown, now: Date, newId: () => string = () => crypto.randomUUID(), via: "Claude" | "Hoddie" = "Claude"): AppliedChange {
   const stamp = now.toISOString();
-  const finish = (next: TreasuryWorkspace, action: string, summary: string, lines: string[]): AppliedChange => {
-    const withActivity = { ...next, updatedAt: stamp, activities: [makeActivity(action, summary, "Approved by the user in Claude (Hodd connector).", stamp, "AGENT", "APPROVED"), ...next.activities] };
+  const finish = (next: TreasuryWorkspace, rawAction: string, summary: string, lines: string[]): AppliedChange => {
+    const action = rawAction.replace(/ via Claude$/, ` via ${via}`);
+    const withActivity = { ...next, updatedAt: stamp, activities: [makeActivity(action, summary, via === "Claude" ? "Approved by the user in Claude (Hodd connector)." : "Approved by the user in Hoddie chat.", stamp, "AGENT", "APPROVED"), ...next.activities] };
     return { workspace: treasuryWorkspaceSchema.parse(withActivity), summary, lines };
   };
   const locked = (id: string) => workspace.paymentReservations?.some((item) => item.obligationId === id);
