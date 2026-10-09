@@ -53,27 +53,27 @@ export function OAuthConsent({ authorizationId }: { authorizationId: string | nu
   };
 
   return (
-    <div className="metric-grid min-h-screen px-5 py-12">
+    <div data-theme="dark" className="ink-grid min-h-screen bg-[#0b0b0d] px-5 py-12 text-[#f4f1e8]">
       <div className="mx-auto flex min-h-[calc(100vh-6rem)] max-w-lg flex-col justify-center">
-        <Image src="/brand/hodd-lockup-light.png" alt="Hodd Finance" width={1912} height={608} priority className="mb-8 h-auto w-[200px]" />
-        <section className="w-full border border-black/80 bg-[#f4f1e8] p-6 md:p-8" aria-live="polite">
-          <p className="mono text-[10px] uppercase tracking-[0.18em] text-black/50">Connection request</p>
-          {state.status === "LOADING" && <p className="mt-4 text-sm text-black/60">Checking the request…</p>}
-          {state.status === "REDIRECTING" && <p className="mt-4 text-sm text-black/60">Returning to the application…</p>}
-          {state.status === "ERROR" && <p role="alert" className="mt-4 border border-[#9a433c]/20 bg-[#f5dedb] p-3 text-sm text-[#7b332d]">{state.message}</p>}
+        <Image src="/brand/hodd-lockup-dark.png" alt="Hodd Finance" width={1912} height={608} priority className="mb-8 h-auto w-[200px]" />
+        <section className="w-full border border-white/[0.14] bg-[#101319] p-6 md:p-8" aria-live="polite">
+          <p className="mono text-[10px] uppercase tracking-[0.18em] text-white/60">Connection request</p>
+          {state.status === "LOADING" && <p className="mt-4 text-sm text-white/70">Checking the request…</p>}
+          {state.status === "REDIRECTING" && <p className="mt-4 text-sm text-white/70">Returning to the application…</p>}
+          {state.status === "ERROR" && <p role="alert" className="mt-4 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-sm text-[#ff9a92]">{state.message}</p>}
           {state.status === "READY" && <>
-            <h1 className="disp mt-4 text-[clamp(1.4rem,5vw,1.9rem)]"><span className="text-[#0a52e8]">{state.details.clientName}</span> wants to use your Hodd account.</h1>
-            <p className="mt-3 text-xs text-black/55">Signed in as {state.details.email}{state.details.clientUri ? ` · ${state.details.clientUri}` : ""}</p>
-            <ul className="mt-6 space-y-3 text-sm leading-6 text-black/75">
+            <h1 className="disp mt-4 text-[clamp(1.4rem,5vw,1.9rem)]"><span className="text-[#8fb0ff]">{state.details.clientName}</span> wants to use your Hodd account.</h1>
+            <p className="mt-3 text-xs text-white/65">Signed in as {state.details.email}{state.details.clientUri ? ` · ${state.details.clientUri}` : ""}</p>
+            <ul className="mt-6 space-y-3 text-sm leading-6 text-white/75">
               <li><strong>It can read</strong> your treasury: balances, obligations, policy, positions, activity and payment history.</li>
               <li><strong>It can change</strong> obligations, policy and targets, and create payment or Morpho requests, but only after you approve each change in the chat.</li>
               <li><strong>It cannot move money.</strong> Payments and Morpho operations always finish in Hodd with your own wallet signature.</li>
             </ul>
-            <p className="mt-5 text-xs leading-5 text-black/55">Tip: in Claude keep Hodd&apos;s write tools on &ldquo;Needs approval&rdquo;. You can revoke this connection anytime from Hodd → Connections.</p>
-            <p className="mono mt-3 break-all text-[10px] text-black/40">Returns to {state.details.redirectUri}</p>
+            <p className="mt-5 text-xs leading-5 text-white/65">Tip: in Claude keep Hodd&apos;s write tools on &ldquo;Needs approval&rdquo;. You can revoke this connection anytime from Hodd → Connections.</p>
+            <p className="mono mt-3 break-all text-[10px] text-white/50">Returns to {state.details.redirectUri}</p>
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <button disabled={busy} onClick={() => void decide(true)} className="mono min-h-12 bg-[#0b0b0d] px-5 py-4 text-xs font-medium uppercase tracking-[0.09em] text-white disabled:opacity-50">Allow</button>
-              <button disabled={busy} onClick={() => void decide(false)} className="mono min-h-12 border border-black/30 px-5 py-4 text-xs font-medium uppercase tracking-[0.09em] disabled:opacity-50">Deny</button>
+              <button disabled={busy} onClick={() => void decide(true)} className="mono min-h-12 bg-[#f4f1e8] px-5 py-4 text-xs font-medium uppercase tracking-[0.09em] text-[#0b0b0d] disabled:opacity-50">Allow</button>
+              <button disabled={busy} onClick={() => void decide(false)} className="mono min-h-12 border border-white/30 px-5 py-4 text-xs font-medium uppercase tracking-[0.09em] disabled:opacity-50">Deny</button>
             </div>
           </>}
         </section>

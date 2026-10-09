@@ -2,9 +2,20 @@ import clsx from "clsx";
 import type { Money, PolicyResult } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 
+/** Mono label used for field names, column heads and captions. */
+export const labelClass = "mono text-[10px] uppercase tracking-[0.14em] text-white/55";
+
+/** Button recipes for the dark theme. Primary is paper on ink; ghost is a hairline outline. */
+export const buttonClass = {
+  primary: "mono inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-[#f4f1e8] bg-[#f4f1e8] px-4 text-[11px] font-medium uppercase tracking-[0.09em] text-[#0b0b0d] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#0a52e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
+  ghost: "mono inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-white/30 px-4 text-[11px] font-medium uppercase tracking-[0.09em] text-[#f4f1e8] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#f4f1e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
+} as const;
+
+export const inputClass = "mt-2 w-full border border-white/25 bg-[#0b0b0d] px-3 py-2.5 text-sm text-[#f4f1e8] outline-none placeholder:text-white/35 focus:border-[#7fa6ff]";
+
 export function PageHeader({ eyebrow, title, description, aside }: { eyebrow: string; title: string; description: string; aside?: React.ReactNode }) {
   return (
-    <header className="ink-grid border-b border-black/15 px-5 py-10 text-white md:px-8 md:py-14 lg:px-10">
+    <header className="ink-grid border-b border-white/10 px-5 py-10 text-white md:px-8 md:py-14 lg:px-10">
       <div className="mx-auto flex max-w-[1440px] flex-col gap-7 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="mono text-[10px] uppercase tracking-[0.22em] text-[#7fa6ff]">{eyebrow}</p>
@@ -19,25 +30,30 @@ export function PageHeader({ eyebrow, title, description, aside }: { eyebrow: st
 
 export function DemoNotice({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="border-b border-black/15 bg-[#e3dfd2] px-5 py-3 md:px-8 lg:px-10" role="note">
-      <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#2b2a27]">
-        <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#0a52e8]" />
+    <div className="border-b border-white/10 bg-[#101319] px-5 py-3 md:px-8 lg:px-10" role="note">
+      <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#c9cbd3]">
+        <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#7fa6ff]" />
         {children ?? "Choose your own wallet. Planning previews do not move funds; wallet transaction execution is currently paused."}
       </div>
     </div>
   );
 }
 
+/** Page body: the same 120px ruled grid as the landing page, on ink. */
+export function PageBody({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={clsx("mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-10 lg:py-10", className)}>{children}</div>;
+}
+
 export function SectionCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <section className={clsx("border border-black/15 bg-[#f4f1e8]", className)}>{children}</section>;
+  return <section className={clsx("border border-white/[0.14] bg-[#101319]", className)}>{children}</section>;
 }
 
 export function SectionHeading({ index, title, description, action }: { index: string; title: string; description?: string; action?: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-5 border-b border-black/15 px-5 py-4">
+    <div className="flex items-start justify-between gap-5 border-b border-white/[0.14] px-5 py-4">
       <div className="flex min-w-0 gap-4">
-        <span className="mono mt-0.5 text-[10px] text-black/40">{index}</span>
-        <div><h2 className="text-sm font-semibold tracking-[-0.02em]">{title}</h2>{description && <p className="mt-1 text-xs leading-5 text-black/50">{description}</p>}</div>
+        <span className="mono mt-1 text-[10px] text-white/45">{index}</span>
+        <div><h2 className="disp text-[15px]">{title}</h2>{description && <p className="mt-2 text-xs leading-5 text-white/55">{description}</p>}</div>
       </div>
       {action}
     </div>
@@ -48,18 +64,64 @@ export function MoneyValue({ money, compact = false, className = "" }: { money: 
   return <span className={clsx("mono tabular-nums", className)}>{formatMoney(money, { compact })}</span>;
 }
 
-export function StatusPill({ label, tone = "neutral" }: { label: string; tone?: "success" | "warning" | "danger" | "neutral" | "info" }) {
-  const tones = {
-    success: "border-[#2c7a50]/25 bg-[#dff5e8] text-[#164b32]",
-    warning: "border-[#906a2f]/25 bg-[#f3e8ce] text-[#694813]",
-    danger: "border-[#9a433c]/25 bg-[#f5dedb] text-[#7b332d]",
-    info: "border-[#456c9c]/25 bg-[#dfe9f5] text-[#294e7c]",
-    neutral: "border-black/15 bg-black/[0.04] text-black/55",
-  };
-  return <span className={clsx("mono inline-flex border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.12em]", tones[tone])}>{label}</span>;
+type Tone = "success" | "warning" | "danger" | "neutral" | "info";
+const toneStyles: Record<Tone, { text: string; dot: string }> = {
+  success: { text: "text-[#7fe3a8]", dot: "bg-[#2fcf2f]" },
+  warning: { text: "text-[#ffd27f]", dot: "border border-[#fab219] bg-[linear-gradient(90deg,#fab219_50%,transparent_50%)]" },
+  danger: { text: "text-[#ff9a92]", dot: "bg-[#ec5b5b]" },
+  info: { text: "text-[#9ec5f4]", dot: "border-[1.5px] border-[#6da7ec]" },
+  neutral: { text: "text-white/65", dot: "border-[1.5px] border-[#898781]" },
+};
+
+/** Status as shape + word: filled, half, square or ring, never colour alone. */
+export function StatusPill({ label, tone = "neutral" }: { label: string; tone?: Tone }) {
+  const style = toneStyles[tone];
+  return (
+    <span className={clsx("mono inline-flex items-center gap-2 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.12em]", style.text)}>
+      <span aria-hidden="true" className={clsx("size-2 shrink-0", tone === "danger" ? "rounded-[1px]" : "rounded-full", style.dot)} />
+      {label}
+    </span>
+  );
 }
 
 export function PolicyPill({ policy }: { policy: PolicyResult }) {
   const tone = policy.status === "PASS" ? "success" : policy.status === "BLOCKED" ? "danger" : policy.status === "REVIEW" ? "warning" : "neutral";
   return <StatusPill label={policy.status.replace("_", " ")} tone={tone} />;
+}
+
+/** One figure in a row of figures. Cells share 1px hairlines, like the landing page ledger. */
+export function KpiGrid({ children, className = "", label, columns = 4 }: { children: React.ReactNode; className?: string; label?: string; columns?: 3 | 4 }) {
+  return <section aria-label={label} className={clsx("grid gap-px border border-white/[0.14] bg-white/[0.14] sm:grid-cols-2", columns === 4 ? "xl:grid-cols-4" : "lg:grid-cols-3", className)}>{children}</section>;
+}
+
+export function Kpi({ label, value, detail, accent = false }: { label: string; value: React.ReactNode; detail?: string; accent?: boolean }) {
+  return (
+    <article className="min-h-36 bg-[#101319] p-5">
+      <p className={labelClass}>{label}</p>
+      <div className={clsx("mt-5 block text-3xl font-medium tracking-[-0.04em]", accent && "text-[#9ec5f4]")}>{value}</div>
+      {detail && <p className="mt-3 text-xs text-white/50">{detail}</p>}
+    </article>
+  );
+}
+
+/** A ratio against a limit. The fill carries severity; the track is a darker step of the same blue. */
+export function Meter({ ratio, label, className = "" }: { ratio: number | null; label: string; className?: string }) {
+  const value = ratio === null ? 0 : Math.max(0, Math.min(ratio, 1));
+  const fill = ratio !== null && ratio > 1 ? "#ec5b5b" : ratio !== null && ratio > 0.85 ? "#fab219" : "#5598e7";
+  return (
+    <div role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value * 100)} className={clsx("h-2 bg-[#0d366b]", className)}>
+      <div className="h-full" style={{ width: `${value * 100}%`, background: fill }} />
+    </div>
+  );
+}
+
+/** A group of toggle buttons (filters, ranges). aria-pressed carries the state. */
+export function FilterGroup<T extends string>({ label, options, value, onChange }: { label: string; options: readonly T[]; value: T; onChange: (next: T) => void }) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex flex-wrap border border-white/30">
+      {options.map((option, index) => (
+        <button key={option} type="button" onClick={() => onChange(option)} aria-pressed={value === option} className={clsx("mono min-h-11 min-w-12 px-3.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors", index > 0 && "border-l border-white/30", value === option ? "bg-[#f4f1e8] text-[#0b0b0d]" : "text-white/55 hover:text-white")}>{option}</button>
+      ))}
+    </div>
+  );
 }
