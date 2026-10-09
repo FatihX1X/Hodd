@@ -106,7 +106,7 @@ export async function startPayment(context: PaymentContext, mode: ExecutionMode,
   catch { throw new EarnAccessError("FEE_QUOTE_EXCEEDED", "Network fees changed beyond the approved quote. Review a fresh payment proposal; nothing was sent.", 409); }
   const { error } = await admin().rpc("hodd_claim_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_binding: context.binding });
   if (error) {
-    if (/wallet busy/i.test(error.message)) throw new EarnAccessError("WALLET_BUSY", "Another Earn or payment execution on this wallet needs completion or review.", 409);
+    if (/wallet busy/i.test(error.message)) throw new EarnAccessError("WALLET_BUSY", "Another Earn or payment execution on this wallet needs completion or review. Resolve open Earn executions on the Strategies page, or open payments in the payment ledger.", 409);
     // A lost response is not proof that the atomic claim did not commit; release it if it did.
     await admin().rpc("hodd_cancel_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_binding: context.binding, p_state: "FAILED" });
     throw new EarnAccessError("PROPOSAL_NOT_AVAILABLE", "The claim could not be verified. Recheck its existing state before requesting another proposal.", 409);

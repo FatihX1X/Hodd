@@ -183,8 +183,36 @@ describe("stateless Earn execution", () => {
     await advanceEarnExecution(ctx, "LOCAL_ENABLED", id, { requestId: started.pending!.id, cancelled: true, uncertain: true });
     fake.nonce = { latest: 8, pending: 8 };
     await expect(advanceEarnExecution(ctx, "LOCAL_ENABLED", id, undefined, { acknowledgeNoPendingTransaction: true })).rejects.toMatchObject({ code: "RECOVERY_NOT_PROVEN" });
+    // Nothing was reported, so a bare recheck has no evidence to verify.
+    await expect(advanceEarnExecution(ctx, "LOCAL_ENABLED", id, undefined, {})).rejects.toMatchObject({ code: "RECOVERY_NOT_PROVEN" });
     mine(hash("9"), earnCall);
     expect((await advanceEarnExecution(ctx, "LOCAL_ENABLED", id, undefined, { candidateTxHash: hash("9") })).state).toBe("COMPLETE");
+  });
+
+  it("rechecks the reported transaction from a reconnected session without signing for it", async () => {
+    const { ctx, id } = setup(); fake.captures.push({ stage: "EARN", call: earnCall });
+    const started = await startEarnExecution(ctx, "LOCAL_ENABLED", id, false);
+    mine(hash("c"), earnCall);
+    fake.verifyEarn.mockImplementationOnce(() => { throw new Error("EARN_RECEIPT_NOT_VERIFIED"); });
+    expect((await advanceEarnExecution(ctx, "LOCAL_ENABLED", id, { requestId: started.pending!.id, txHash: hash("c") })).state).toBe("UNKNOWN");
+    const reconnected = { ...(ctx as object), binding: "binding-b" } as never;
+    await expect(advanceEarnExecution(reconnected, "LOCAL_ENABLED", id, { requestId: started.pending!.id, txHash: hash("c") }, {})).rejects.toMatchObject({ code: "EXECUTION_NOT_FOUND" });
+    const settled = await advanceEarnExecution(reconnected, "LOCAL_ENABLED", id, undefined, {});
+    expect(settled.state).toBe("COMPLETE"); expect(settled.failure).toBeNull();
+    expect(settled.events.map((event) => event.stage)).toContain("RECHECK_REQUESTED");
+    expect(fake.db.tables.earn_execution_receipts).toHaveLength(1);
+  });
+
+  it("lets a reconnected session close a preparing execution but never prepare its next call", async () => {
+    const { ctx, id } = setup(); fake.captures.push({ stage: "APPROVAL", call: approvalCall }, { stage: "EARN", call: earnCall });
+    const started = await startEarnExecution(ctx, "LOCAL_ENABLED", id, false);
+    mine(hash("d"), approvalCall);
+    // Approval is confirmed by the original session, but its next step is not prepared yet.
+    Object.assign(row(id), { state: "SUBMITTED", pending: { ...(row(id).pending as object), txHash: hash("d") } });
+    const reconnected = { ...(ctx as object), binding: "binding-b" } as never;
+    const checked = await advanceEarnExecution(reconnected, "LOCAL_ENABLED", id, undefined, {});
+    expect(checked.state).toBe("PREPARING"); expect(checked.pending).toBeNull(); expect(started.pending!.stage).toBe("APPROVAL");
+    expect((await advanceEarnExecution(reconnected, "LOCAL_ENABLED", id, undefined, { acknowledgeNoPendingTransaction: true })).state).toBe("FAILED");
   });
 
   it("fails cleanly when Earn Kit cannot produce a call, and when policy changed", async () => {

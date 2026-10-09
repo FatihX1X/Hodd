@@ -96,7 +96,7 @@ export async function startEarnExecution(context: EarnContext, mode: ExecutionMo
   const startedBlock = await arcClient.getBlockNumber();
   const { error: startError } = await db().rpc("hodd_start_earn_execution", { p_user: context.userId, p_scope: context.scope, p_quote: quoteId, p_binding: context.binding, p_policy_digest: context.policyDigest, p_ack: acknowledged, p_wallet: context.wallet, p_started_block: startedBlock.toString() });
   if (startError) {
-    if (/wallet busy/i.test(startError.message)) throw new EarnAccessError("WALLET_BUSY", "Another Earn or payment execution on this wallet needs completion or review.", 409);
+    if (/wallet busy/i.test(startError.message)) throw new EarnAccessError("WALLET_BUSY", "Another Earn or payment execution on this wallet needs completion or review. Resolve open Earn executions on the Strategies page, or open payments in the payment ledger.", 409);
     if (/earn_one_active_user/i.test(startError.message)) throw new EarnAccessError("EXECUTION_IN_PROGRESS", "Finish or review your open Earn execution first.", 409);
     throw new EarnAccessError("QUOTE_NOT_AVAILABLE", "The quote expired, was consumed or needs warning acknowledgement.", 409);
   }
@@ -106,9 +106,12 @@ export async function startEarnExecution(context: EarnContext, mode: ExecutionMo
 /** Applies an optional browser reply, then moves the execution as far as it can. */
 export async function advanceEarnExecution(context: EarnContext, _mode: ExecutionMode, id: string, reply?: EarnReply, recovery?: EarnRecovery) {
   let row = await load(context, id, Boolean(recovery));
+  // A reconnected session may settle or close its wallet's execution, never sign for or prepare it.
+  const stale = row.binding !== context.binding;
+  if (reply && stale) throw new EarnAccessError("EXECUTION_NOT_FOUND", "This execution is unavailable in the current wallet session.", 404);
   if (reply) row = await applyReply(row, reply);
   if (recovery) row = await applyRecovery(row, recovery);
-  for (let step = 0; step < 4 && !terminal(row.state); step++) {
+  for (let step = 0; step < 4 && !terminal(row.state) && !(stale && row.state === "PREPARING"); step++) {
     const next = await progress(context, row);
     if (!next) break;
     row = next;
@@ -144,11 +147,19 @@ async function applyReply(row: Row, reply: EarnReply): Promise<Row> {
   return next ?? reload(row);
 }
 
-/** UNKNOWN only moves with evidence: a candidate hash, or an unchanged nonce the user confirms. */
+/** UNKNOWN only moves with evidence: a recheck of the reported submission, a candidate hash, or an unchanged nonce the user confirms. */
 async function applyRecovery(row: Row, recovery: EarnRecovery): Promise<Row> {
-  if (row.state !== "UNKNOWN" || !row.pending) throw new EarnAccessError("RECOVERY_NOT_AVAILABLE", "Only an execution with an unknown outcome can be recovered.", 409);
-  if (recovery.candidateTxHash) return await write(row, { state: "SUBMITTED", pending: { ...row.pending, txHash: recovery.candidateTxHash }, events: withEvent(row, "TRANSACTION_REPORTED", recovery.candidateTxHash) }) ?? reload(row);
-  if (!recovery.acknowledgeNoPendingTransaction || answered(row.pending) || !await nonceUnchanged(row, row.pending)) throw new EarnAccessError("RECOVERY_NOT_PROVEN", "The wallet nonce changed or a submission was reported. Paste the transaction hash to verify it instead.", 409);
+  // The advance loop rechecks a submission or expires an unanswered request.
+  if (row.state === "SUBMITTED" || row.state === "AWAITING_SIGNATURE") return row;
+  // No call is exposed while preparing, so closing it cannot strand a transaction.
+  if (row.state === "PREPARING") return recovery.acknowledgeNoPendingTransaction ? await write(row, { state: "FAILED", failure: { code: "NOT_SUBMITTED", stage: "RECOVERY" }, events: withEvent(row, "CLOSED_BEFORE_SIGNING") }) ?? reload(row) : row;
+  if (row.state !== "UNKNOWN" || !row.pending) throw new EarnAccessError("RECOVERY_NOT_AVAILABLE", "Only an open execution can be recovered.", 409);
+  if (recovery.candidateTxHash) return await write(row, { state: "SUBMITTED", failure: null, pending: { ...row.pending, txHash: recovery.candidateTxHash }, events: withEvent(row, "TRANSACTION_REPORTED", recovery.candidateTxHash) }) ?? reload(row);
+  if (!recovery.acknowledgeNoPendingTransaction) {
+    if (!answered(row.pending)) throw new EarnAccessError("RECOVERY_NOT_PROVEN", "No submission was reported for this request. Paste its transaction hash, or confirm nothing was sent.", 409);
+    return await write(row, { state: "SUBMITTED", failure: null, events: withEvent(row, "RECHECK_REQUESTED") }) ?? reload(row);
+  }
+  if (answered(row.pending) || !await nonceUnchanged(row, row.pending)) throw new EarnAccessError("RECOVERY_NOT_PROVEN", "The wallet nonce changed or a submission was reported. Use Check again, or paste the transaction hash.", 409);
   return await write(row, { state: "FAILED", failure: { code: "NOT_SUBMITTED", stage: "RECOVERY" }, events: withEvent(row, "RELEASED_UNCHANGED_NONCE") }) ?? reload(row);
 }
 

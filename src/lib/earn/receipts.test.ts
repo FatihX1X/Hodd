@@ -43,6 +43,19 @@ describe("Arc Earn receipt evidence", () => {
     expect(() => verifyEarnReceipt(routed(pulled, withdraw(router), transfer(usdc, router, wallet, 500_000n)), withdrawal)).not.toThrow();
     for (const value of [routed(withdraw(wallet)), routed(transfer(vault, wallet, router, 498n), withdraw(wallet)), routed(transfer(vault, stranger, router, 499n), withdraw(wallet)), routed(pulled, withdraw(stranger)), routed(pulled, withdraw(router), transfer(usdc, router, stranger, 500_000n))]) expect(() => verifyEarnReceipt(value, withdrawal)).toThrow();
   });
+  it("accepts a redeem-all rounding unit above the quote, bound to the forwarded assets", () => {
+    const router = "0x0000000000000000000000000000000000000004"; const usdc = "0x3600000000000000000000000000000000000000";
+    const redeem = { ...quote, operation: "REDEEM_ALL" as const, amount: { minorUnits: "750121" } } as EarnQuote;
+    const transfer = (address: `0x${string}`, from: `0x${string}`, to: `0x${string}`, value: bigint) => ({ address, topics: encodeEventTopics({ abi, eventName: "Transfer", args: { from, to } }), data: encodeAbiParameters([{ type: "uint256" }], [value]) });
+    const withdraw = (assets: bigint) => ({ address: vault, topics: encodeEventTopics({ abi, eventName: "Withdraw", args: { sender: router, receiver: router, owner: router } }), data: encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [assets, 700n]) });
+    const routed = (...logs: unknown[]) => ({ status: "success", logs }) as unknown as TransactionReceipt;
+    const pulled = transfer(vault, wallet, router, 700n);
+    expect(() => verifyEarnReceipt(routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_122n)), redeem)).not.toThrow();
+    // Never less than quoted, and the forwarded leg must equal the withdrawn assets.
+    for (const value of [routed(pulled, withdraw(750_120n), transfer(usdc, router, wallet, 750_120n)), routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_121n))]) expect(() => verifyEarnReceipt(value, redeem)).toThrow();
+    // A partial withdrawal still requires the exact amount.
+    expect(() => verifyEarnReceipt(routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_122n)), { ...redeem, operation: "WITHDRAW" })).toThrow();
+  });
   it("correlates smart-account approval receipts to owner, spender and exact allowance", () => {
     const call = { to: vault, data: encodeFunctionData({ abi, functionName: "approve", args: [stranger, 100n] }) } as const;
     const value = { status: "success", logs: [{ address: vault, topics: encodeEventTopics({ abi, eventName: "Approval", args: { owner: wallet, spender: stranger } }), data: encodeAbiParameters([{ type: "uint256" }], [100n]) }] } as unknown as TransactionReceipt;
