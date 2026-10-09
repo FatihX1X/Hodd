@@ -1,7 +1,32 @@
 # Hoddie validation checkpoint — 2026-10-09
 
+## Console redesign integration
+
+The `hoddie` branch preserves the original WIP in `d4c7549` and merges the
+console redesign from `origin/main` at `9e2d13f`. Three conflicts were resolved:
+`app-shell.tsx` keeps Policy and adds Hoddie to desktop/mobile navigation;
+`agent-requests.tsx` keeps request-source labels with the dark presentation;
+`treasury-workspace-provider.tsx` keeps Hoddie's canonical refresh hook.
+The layout and dependency files merged cleanly; `corepack pnpm install`
+confirmed the existing lockfile is current.
+
+Chat, consent, sourced cards, native drafts and approval reviews now use the
+console's ink/paper/blue tokens, shared input/button recipes and typography.
+The compact layout, horizontal suggestions and collapsed wallet requests remain.
+Mobile tests check all seven navigation entries and no overflow at 320, 375 and
+640 pixels. The Playwright server command uses Corepack so a standalone `pnpm`
+binary is not required on PATH.
+
+Security and API implementation are unchanged from the WIP. The hosted migration
+`20261008203912` was already applied and was not changed or reapplied. No live
+model calls, transactions or hosted database writes were performed in this run.
+Earn/payment execution files match the merged redesign; other worktrees and
+local `main` were not modified. The branch has not been pushed.
+
 This is code/mock acceptance, not live provider acceptance. Gemini/OpenRouter keys
-were absent during validation. No live model call or onchain transaction was sent.
+were absent during the original standalone validation. The integration regression
+uses mocks even when local keys are configured. No live model call or onchain
+transaction was sent.
 
 Local setup was subsequently verified on 2026-10-09: both provider keys and the
 Gemini free-tier confirmation flag are present, without logging their values.
@@ -12,13 +37,14 @@ Live intent parsing and user-approved workspace change acceptance remain pending
 
 ## Automated results
 
-- `pnpm typecheck`: passed.
-- `pnpm lint`: passed.
-- `pnpm exec vitest run --maxWorkers=2`: 55 files / 271 tests passed (60 Hoddie-specific).
-- `pnpm build`: passed; new page and three API routes included.
-- `pnpm exec playwright test --workers=2`: 44 desktop/mobile tests passed.
+- `corepack pnpm typecheck`: passed.
+- `corepack pnpm lint`: passed.
+- `corepack pnpm exec vitest run --maxWorkers=2`: 57 files / 292 tests passed.
+- `corepack pnpm build`: passed; Hoddie page and three API routes included.
+- `corepack pnpm exec playwright test --workers=2`: 50 desktop/mobile tests passed.
 - `git diff --check`: passed.
-- Dependency audit: eight advisories remain (details below); not a pass.
+- Secret scan: zero matches in tracked files and public client assets; local env files remain ignored.
+- Prior standalone dependency audit: eight advisories (details below); not rerun for this merge.
 
 Two-worker regression runs avoid CPU contention from simultaneous browser/build
 processes on this Windows host. An earlier unrestricted concurrent run timed out
@@ -35,7 +61,7 @@ in an existing component test; no Stage 5/6 tests were changed to hide failures.
 - Logout/scope changes clear memory and discard late responses; SPA navigation retains memory, document reload does not.
 - Complete live data required for money requests; selected-vault position/liquidity checks, no executable quote created.
 - Production Earn/Send execution remains closed. Existing Stage 5/6 tests are included in regression runs.
-- Supabase rollback-only test passed: first-party/MCP isolation, owner reads, replay, revision, deleted session, minute quota and UTC daily quota.
+- Supabase rollback-only test passed at the prior standalone checkpoint: first-party/MCP isolation, owner reads, replay, revision, deleted session, minute quota and UTC daily quota. It was not rerun against the hosted database during this integration.
 - Public client JavaScript was scanned against existing server secret values: zero matches (values were not logged).
 
 ## Compact chat and automatic routing update
@@ -56,7 +82,7 @@ in an existing component test; no Stage 5/6 tests were changed to hide failures.
   deterministic policy errors never trigger fallback or a financial retry.
 - Mock tests verify the routing sequence, unavailable setup, bounded failures,
   cancellation, daily budget rejection and unchanged financial approval boundary.
-- All 44 desktop/mobile Playwright regressions passed, including suggestions'
+- All 50 desktop/mobile Playwright regressions passed, including suggestions'
   horizontal scrolling, no page overflow, focus, explicit approval and persistence.
 
 These are code/mock checks; real two-provider interpretation remains pending.
@@ -72,7 +98,7 @@ secret is required for Hoddie.
 
 ## Dependency audit (not clean)
 
-The current audit reports eight advisories: two high, four moderate, two low.
+The prior standalone audit reported eight advisories: two high, four moderate, two low.
 These are in pre-existing Next/Circle/ESLint dependency paths, not the new AI
 provider packages. They were not changed as part of this isolated Hoddie work.
 

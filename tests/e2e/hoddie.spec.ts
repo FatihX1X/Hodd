@@ -6,6 +6,11 @@ test.beforeEach(async ({ page }) => {
 test("Hoddie navigation and read-only setup reflow without console errors", async ({ page }, testInfo) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message)); page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   await page.goto("/hoddie"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
+  await expect(page.locator('[data-theme="dark"]')).toBeVisible();
+  await expect(page.getByRole("region", { name: "Hoddie conversation" })).toHaveCSS("background-color", "rgb(16, 19, 25)");
+  if (testInfo.project.name === "desktop") {
+    await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Hoddie", exact: true })).toHaveAttribute("aria-current", "page");
+  }
   await expect(page.getByRole("combobox", { name: "Command provider" })).toHaveCount(0);
   const suggestions = page.getByRole("region", { name: "Suggested commands" });
   expect(await suggestions.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
@@ -16,12 +21,19 @@ test("Hoddie navigation and read-only setup reflow without console errors", asyn
   await page.getByRole("button", { name: "Summarize my treasury" }).click(); await expect(page.getByLabel("Your command")).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("hoddie-compact-chat.png"), fullPage: true });
-  await page.setViewportSize({ width: 640, height: 900 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
-  await expect(page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link")).toHaveCount(5);
+  for (const width of [320, 375, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+    const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
+    await expect(navigation.getByRole("link")).toHaveCount(7);
+    for (const label of ["Overview", "Strategies", "Obligations", "Policy", "Activity", "Connections", "Hoddie"]) {
+      await expect(navigation.getByRole("link", { name: label, exact: true })).toBeVisible();
+    }
+    await expect(navigation.getByRole("link", { name: "Hoddie", exact: true })).toHaveAttribute("aria-current", "page");
+  }
   expect(errors).toEqual([]);
 });
-test("mocked interpretation shows sourced cards, user-only confirmation and session-only history", async ({ page }) => {
+test("mocked interpretation shows sourced cards, user-only confirmation and session-only history", async ({ page }, testInfo) => {
   // Synthetic browser session only; every Supabase request is intercepted below.
   const user = { id: "11111111-1111-4111-8111-111111111111", email: "hoddie-e2e@example.invalid", aud: "authenticated", role: "authenticated", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: {}, created_at: "2026-10-08T12:00:00Z" };
   const expiry = Math.floor(Date.now() / 1000) + 3600;
@@ -54,16 +66,17 @@ test("mocked interpretation shows sourced cards, user-only confirmation and sess
   await page.goto("/hoddie"); await page.getByRole("button", { name: "Allow Hoddie for this session" }).click();
   await page.getByLabel("Your command").fill("Hesabımı özetle"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(page.getByText("4500 USDC", { exact: true })).toBeVisible(); expect(confirms).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("hoddie-change-review.png"), fullPage: true });
   expect(bodies[0]).toMatchObject({ mode: "MESSAGE", message: "Hesabımı özetle", provider: "AUTO" });
   expect(bodies[0]).not.toHaveProperty("messages"); expect(JSON.stringify(bodies[0])).not.toContain("4500");
   const apply = page.getByRole("button", { name: "Apply change" }); await apply.focus(); await apply.press("Enter");
   await expect(apply).toBeDisabled(); expect(confirms).toBe(1);
-  await page.getByRole("link", { name: "Portfolio", exact: true }).filter({ visible: true }).first().click(); await page.goto("/hoddie");
+  await page.getByRole("link", { name: "Overview", exact: true }).filter({ visible: true }).first().click(); await page.goto("/hoddie");
   // A full document navigation deliberately clears memory; SPA navigation is tested below.
   await expect(page.getByText("Canonical server result")).toHaveCount(0);
   await page.getByLabel("Your command").fill("summary"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(page.getByText("Canonical server result")).toBeVisible();
-  await page.getByRole("link", { name: "Portfolio", exact: true }).filter({ visible: true }).first().click();
+  await page.getByRole("link", { name: "Overview", exact: true }).filter({ visible: true }).first().click();
   await page.getByRole("link", { name: /^(Open )?Hoddie$/ }).filter({ visible: true }).first().click(); await expect(page.getByText("Canonical server result")).toBeVisible();
   await page.reload(); await expect(page.getByText("Canonical server result")).toHaveCount(0);
 });
