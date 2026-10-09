@@ -16,13 +16,13 @@ const context = (): HoddieContext => ({ userId: "owner", sessionId: "session", r
 const consentFor = async (owner: HoddieContext) => { mocks.cookie = newConsent(owner, "GEMINI"); return requireConsent(owner, "GEMINI"); };
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-08T10:00:00Z")); vi.stubEnv("HODD_MCP_HANDLE_SECRET", "hoddie-unit-test-key-never-a-real-secret"); vi.clearAllMocks();
-  mocks.live.mockImplementation(async (workspace: TreasuryWorkspace) => ({ workspace, source: "DEMO", note: "Demo data", snapshot: null, portfolio: null }));
+  mocks.live.mockImplementation(async (workspace: TreasuryWorkspace) => ({ workspace, source: "NOT_CONNECTED", note: "No wallet", snapshot: null, portfolio: null }));
 });
 afterEach(() => vi.useRealTimers());
 describe("Hoddie deterministic treasury results and explicit application", () => {
   it("produces exact canonical summary values without a provider", async () => {
     const owner = context(); const result = await resolveIntent(owner, await consentFor(owner), intent({}), maskCommand("Hesabımı özetle", owner.workspace), "UTC");
-    expect(result.source).toBe("DEMO");
+    expect(result.source).toBe("NOT_CONNECTED");
     expect(result.cards[0].fields).toContainEqual({ label: "Total treasury", value: "10000 USDC" });
     expect(result.cards[0].fields).toContainEqual({ label: "Deployable capital", value: "4500 USDC" });
     expect(owner.client.rpc).not.toHaveBeenCalled();

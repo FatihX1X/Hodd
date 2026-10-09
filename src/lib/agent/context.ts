@@ -26,7 +26,7 @@ export type AgentContext = Awaited<ReturnType<typeof agentContext>>;
 
 export type LiveView = Readonly<{
   workspace: TreasuryWorkspace;
-  source: "LIVE" | "DEMO" | "PARTIAL";
+  source: "LIVE" | "NOT_CONNECTED" | "PARTIAL";
   note: string;
   snapshot: WalletSnapshot | null;
   portfolio: Awaited<ReturnType<typeof getEarnPortfolio>> | null;
@@ -34,10 +34,13 @@ export type LiveView = Readonly<{
 
 /**
  * Applies fresh Arc balances and Morpho positions, exactly like the browser does.
- * A demo workspace is returned as-is and clearly labelled.
+ * Without a wallet nothing is live: balances are reported as zero, never as stored or sample numbers.
  */
 export async function liveWorkspace(workspace: TreasuryWorkspace, deps: { readSnapshot?: (address: string) => Promise<WalletSnapshot>; readPortfolio?: typeof getEarnPortfolio } = {}): Promise<LiveView> {
-  if (workspace.treasuryMode === "LOCAL_DEMO" || !workspace.walletConnection) return { workspace, source: "DEMO", note: "No wallet is connected; these are demo balances.", snapshot: null, portfolio: null };
+  if (workspace.treasuryMode === "LOCAL_DEMO" || !workspace.walletConnection) {
+    const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
+    return { workspace: { ...workspace, totalTreasury: zero, liquidUsdc: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero })) }, source: "NOT_CONNECTED", note: "No wallet is connected in Hodd, so there are no live balances. Connect a wallet at app.hoddfinance.xyz first.", snapshot: null, portfolio: null };
+  }
   const address = workspace.walletConnection.address;
   let snapshot: WalletSnapshot;
   try { snapshot = await (deps.readSnapshot ?? ((value: string) => new ViemArcTreasuryReader().readSnapshot(value)))(address); }

@@ -58,7 +58,7 @@ test("mocked interpretation shows sourced cards, user-only confirmation and sess
   await page.route("**/api/hoddie/chat", (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { status: "READY", providers: [{ id: "GEMINI", model: "mock-intent-provider", ready: true, label: "Gemini", note: "Test only" }] } });
     bodies.push(route.request().postDataJSON());
-    const result = { language: "en", message: "Canonical server result", source: "DEMO", observedAt: "2026-10-08T12:00:00Z", cards: [{ title: "Treasury overview", fields: [{ label: "Deployable capital", value: "4500 USDC" }] }], proposal: { handle: "mock-review", kind: "UPDATE_POLICY", summary: "Safety buffer 1000 → 1500 USDC", lines: ["Not yet applied"], expiresAt: new Date(Date.now() + 600000).toISOString(), impact: [{ label: "Deployable capital", before: "4500 USDC", after: "4000 USDC" }] } };
+    const result = { language: "en", message: "Canonical server result", source: "NOT_CONNECTED", observedAt: "2026-10-08T12:00:00Z", cards: [{ title: "Treasury overview", fields: [{ label: "Deployable capital", value: "4500 USDC" }] }], proposal: { handle: "mock-review", kind: "UPDATE_POLICY", summary: "Safety buffer 1000 → 1500 USDC", lines: ["Not yet applied"], expiresAt: new Date(Date.now() + 600000).toISOString(), impact: [{ label: "Deployable capital", before: "4500 USDC", after: "4000 USDC" }] } };
     const chunks = [{ type: "start", messageId: crypto.randomUUID() }, { type: "data-hoddie", data: result }, { type: "finish" }];
     return route.fulfill({ contentType: "text/event-stream", headers: { "x-vercel-ai-ui-message-stream": "v1" }, body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n" });
   });
