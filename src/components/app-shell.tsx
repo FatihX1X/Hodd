@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, ArrowUpRight, BriefcaseBusiness, Landmark, ListChecks, Plug } from "lucide-react";
+import { Activity, ArrowUpRight, Bot, BriefcaseBusiness, Landmark, ListChecks, Plug } from "lucide-react";
 import clsx from "clsx";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { formatDate } from "@/lib/treasury/format";
@@ -41,7 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <nav aria-label="Primary navigation" className="px-3 py-5">
           <ul className="space-y-1">
-            {navigation.map(({ href, label, icon: Icon }) => {
+            {[...navigation, { href: "/hoddie", label: "Hoddie", icon: Bot }].map(({ href, label, icon: Icon }) => {
               const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
               return (
                 <li key={href}>
@@ -76,9 +76,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="text-xs text-black/55">{liveMode ? "User-controlled · transaction writes paused" : "Editable · no funds can move"}</span>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/hoddie" aria-label="Open Hoddie" aria-current={pathname === "/hoddie" ? "page" : undefined} className="grid size-11 place-items-center border border-black/15 text-[#0a52e8] lg:hidden"><Bot aria-hidden="true" className="size-4" /></Link>
             <AccountMenu />
             <span className="hidden text-xs text-black/45 sm:inline">Updated {formatDate(workspace.updatedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-            <span className="mono border border-black/15 bg-[#f4f1e8] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]">Arc Testnet</span>
+            <span className="mono hidden border border-black/15 bg-[#f4f1e8] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] sm:inline-block">Arc Testnet</span>
           </div>
         </header>
         <main className="pb-24 lg:pb-0">{children}</main>
