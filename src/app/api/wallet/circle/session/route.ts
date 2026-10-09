@@ -1,11 +1,21 @@
 import { cookies } from "next/headers";
 import { circleErrorCode, circleUserWalletClient, isSameOrigin, sessionBinding, UCW_BINDING_COOKIE, UCW_ENCRYPTION_COOKIE, UCW_TOKEN_COOKIE } from "@/lib/circle/user-wallet-server";
-import { requireSupabaseUser } from "@/lib/supabase/server";
+import { createSupabaseServerClient, requireSupabaseUser } from "@/lib/supabase/server";
+import { requestHostOrigin } from "@/lib/earn/access-policy";
+import { EarnAccessError, hostExecutionMode } from "@/lib/earn/security";
+import { reserveLiveUsage } from "@/lib/execution/live-readiness";
 
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return Response.json({ status: "ERROR", message: "Same-origin request required." }, { status: 403 });
   const auth = await requireSupabaseUser();
   if (auth.status !== "READY") return Response.json({ status: "ERROR", code: auth.status, message: auth.status === "UNCONFIGURED" ? "Supabase is not configured." : "Sign in before creating an embedded wallet." }, { status: auth.status === "UNCONFIGURED" ? 503 : 401 });
+  // Each session costs Circle API calls; the public demo counts them per user.
+  const mode = await hostExecutionMode(requestHostOrigin(request).hostname);
+  const supabase = mode === "TESTNET_LIVE" ? await createSupabaseServerClient() : null;
+  if (supabase) {
+    try { await reserveLiveUsage(supabase, mode, "CIRCLE_SESSION"); }
+    catch (error) { const known = error instanceof EarnAccessError; return Response.json({ status: "ERROR", code: known ? error.code : "USAGE_UNAVAILABLE", message: known ? error.message : "Try again shortly." }, { status: known ? error.status : 503 }); }
+  }
   const client = circleUserWalletClient();
   if (!client) return Response.json({ status: "ERROR", code: "CIRCLE_NOT_CONFIGURED", message: "Circle User-Controlled Wallets is not configured." }, { status: 503 });
   try {

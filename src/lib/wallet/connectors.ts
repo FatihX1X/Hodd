@@ -75,7 +75,9 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
     // Never relabel a lost wallet response as a preflight failure.
     return prepared.wallet.sendTransaction({ ...prepared.call, value: BigInt(prepared.call.value ?? "0"), gas: prepared.gas, gasPrice: prepared.gasPrice });
   };
-  return { runtime: { connection: walletConnection, adapter, sendCalls, expiresAt: Date.now() + 55 * 60_000 }, provider };
+  // Free ownership proof (personal_sign); never a transaction.
+  const signMessage = (message: string) => createWalletClient({ account: getAddress(walletConnection.address), chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) }).signMessage({ account: getAddress(walletConnection.address), message });
+  return { runtime: { connection: walletConnection, adapter, sendCalls, signMessage, expiresAt: Date.now() + 55 * 60_000 }, provider };
 }
 
 export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<ActiveWalletRuntime> {
@@ -112,7 +114,9 @@ export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<
     if (!receipt.success || receipt.receipt.status !== "success") throw new Error("The UserOperation did not succeed. Inspect its receipt before retrying.");
     return receipt.receipt.transactionHash;
   };
-  return { connection: { ...connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), passkey: { id: credential.id, publicKey: credential.publicKey } }, adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
+  // ERC-1271/6492 signature from the passkey; verifiable before the account is deployed.
+  const signMessage = (message: string) => account.signMessage({ message });
+  return { connection: { ...connection("CIRCLE_MODULAR", account.address, "Circle Passkey", "MSCA"), passkey: { id: credential.id, publicKey: credential.publicKey } }, adapter: null, sendCalls, signMessage, expiresAt: Date.now() + 55 * 60_000 };
 }
 
 type CircleSession = { status: "READY"; userToken: string; encryptionKey: string } | { status: "ERROR"; message: string };

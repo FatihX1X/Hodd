@@ -4,6 +4,7 @@ import { arcTestnet } from "viem/chains";
 import { createBundlerClient, toWebAuthnAccount, type UserOperation } from "viem/account-abstraction";
 import { toCircleSmartAccount } from "@circle-fin/modular-wallets-core";
 import { modularReadTransport } from "./modular-read-transport";
+import { LIVE_APP_HOST } from "@/lib/earn/access-policy";
 import type { WalletConnection } from "@/lib/treasury/models";
 import type { WalletCall } from "./runtime";
 import { sponsoredUserOperationSchema, walletFeeQuoteSchema } from "./fee-quote";
@@ -16,7 +17,8 @@ export async function modularReadClient(wallet: WalletConnection) {
   // Restrict server transports to Circle. Public client configuration is not an
   // SSRF mechanism or permission to send the client key to arbitrary endpoints.
   if (baseUrl !== "https://modular-sdk.circle.com/v1/rpc/w3s/buidl") throw new Error("MODULAR_ENDPOINT_NOT_ALLOWED");
-  const transport = modularReadTransport(clientKey) as Transport;
+  // Never a request header: the deployment decides which domain the client key is bound to.
+  const transport = modularReadTransport(clientKey, process.env.VERCEL_ENV === "production" ? LIVE_APP_HOST : "localhost") as Transport;
   const client = createPublicClient({ chain: arcTestnet, transport });
   if (await client.getChainId() !== 5042002) throw new Error("WRONG_MODULAR_CHAIN");
   const owner = toWebAuthnAccount({ credential: { id: wallet.passkey.id, publicKey: wallet.passkey.publicKey as `0x${string}` }, getFn: async () => { throw new Error("SERVER_SIGNING_FORBIDDEN"); } });

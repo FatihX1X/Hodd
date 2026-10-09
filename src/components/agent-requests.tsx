@@ -1,5 +1,6 @@
 "use client";
 
+import { isExecutionAvailable } from "@/lib/earn/access-policy";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -61,7 +62,7 @@ export function AgentRequests() {
 
   if (!requests.length) return null;
   const portfolio = earnState.status === "READY" ? earnState.portfolio : null;
-  const localExecution = portfolio?.integration.execution === "LOCAL_ENABLED";
+  const localExecution = portfolio ? isExecutionAvailable(portfolio.integration.execution) : false;
   const morpho = operationalWorkspace?.strategies.find((strategy) => strategy.kind === "MORPHO");
   const depositLimit = assessment && operationalWorkspace && morpho ? minMoney(assessment.deployableCapital, subtractMoneyFloor(multiplyBps(operationalWorkspace.totalTreasury, workspace.policy.strategyCapsBps.MORPHO), morpho.balance)) : null;
 
@@ -87,7 +88,7 @@ export function AgentRequests() {
             <p className="text-sm font-semibold">{request.summary}</p>
             <p className="mt-1 text-xs text-white/55">Source: {request.source === "HODDIE" ? "Hoddie" : "Claude connector"}</p>
             <p className="mono mt-1 text-[10px] uppercase tracking-[0.1em] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"} · requested {new Date(request.created_at).toLocaleString()}{expired ? " · expired" : request.expires_at ? ` · expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
-            {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Signing runs only in local Hodd for now; open this request there to finish it.</p>}
+            {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Wallet signing is not available on this host right now. Open app.hoddfinance.xyz to finish it.</p>}
           </div></div>
           <div className="flex flex-wrap items-center gap-2">{action}
             {!expired && <button onClick={() => void resolve(request.id, "DONE")} className="border border-white/20 px-3 py-2 text-xs">Mark done</button>}
