@@ -99,7 +99,9 @@ function failureCause(error: unknown) {
   if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,60}$/.test(error.message)) return error.message;
   return error instanceof Error ? (error.name || "Error").replace(/[^A-Za-z0-9_]/g,"").slice(0,40).toUpperCase() : "UNKNOWN_ERROR";
 }
-async function shareDecimals(vault:string) {return arcClient.readContract({address:getAddress(vault),abi:erc20Abi,functionName:"decimals"});}
+// Vault share decimals never change: read once per server instance (fewer calls against the public RPC).
+const decimalsCache=new Map<string,number>();
+async function shareDecimals(vault:string) {const key=getAddress(vault);const known=decimalsCache.get(key);if(known!==undefined)return known;const value=await arcClient.readContract({address:key,abi:erc20Abi,functionName:"decimals"});decimalsCache.set(key,value);return value;}
 async function shares(wallet:string,vault:string) {return arcClient.readContract({address:getAddress(vault),abi:erc20Abi,functionName:"balanceOf",args:[getAddress(wallet)]});}
 async function prepareStep(run: AgentRun, i: Awaited<ReturnType<typeof agentInputs>>, steps: AgentStep[]) {
   let call:EarnCall;let stage:AgentStep["stage"];let gasLimit:bigint;let gasPrice=BigInt(i.gasPriceWei);

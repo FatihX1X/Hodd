@@ -12,7 +12,10 @@ import type { ExecutionMode } from "./access-policy";
 
 export const earnKit = new AppKit();
 const kit = earnKit;
-export const arcClient = createPublicClient({ chain: arcTestnet, transport: http(arcRpcUrl(), { timeout: 10_000, retryCount: 0 }) });
+// Reads only (nothing is ever broadcast through this client). The public Arc RPC answers bursts
+// from a serverless host with -32005 "Request exceeds defined limit"; viem retries exactly those
+// (and 429/5xx) with backoff, so one throttled read no longer stops an Earn, payment or agent step.
+export const arcClient = createPublicClient({ chain: arcTestnet, transport: http(arcRpcUrl(), { timeout: 10_000, retryCount: 3, retryDelay: 400 }) });
 const erc4626PositionAbi = [
   { type: "function", name: "asset", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
