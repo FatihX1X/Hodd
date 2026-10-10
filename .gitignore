@@ -30,3 +30,6 @@ next-env.d.ts
 /.hodd-local/
 /supabase/.temp/
 /.playwright-live/
+
+/.pnpm-store/
+/.autopilot-smoke/
