@@ -8,12 +8,23 @@ import { evaluateEarnQuotePolicy } from "@/lib/earn/policy";
 import { agentAdapter } from "./circle";
 import type { agentInputs } from "./inputs";
 import type { Decision } from "./models";
+/** Circle's withdrawable max when it is below the request by at most 0.01% (min 100 units); otherwise null. */
+export function roundedWithdrawal(requested: bigint, providerMax: bigint): bigint | null {
+  if(providerMax >= requested || providerMax <= 0n) return null;
+  const tolerance=requested/10_000n > 100n ? requested/10_000n : 100n;
+  return requested - providerMax <= tolerance ? providerMax : null;
+}
 export async function agentEarnQuote(i: Awaited<ReturnType<typeof agentInputs>>, d: Decision): Promise<EarnQuote | null> {
   if(d.depositMinor === "0" && d.withdrawMinor === "0") return null;
   const operation=d.depositMinor !== "0" ? "DEPOSIT" : "WITHDRAW";
-  const amount=decimalStringToMoney(formatUnits(BigInt(operation === "DEPOSIT" ? d.depositMinor : d.withdrawMinor),6));
-  const params={from:{adapter:agentAdapter(),chain:"Arc_Testnet" as const,address:i.wallet.address},vaultAddress:i.vault.address,amount:formatUnits(BigInt(amount.minorUnits),6),config:{...operationConfig(),batchTransactions:false}};
-  const raw=operation === "DEPOSIT" ? await earnKit.earn.getDepositQuote(params) : await earnKit.earn.getWithdrawalQuote(params);
+  let amount=decimalStringToMoney(formatUnits(BigInt(operation === "DEPOSIT" ? d.depositMinor : d.withdrawMinor),6));
+  const request=(value:bigint)=>({from:{adapter:agentAdapter(),chain:"Arc_Testnet" as const,address:i.wallet.address},vaultAddress:i.vault.address,amount:formatUnits(value,6),config:{...operationConfig(),batchTransactions:false}});
+  let raw=operation === "DEPOSIT" ? await earnKit.earn.getDepositQuote(request(BigInt(amount.minorUnits))) : await earnKit.earn.getWithdrawalQuote(request(BigInt(amount.minorUnits)));
+  // Hodd reads the position with convertToAssets; Circle rounds its withdrawable max a few units lower.
+  // A tiny gap is re-quoted at Circle's exact max; anything larger stays blocked below.
+  const providerMax="maxWithdrawable" in raw ? BigInt(decimalStringToMoney(raw.maxWithdrawable.amount).minorUnits) : null;
+  const adjusted=operation === "WITHDRAW" && providerMax !== null ? roundedWithdrawal(BigInt(amount.minorUnits),providerMax) : null;
+  if(adjusted !== null){amount={...amount,minorUnits:adjusted.toString()};raw=await earnKit.earn.getWithdrawalQuote(request(adjusted));}
   const gasFees=(raw.gasFees ?? []).map(f=>{
     if(!f.fees)throw new Error("AGENT_GAS_UNAVAILABLE");
     const gasLimit=earnStepGasLimit(f.name,BigInt(f.fees.gas),operation === "DEPOSIT" && (raw.gasFees ?? []).some(x=>/^approv/i.test(x.name)));

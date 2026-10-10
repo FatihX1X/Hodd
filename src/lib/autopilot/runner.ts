@@ -21,6 +21,8 @@ const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = 
 export async function startAgentRun(userId: string) {
   const existing=await openRun(userId); if(existing)return advanceAgentRun(existing);
   const i=await agentInputs(userId); const decision=decisionOf(i); const quote=await agentEarnQuote(i,decision);
+  // A withdrawal re-quoted at Circle's rounded max records the amount that will actually move.
+  if(quote?.operation==="WITHDRAW" && BigInt(quote.amount.minorUnits)<BigInt(decision.withdrawMinor))decision.withdrawMinor=quote.amount.minorUnits;
   const id=randomUUID();
   const snapshot={workspace:i.workspace,workspaceRevision:i.workspaceRevision,mandate:i.stored.mandate,mandateRevision:i.stored.revision,spentMinor:String(i.stored.spent_minor),cash:i.cash,ownerCash:i.ownerCash,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,feeReserveMinor:i.feeReserveMinor};
   const {error}=await agentDb().rpc("hodd_start_agent_run",{p_id:id,p_user:userId,p_snapshot:snapshot,p_decision:decision,p_quote:quote,p_return_all:i.stored.return_requested,p_revision:i.stored.revision});
