@@ -23,6 +23,7 @@ const navigation = [
   { href: "/policy", label: "Policy", icon: SlidersHorizontal },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/connections", label: "Connections", icon: Plug },
+  { href: "/autopilot", label: "Autopilot", icon: Bot },
   { href: "/hoddie", label: "Hoddie", icon: Bot },
 ];
 
@@ -83,7 +84,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="hidden items-center gap-3 lg:flex">
             <span className="mono text-[10px] uppercase tracking-[0.18em] text-white/55">{liveMode ? walletLabel : mode === "DEMO" ? "Read-only demo" : "Live treasury"}</span>
             <span className="h-3 w-px bg-white/20" />
-            <span className="text-xs text-white/60">{mode === "DEMO" ? "Sample data · read-only" : "Your own wallet signs every transaction"}</span>
+            <span className="text-xs text-white/60">{mode === "DEMO" ? "Sample data · read-only" : pathname.startsWith("/autopilot") ? "Agent wallet · bounded server signing" : "Your own wallet signs every transaction"}</span>
           </div>
           <div className="flex items-center gap-3">
             <AccountMenu />
@@ -95,7 +96,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-40 border-t border-white/15 bg-[#0b0b0d]/95 px-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 backdrop-blur lg:hidden">
-        <ul className="grid grid-cols-7">
+        <ul className="grid grid-cols-8">
           {navigation.map(({ href, label, icon: Icon }) => {
             const active = isActive(href);
             return (
