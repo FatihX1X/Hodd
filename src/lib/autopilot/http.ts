@@ -98,7 +98,7 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"run"|
     const known=error instanceof EarnAccessError;
     const code=known ? error.code : error instanceof z.ZodError ? "INVALID_REQUEST" : error instanceof Error && /^AGENT_[A-Z_]+$/.test(error.message) ? error.message : "AGENT_UNAVAILABLE";
     const status=known?error.status:code==="AGENT_RATE_LIMIT"?429:code==="INVALID_REQUEST"?400:503;
-    return Response.json({status:"ERROR",code,message:known?error.message:code==="AGENT_SCHEMA_UNAVAILABLE"?"Autopilot is not provisioned. Its local migration has not been applied.":"Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
+    return Response.json({status:"ERROR",code,message:known?error.message:code==="AGENT_SCHEMA_UNAVAILABLE"?"Autopilot is not provisioned. Its local migration has not been applied.":code==="AGENT_RATE_LIMIT"?"Autopilot starts at most one run every 5 minutes. Nothing was sent; try Run now again shortly.":"Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
   }
 }
 export async function agentCron(request:Request) {

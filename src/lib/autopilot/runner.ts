@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { decodeEventLog, encodeFunctionData, erc20Abi, getAddress, type Hex } from "viem";
 import { arcClient } from "@/lib/earn/gateway";
-import { captureNextEarnCall } from "@/lib/earn/capture";
+import { captureNextEarnCall, EarnCaptureError } from "@/lib/earn/capture";
 import { type EarnCall } from "@/lib/earn/router";
 import { isAllowedVault, ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { verifyApprovalReceipt, verifyEarnReceipt } from "@/lib/earn/receipts";
@@ -79,12 +79,21 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
       await patchStep(fence,{state:"UNKNOWN"}).catch(()=>undefined);
       return await patchRun(run,"UNKNOWN","AGENT_SUBMISSION_UNRESOLVED");
     }
-  } catch {
+  } catch(error) {
+    // Keep the cause: a bare REQUIRES_REVIEW cannot be diagnosed from production.
+    const cause=failureCause(error);
+    console.error("[autopilot] run needs review",run.id,cause,error instanceof Error ? error.message.slice(0,300) : "");
     const {data:uncertain,error:readError}=await agentDb().from("agent_run_steps").select("id,state").eq("run_id",run.id).in("state",["SUBMITTING","SUBMITTED","UNKNOWN"]);
-    return await patchRun(run,readError || uncertain?.length ? "UNKNOWN":"FAILED","AGENT_RUN_REQUIRES_REVIEW");
+    return await patchRun(run,readError || uncertain?.length ? "UNKNOWN":"FAILED","AGENT_RUN_REQUIRES_REVIEW:"+cause);
   } finally {
     await agentDb().from("agent_runs").update({processing_until:null,processing_token:null}).eq("id",run.id).eq("processing_token",token);
   }
+}
+/** A short, secret-free cause code for the run record. */
+function failureCause(error: unknown) {
+  if (error instanceof EarnCaptureError) return "CAPTURE_"+error.failure.code;
+  if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,60}$/.test(error.message)) return error.message;
+  return error instanceof Error ? (error.name || "Error").replace(/[^A-Za-z0-9_]/g,"").slice(0,40).toUpperCase() : "UNKNOWN_ERROR";
 }
 async function shareDecimals(vault:string) {return arcClient.readContract({address:getAddress(vault),abi:erc20Abi,functionName:"decimals"});}
 async function shares(wallet:string,vault:string) {return arcClient.readContract({address:getAddress(vault),abi:erc20Abi,functionName:"balanceOf",args:[getAddress(wallet)]});}
