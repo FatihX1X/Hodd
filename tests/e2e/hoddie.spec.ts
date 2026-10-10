@@ -27,8 +27,8 @@ test("Hoddie navigation and read-only setup reflow without console errors", asyn
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
     const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
-    await expect(navigation.getByRole("link")).toHaveCount(7);
-    for (const label of ["Overview", "Strategies", "Obligations", "Policy", "Activity", "Connections", "Hoddie"]) {
+    await expect(navigation.getByRole("link")).toHaveCount(8);
+    for (const label of ["Overview", "Strategies", "Obligations", "Policy", "Activity", "Connections", "Autopilot", "Hoddie"]) {
       await expect(navigation.getByRole("link", { name: label, exact: true })).toBeVisible();
     }
     await expect(navigation.getByRole("link", { name: "Hoddie", exact: true })).toHaveAttribute("aria-current", "page");
