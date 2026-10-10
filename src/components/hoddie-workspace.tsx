@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronLeft, ChevronRight, LoaderCircle, Square, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, LoaderCircle, Square, Trash2, X } from "lucide-react";
 import type { HoddieResult } from "@/lib/hoddie/models";
 import { useHoddie } from "./hoddie-provider";
 import { HoddieDraft } from "./hoddie-draft";
@@ -37,25 +37,49 @@ function Result({ result }: { result: HoddieResult }) {
   </div>;
 }
 const examples = ["Summarize my treasury", "Can I pay tomorrow's bills?", "Show my allocation preview", "Create a 500 USDC obligation due tomorrow"];
+const BOTTOM_SLACK = 80;
+const distanceFromEnd = (log: HTMLElement) => log.scrollHeight - log.scrollTop - log.clientHeight;
+function scrollToEnd(log: HTMLElement | null, smooth = true) {
+  if (!log) return;
+  log.scrollTo({ top: log.scrollHeight, behavior: smooth && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
+}
 export function HoddieWorkspace() {
   const state = useHoddie(); const [message, setMessage] = useState(""); const inputRef = useRef<HTMLTextAreaElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const [showRequests, setShowRequests] = useState(false);
   const wasBusy = useRef(false);
   useEffect(() => { if (wasBusy.current && !state.busy) inputRef.current?.focus(); wasBusy.current = state.busy; }, [state.busy]);
+  // The log scrolls inside the panel: follow new content only while the reader is at the end, otherwise offer a jump.
+  const logRef = useRef<HTMLDivElement>(null); const pinned = useRef(true); const lastTop = useRef(0); const seen = useRef(-1);
+  const [showJump, setShowJump] = useState(false);
+  if (!state.messages.length && showJump) setShowJump(false);
+  useEffect(() => {
+    const count = state.messages.length; const first = seen.current < 0; const sent = count > seen.current && state.messages[count - 1]?.role === "user"; seen.current = count;
+    if (!count) { pinned.current = true; lastTop.current = 0; return; }
+    if (pinned.current || sent) { pinned.current = true; scrollToEnd(logRef.current, !first); }
+  }, [state.messages]);
+  const onLogScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const log = event.currentTarget; const up = log.scrollTop < lastTop.current; lastTop.current = log.scrollTop;
+    // Only an upward move unpins, so our own smooth scroll (which passes through "far" positions) cannot flash the button.
+    if (distanceFromEnd(log) <= BOTTOM_SLACK) { pinned.current = true; setShowJump(false); } else if (up) { pinned.current = false; setShowJump(true); }
+  };
+  const jumpToLatest = () => { pinned.current = true; setShowJump(false); scrollToEnd(logRef.current); logRef.current?.focus({ preventScroll: true }); };
   const ready = state.providers.some((item) => item.ready);
   const enabled = state.workspaceScope === "TREASURY";
   const moveSuggestions = (direction: number) => suggestionsRef.current?.scrollBy({ left: direction * 240, behavior: "auto" });
   const submit = (event: React.FormEvent) => { event.preventDefault(); const value = message.trim(); if (!value || !enabled || state.busy) return; setMessage(""); void state.send(value); };
-  return <div className="mx-auto w-full min-w-0 max-w-4xl">
+  return <div className="mx-auto w-full min-w-0 max-w-6xl">
     <section className="flex min-w-0 flex-col border border-white/[0.14] bg-[#101319]" aria-label="Hoddie conversation">
         <SectionHeading index="01" title="Treasury conversation" description="Engine answers · changes need your review" action={<button disabled={state.busy} onClick={state.clear} className="inline-flex min-h-11 shrink-0 items-center gap-2 px-2 text-xs text-white/55 disabled:opacity-40"><Trash2 className="size-3.5" aria-hidden="true" />Clear chat</button>} />
         <div role="status" className="flex flex-wrap items-center gap-3 border-b border-white/10 px-5 py-3"><StatusPill label="TREASURY ENGINE" tone="info" /><p className="text-xs text-white/55">Read answers are available without command interpretation.</p></div>
         {(!state.signedIn ? <div className="m-4 border border-white/[0.14] p-4"><p className="text-sm">Sign in to prepare changes for your own treasury.</p><Link href="/login" className={`mt-3 ${buttonClass.primary}`}>Sign in</Link></div> : !state.allowed && <div className="m-4 border border-[#7fa6ff]/30 bg-[#4678ff]/10 p-4"><h2 className="text-sm font-semibold">Allow command interpretation</h2><p className="mt-2 text-xs leading-5 text-white/75">Only your latest masked command is shared with external free interpretation services, never account results or chat history. These services have their own retention and training terms. Do not enter sensitive, personal or confidential information.</p><button disabled={state.busy || !ready} onClick={() => void state.accept()} className={`mt-3 ${buttonClass.primary}`}>Allow Hoddie for this session</button>{!ready && <p className="mt-2 text-xs text-white/55">Command interpretation is unavailable. Treasury Engine answers still work.</p>}</div>)}
         {state.workspaceScope !== "TREASURY" && <p role="status" className="m-5 border border-white/[0.14] p-4 text-xs">Hoddie uses the main treasury only. Select Return to treasury in the workspace bar.</p>}
-        <div role="log" aria-label="Conversation messages" aria-live="polite" className="min-h-[32svh] space-y-5 px-4 py-6 md:min-h-[42svh] md:px-6">
-          {!state.messages.length && <div className="py-8 text-center"><p className="disp text-base">What can I help you with?</p><p className="mt-2 text-xs text-white/55">Ask about your balance, upcoming obligations or how much you can safely invest.</p></div>}
-          {state.messages.map((item) => <article key={item.id} className={`min-w-0 ${item.role === "user" ? "ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-sm bg-white/[0.06] px-4 py-3" : "max-w-full"}`}><p className={`mb-2 ${labelClass}`}>{item.role === "user" ? "You" : "Hoddie"}</p>{item.parts.map((part, index) => part.type === "text" ? <p key={index} className="whitespace-pre-wrap break-words text-sm leading-6">{part.text}</p> : part.type === "data-hoddie" ? <Result key={index} result={part.data} /> : null)}</article>)}
+        <div className="relative">
+          <div ref={logRef} onScroll={onLogScroll} role="log" aria-label="Conversation messages" aria-live="polite" tabIndex={0} className="h-[58svh] min-h-80 space-y-5 overflow-y-auto overscroll-contain px-4 py-6 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[#7fa6ff] md:h-[min(62svh,760px)] md:px-6">
+            {!state.messages.length && <div className="py-8 text-center"><p className="disp text-base">What can I help you with?</p><p className="mt-2 text-xs text-white/55">Ask about your balance, upcoming obligations or how much you can safely invest.</p></div>}
+            {state.messages.map((item) => <article key={item.id} className={`min-w-0 ${item.role === "user" ? "ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-sm bg-white/[0.06] px-4 py-3" : "max-w-full"}`}><p className={`mb-2 ${labelClass}`}>{item.role === "user" ? "You" : "Hoddie"}</p>{item.parts.map((part, index) => part.type === "text" ? <p key={index} className="whitespace-pre-wrap break-words text-sm leading-6">{part.text}</p> : part.type === "data-hoddie" ? <Result key={index} result={part.data} /> : null)}</article>)}
+          </div>
+          {showJump && <button type="button" onClick={jumpToLatest} className="absolute bottom-3 left-1/2 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-white/25 bg-[#0b0b0d] px-4 text-xs text-[#f4f1e8] shadow-lg shadow-black/40 hover:bg-[#15151a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7fa6ff]"><ArrowDown className="size-3.5" aria-hidden="true" />Jump to latest</button>}
         </div>
         <div className="min-w-0 border-t border-white/10 px-2 pt-3 md:px-4">
           <div className="flex min-w-0 items-center gap-1"><button type="button" aria-label="Previous suggestions" aria-controls="hoddie-suggestions" onClick={() => moveSuggestions(-1)} className="flex size-11 shrink-0 items-center justify-center text-white/55 hover:bg-white/[0.05]"><ChevronLeft className="size-4" aria-hidden="true" /></button><div ref={suggestionsRef} id="hoddie-suggestions" role="region" aria-label="Suggested commands" tabIndex={0} className="flex min-w-0 flex-1 snap-x snap-proximity gap-2 overflow-x-auto overscroll-x-contain py-1">{examples.map((example) => <button key={example} disabled={state.busy} onClick={() => { setMessage(example); inputRef.current?.focus(); }} className="min-h-11 shrink-0 snap-start whitespace-nowrap rounded-full border border-white/[0.14] px-4 py-2 text-xs hover:border-[#7fa6ff]/60 disabled:opacity-40">{example}</button>)}</div><button type="button" aria-label="Next suggestions" aria-controls="hoddie-suggestions" onClick={() => moveSuggestions(1)} className="flex size-11 shrink-0 items-center justify-center text-white/55 hover:bg-white/[0.05]"><ChevronRight className="size-4" aria-hidden="true" /></button></div>

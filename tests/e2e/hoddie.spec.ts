@@ -15,6 +15,8 @@ test("Hoddie navigation and read-only setup reflow without console errors", asyn
   }
   await expect(page.getByRole("combobox", { name: "Command provider" })).toHaveCount(0);
   const suggestions = page.getByRole("region", { name: "Suggested commands" });
+  // The wide chat fits every suggestion at 1280px; the arrows matter once the row overflows.
+  await page.setViewportSize({ width: 1024, height: 900 });
   expect(await suggestions.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   await page.getByRole("button", { name: "Next suggestions" }).click();
   expect(await suggestions.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
@@ -82,6 +84,7 @@ test("disconnected signed-in accounts answer locally in English and Turkish with
   await page.getByLabel("Your command").fill("Summarize my treasury"); await page.getByRole("button", { name: "Send command" }).click();
   const log = page.getByRole("log", { name: "Conversation messages" });
   await expect(log).toContainText("0.00 USDC"); await expect(log).toContainText("NOT CONNECTED");
+  const logHeight = (await log.boundingBox())?.height; expect(logHeight).toBeGreaterThan(0);
   await expect(log.getByRole("navigation", { name: "Answer sources" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
@@ -90,6 +93,8 @@ test("disconnected signed-in accounts answer locally in English and Turkish with
   await expect(log).toContainText("Hazinenizde 0.00 USDC var"); await expect(log).toContainText("Toplam hazine");
   await page.getByLabel("Your command").fill("Create a 500 USDC obligation due tomorrow"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(log).toContainText("cannot change it or move funds");
+  // The log is a fixed-height scroll area: more messages must not grow the panel or the page.
+  expect((await log.boundingBox())?.height).toBe(logHeight); await expect(log).toHaveAttribute("tabindex", "0");
   await expect(page.getByRole("button", { name: "Apply change" })).toHaveCount(0);
   expect(posts).toEqual([]); await expect(page.getByRole("main")).not.toContainText(/Gemini|OpenRouter|NVIDIA|Nemotron/);
   await page.goto("/"); await expect(page.getByRole("heading", { name: "Your live testnet treasury", exact: true })).toBeVisible();

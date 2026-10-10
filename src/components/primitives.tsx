@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { Money, PolicyResult } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 
@@ -125,5 +126,40 @@ export function FilterGroup<T extends string>({ label, options, value, onChange 
         <button key={option} type="button" onClick={() => onChange(option)} aria-pressed={value === option} className={clsx("mono min-h-11 min-w-12 px-3.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors", index > 0 && "border-l border-white/30", value === option ? "bg-[#f4f1e8] text-[#0b0b0d]" : "text-white/55 hover:text-white")}>{option}</button>
       ))}
     </div>
+  );
+}
+
+/** Page numbers to show: the first, the last and the current page with its neighbours. null marks a gap; a gap of one page shows that page instead. */
+function pageWindow(page: number, pageCount: number): (number | null)[] {
+  const shown = [...new Set([1, page - 1, page, page + 1, pageCount])].filter((n) => n >= 1 && n <= pageCount).sort((a, b) => a - b);
+  return shown.flatMap((n, index) => { const gap = index ? n - shown[index - 1] : 0; return gap === 2 ? [n - 1, n] : gap > 2 ? [null, n] : [n]; });
+}
+
+// The global button:focus-visible rule is unlayered, so the outline colour needs `!` to win over the utility layer.
+const pagerButton = "mono inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 border px-3 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors focus-visible:outline-[#7fa6ff]! disabled:cursor-not-allowed disabled:opacity-40";
+
+/**
+ * Previous / numbered / next controls for a client-side paginated list. `page` is 1-based and renders nothing for a single page.
+ * Below `sm` the numbers give way to "Page 2 of 5" so the controls never overflow a 360px screen. Pass `total` and `pageSize` for a "11–20 of 47" range.
+ */
+export function Pagination({ page, pageCount, onChange, label, total, pageSize, className = "" }: { page: number; pageCount: number; onChange: (page: number) => void; label: string; total?: number; pageSize?: number; className?: string }) {
+  if (pageCount <= 1) return null;
+  const current = Math.min(Math.max(page, 1), pageCount);
+  const range = total !== undefined && pageSize !== undefined ? `${(current - 1) * pageSize + 1}–${Math.min(current * pageSize, total)} of ${total}` : null;
+  const step = "shrink-0 border-white/[0.14] bg-[#0b0b0d] text-[#f4f1e8] enabled:hover:bg-white/[0.06]";
+  return (
+    <nav aria-label={label} className={clsx("flex flex-wrap items-center justify-between gap-x-6 gap-y-3", className)}>
+      {range && <p className="mono text-[11px] tabular-nums text-white/55">{range}</p>}
+      <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
+        <button type="button" disabled={current <= 1} onClick={() => onChange(current - 1)} className={clsx(pagerButton, step)}><ChevronLeft aria-hidden="true" className="size-3.5" />Previous</button>
+        <p className="mono min-w-0 text-center text-[10px] uppercase tracking-[0.12em] text-white/55 sm:hidden">Page {current} of {pageCount}</p>
+        <ol className="hidden items-center gap-1 sm:flex">
+          {pageWindow(current, pageCount).map((n, index) => n === null
+            ? <li key={`gap-${index}`} aria-hidden="true" className="mono min-w-6 text-center text-[11px] text-white/45">…</li>
+            : <li key={n}><button type="button" onClick={() => onChange(n)} aria-label={`Page ${n}`} aria-current={n === current ? "page" : undefined} className={clsx(pagerButton, "tabular-nums", n === current ? "border-[#f4f1e8] bg-[#f4f1e8] text-[#0b0b0d]" : "border-white/[0.14] bg-[#0b0b0d] text-white/55 hover:text-white")}>{n}</button></li>)}
+        </ol>
+        <button type="button" disabled={current >= pageCount} onClick={() => onChange(current + 1)} className={clsx(pagerButton, step)}>Next<ChevronRight aria-hidden="true" className="size-3.5" /></button>
+      </div>
+    </nav>
   );
 }

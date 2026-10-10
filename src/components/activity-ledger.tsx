@@ -1,32 +1,49 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, ChevronDown, CircleUserRound, Cog } from "lucide-react";
 import { EmptyState } from "./page-states";
-import { FilterGroup, PageBody, PolicyPill, SectionCard, SectionHeading, StatusPill, labelClass } from "./primitives";
+import { FilterGroup, PageBody, Pagination, PolicyPill, SectionCard, SectionHeading, StatusPill, labelClass } from "./primitives";
 import { formatDate } from "@/lib/treasury/format";
 import type { ActivityEntry } from "@/lib/treasury/models";
 
 type ActorFilter = "ALL" | ActivityEntry["actor"];
 const filters = ["ALL", "HUMAN", "AGENT", "SYSTEM"] as const;
 const actorIcon = { HUMAN: CircleUserRound, AGENT: Bot, SYSTEM: Cog };
+const PAGE_SIZE = 10;
 
 export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) {
   const [filter, setFilter] = useState<ActorFilter>("ALL");
+  const [page, setPage] = useState(1);
   const visible = useMemo(() => filter === "ALL" ? activities : activities.filter((entry) => entry.actor === filter), [activities, filter]);
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const current = Math.min(page, pageCount);
+  const entries = visible.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const userMovedPage = useRef(false);
+  // After the user changes page, show the top of the ledger and land focus on the new page's entries.
+  useEffect(() => {
+    if (!userMovedPage.current) return;
+    userMovedPage.current = false;
+    const card = cardRef.current;
+    if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    listRef.current?.focus({ preventScroll: true });
+  }, [current]);
+  const changePage = (next: number) => { if (next === current) return; userMovedPage.current = true; setPage(next); };
 
   return (
     <PageBody>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-        <FilterGroup label="Filter activity by actor" options={filters} value={filter} onChange={setFilter} />
+        <FilterGroup label="Filter activity by actor" options={filters} value={filter} onChange={(next) => { setFilter(next); setPage(1); }} />
         <div className="flex items-center gap-2"><span className="size-1.5 bg-[#7fa6ff]" /><span className={labelClass}>Local audit trail</span></div>
       </div>
 
-      <SectionCard>
+      <div ref={cardRef} className="scroll-mt-20"><SectionCard>
         <SectionHeading index="05.1" title="Decision ledger" description="Expand a record to inspect rationale, policy and authorization state" />
         {visible.length === 0 ? <EmptyState title="No matching records" description="Choose another actor type to inspect treasury activity." /> : (
-          <div className="divide-y divide-white/10">
-            {visible.map((entry) => {
+          <div ref={listRef} role="region" aria-label={`Decision ledger entries${pageCount > 1 ? `, page ${current} of ${pageCount}` : ""}`} tabIndex={-1} className="divide-y divide-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#7fa6ff]">
+            {entries.map((entry) => {
               const Icon = actorIcon[entry.actor];
               return (
                 <details key={entry.id} className="group">
@@ -46,7 +63,8 @@ export function ActivityLedger({ activities }: { activities: ActivityEntry[] }) 
             })}
           </div>
         )}
-      </SectionCard>
+        <Pagination page={current} pageCount={pageCount} onChange={changePage} label="Decision ledger pages" total={visible.length} pageSize={PAGE_SIZE} className="border-t border-white/[0.14] px-5 py-4" />
+      </SectionCard></div>
 
       <div className="mt-6 border border-white/[0.14] bg-[#0b0b0d] p-5 text-white md:flex md:items-center md:justify-between md:gap-8">
         <div><p className="mono text-[9px] uppercase tracking-[0.16em] text-[#7fa6ff]">Audit trail</p><h2 className="mt-2 text-xl font-medium tracking-[-0.03em]">An explanation is not an execution receipt.</h2></div>
