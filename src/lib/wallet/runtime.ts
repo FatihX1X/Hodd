@@ -5,7 +5,13 @@ import type { WalletFeeQuote } from "./fee-quote";
 export type EarnAdapter = Parameters<AppKit["earn"]["getPosition"]>[0]["from"]["adapter"];
 export type WalletCall = Readonly<{ to: `0x${string}`; data?: `0x${string}`; value?: string }>;
 export type EarnGasCeiling = Readonly<{ gasLimit: string; gasPriceWei: string }>;
-export type ActiveWalletRuntime = Readonly<{ connection: WalletConnection; adapter: EarnAdapter | null; expiresAt?: number; sendCalls?: (calls: readonly WalletCall[], gasBudgetWei: string, onUserOperation?: (hash: string) => void | Promise<void>, feeQuote?: WalletFeeQuote, earnGasCeiling?: EarnGasCeiling) => Promise<`0x${string}`>; approveChallenge?: (id: string) => Promise<void>; signMessage?: (message: string) => Promise<`0x${string}`> }>;
+/** Circle Gateway signing request: the EIP-712 JSON plus the exact intent and, for own-wallet moves, its sealed handle. */
+export type GatewaySignRequest = Readonly<{ typedData: Record<string, unknown>; intent: unknown; handle?: string }>;
+export type ActiveWalletRuntime = Readonly<{ connection: WalletConnection; adapter: EarnAdapter | null; expiresAt?: number; sendCalls?: (calls: readonly WalletCall[], gasBudgetWei: string, onUserOperation?: (hash: string) => void | Promise<void>, feeQuote?: WalletFeeQuote, earnGasCeiling?: EarnGasCeiling) => Promise<`0x${string}`>; approveChallenge?: (id: string) => Promise<void>; signMessage?: (message: string) => Promise<`0x${string}`>;
+  /** Free EIP-712 signature for a Gateway burn intent (EOA wallets only). */
+  signGatewayIntent?: (request: GatewaySignRequest) => Promise<`0x${string}`>;
+  /** Sends transactions in order on another Gateway chain (each mined before the next), then returns the wallet to Arc. */
+  sendOnChain?: (chain: Readonly<{ chainId: number; label: string; rpc: string; nativeSymbol: string; explorerTx: string }>, calls: readonly WalletCall[], onSent?: (hash: `0x${string}`, index: number) => void) => Promise<`0x${string}`[]> }>;
 
 let activeRuntime: ActiveWalletRuntime | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | undefined;

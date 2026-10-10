@@ -22,7 +22,8 @@ class Query implements PromiseLike<Result> {
   insert(values: Row | Row[]) { this.op = "insert"; this.values = values; return this; }
   eq(key: string, value: unknown) { this.filters.push((row) => read(row, key) === value); return this; }
   in(key: string, values: unknown[]) { this.filters.push((row) => values.includes(read(row, key))); return this; }
-  is(key: string, value: null) { this.filters.push((row) => (read(row, key) ?? null) === value); return this; }
+  // PostgREST `col->>field is null` is true when the field is missing; read() would stringify it to "".
+  is(key: string, value: null) { this.filters.push((row) => { const [column, field] = key.split("->>"); const raw = field === undefined ? row[column] : row[column] && typeof row[column] === "object" ? (row[column] as Row)[field] : undefined; return (raw ?? null) === value; }); return this; }
   order() { return this; }
   limit() { return this; }
   private run(): Result {
