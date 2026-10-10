@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { decodeEventLog, encodeFunctionData, erc20Abi, getAddress, type Hex } from "viem";
 import { arcClient } from "@/lib/earn/gateway";
-import { captureNextEarnCall, EarnCaptureError } from "@/lib/earn/capture";
+import { captureNextEarnCall } from "@/lib/earn/capture";
 import { type EarnCall } from "@/lib/earn/router";
 import { isAllowedVault, ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { verifyApprovalReceipt, verifyEarnReceipt } from "@/lib/earn/receipts";
@@ -91,7 +91,9 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
 }
 /** A short, secret-free cause code for the run record. */
 function failureCause(error: unknown) {
-  if (error instanceof EarnCaptureError) return "CAPTURE_"+error.failure.code;
+  // Duck-typed so this catch path can never throw itself (EarnCaptureError carries failure.code).
+  const capture=(error as { failure?: { code?: unknown } } | null)?.failure?.code;
+  if (typeof capture === "string") return "CAPTURE_"+capture.replace(/[^A-Z0-9_]/g,"").slice(0,60);
   if (error instanceof Error && /^[A-Z][A-Z0-9_]{2,60}$/.test(error.message)) return error.message;
   return error instanceof Error ? (error.name || "Error").replace(/[^A-Za-z0-9_]/g,"").slice(0,40).toUpperCase() : "UNKNOWN_ERROR";
 }
