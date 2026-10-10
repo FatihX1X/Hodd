@@ -29,7 +29,7 @@ begin
   values(step_a,run_a,alice,'SUBMITTED','TRANSFER','{}','100','20000000000','1',100000);
   rejected:=false;
   begin insert into public.agent_run_steps(id,run_id,user_id,state,stage,call,gas_limit,gas_price_wei,started_block,amount_minor)
-    values(gen_random_uuid(),run_a,bob,'PREPARED','TRANSFER','{}','1','1','1',1); exception when foreign_key_violation then rejected:=true; end;
+    values(gen_random_uuid(),run_a,bob,'FAILED','TRANSFER','{}','1','1','1',1); exception when foreign_key_violation then rejected:=true; end;
   if not rejected then raise exception 'cross-owner step linkage allowed'; end if;
   update public.agent_run_steps set state='VERIFIED',tx_hash='0x'||repeat('a',64),receipt='{"feeMinor":"100","status":"VERIFIED"}' where id=step_a;
   if (select spent_minor from public.agent_mandates where user_id=alice)<>100100 then raise exception 'verified return not accounted'; end if;
