@@ -1,10 +1,98 @@
 # Hodd
 
-Hodd is a liquidity-first treasury console for individuals and small businesses on Arc Testnet.
+**An AI-run treasury for small businesses, settled in USDC on Arc.**
+
+Hodd keeps a business's money ahead of what it owes. It tracks bills and their due dates, protects the cash they need, puts what is left to work in a Morpho vault, pays bills from the owner's own wallet, and keeps a record of every decision. A separate agent wallet, **Autopilot**, runs that loop on a budget the owner sets.
+
+Built for the **[Tameion Agents Hackathon](https://tameion.thecanteenapp.com/)** (Canteen × Circle, on Arc, Sep 27 – Oct 17, 2026).
+
+| | |
+| --- | --- |
+| Live app (Arc Testnet) | [app.hoddfinance.xyz](https://app.hoddfinance.xyz) |
+| Landing page | [hoddfinance.xyz](https://hoddfinance.xyz) |
+| Network | Arc Testnet (chain ID `5042002`), USDC for value and gas |
+
+## Why Hodd
+
+A small business's money is never one balance: cash in a wallet earning nothing, bills coming due, a reserve that should earn while it waits. The decisions are small and constant, which is exactly the work an agent can do, as long as its authority ends somewhere it cannot talk its way past.
+
+Hodd's answer is to make the protected amount the first number, not the last:
+
+```text
+protected capital  = bills due within 30 days + safety buffer + pending transactions
+deployable capital = max(total treasury - protected capital, 0)
+```
+
+Only deployable capital can be invested. Bills are always funded first.
+
+## What it answers in the Tameion RFBs
+
+| RFB | What Hodd does today |
+| --- | --- |
+| **04 · Autonomous Business Operator** | **Autopilot** gives a separate Circle developer-controlled wallet a budget. On each run it reads live balances and upcoming bills, then makes one decision: invest idle budget in Morpho, refill its cash reserve, send liquidity back to the owner when bills need it, return everything, or do nothing. Every run records its inputs, decision, Circle transaction and verified receipt. |
+| **01 · Intelligent Business Treasury** | The deterministic **Treasury Engine** works out the 30-day horizon, protected and deployable capital, runway and an allocation preview. Idle funds go to an allowlisted Morpho vault through Circle's App Kit, and are redeemed when bills need them. **Circle Gateway** shows the wallet's USDC across 12 testnets as one balance and brings it to Arc. |
+| **02 · AP/AR (payables side)** | Bills (obligations) with due dates and recipients. A payment is reviewed against fresh balances and fees, signed by the owner's wallet and marked **PAID** only after the server verifies the canonical USDC transfer onchain. Bills can also be paid from another chain through Gateway. |
+
+Two assistants sit on top and can only propose, never move money:
+
+- **Hoddie** answers treasury questions in English and Turkish from the engine's own numbers and drafts changes for the owner to approve.
+- **Claude connector (MCP)** lets the owner run Hodd from Claude. Writes are two-step and approved by the user; payment and Earn requests still finish with a fresh quote and a wallet signature.
+
+## Where the agent's authority stops
+
+The judging FAQ asks how much autonomy an agent should have. In Hodd the limits live outside the model and outside the browser:
+
+- **Two possible destinations.** The Autopilot wallet can only call the Earn router for the allowlisted Morpho vault, or transfer canonical USDC to the owner's proven wallet. Any other call is refused before signing.
+- **A mandate the owner signs off on.** Budget, cash reserve, maximum per run and maximum Morpho share. Mandate changes are reviewed and confirmed in two steps, and the owner can pause it or ask for everything back.
+- **Bills first.** The engine never invests protected capital, and a liquidity shortfall on the owner's side is covered before anything is invested.
+- **No guessing.** Amounts are integer USDC minor units computed by the engine; no language model calculates or executes an amount. Stale balances mean no action. An uncertain outcome is never resubmitted automatically.
+- **A complete record.** Every run, payment and Earn operation keeps its inputs, decision, transaction hash and server-verified receipt. The Activity page separates local audit records from onchain receipts.
+- **Kill switches.** One database row pauses all live execution, or just Earn, payments, Autopilot or a single wallet provider, within 30 seconds.
+
+These limits are enforced by Hodd's server and database (owner-only row-level security, single-use quotes, a per-wallet lease). Moving the budget rules into a smart-contract wallet is the next step.
+
+## Circle and Arc stack
+
+| Piece | Used for |
+| --- | --- |
+| Arc Testnet | Settlement in USDC, with USDC as gas |
+| Circle Wallets, user-controlled | Circle Embedded (PIN) and Circle Passkey (Modular Wallets) for the owner's own wallet, alongside MetaMask and Rabby |
+| Circle Wallets, developer-controlled | One Autopilot agent wallet per user |
+| Circle App Kit (Earn) | Vault discovery, Morpho deposits, withdrawals and redemptions |
+| Circle Gateway + Forwarding Service | Unified USDC balance across chains, bringing USDC to Arc, paying bills from another chain |
+| Gas Station paymaster | Sponsored passkey transactions on Arc Testnet |
+
+USYC is not available on Arc Testnet, so the reserve earns in an allowlisted Morpho vault instead.
+
+## Try it
+
+1. Open [app.hoddfinance.xyz](https://app.hoddfinance.xyz), sign up with your email.
+2. Connect a wallet (Rabby or MetaMask is the quickest) and sign the free ownership message.
+3. Get free testnet USDC from the [Circle faucet](https://faucet.circle.com) (choose Arc Testnet).
+4. Add a bill on **Obligations** and watch protected and deployable capital change on **Overview**.
+5. Deposit into the Morpho vault on **Strategies**; the dialog shows each step until the receipt is verified.
+6. Ask **Hoddie** "Can I pay tomorrow's bills?", then check **Activity** for the record.
+
+Each deposit or payment on the live host is capped at 1,000 testnet USDC. Autopilot is built and its custody path was verified live on Arc Testnet, but it stays switched off on the live host until the owner's first full run (see [Autopilot validation](./docs/autopilot-validation.md)).
+
+## Status
+
+Verified live on Arc Testnet: Rabby Earn deposit, withdrawal and redemption; a USDC bill payment with a verified receipt; the Claude connector end to end; Gateway minting to a third-party recipient; Autopilot custody (deposit, withdrawal and transfer from the agent wallet). Still open: Circle Passkey and MetaMask acceptance on the live host, Circle PIN (switched off until verified), and a full signed-in Autopilot run in production. Everything runs on testnet.
+
+## Architecture
+
+- **Next.js 16** (App Router) on Vercel. One project serves the landing page on `hoddfinance.xyz` and the console on `app.hoddfinance.xyz`.
+- **Supabase** for authentication, owner-scoped workspaces, quotes, executions, receipts and leases, behind owner-only row-level security.
+- **Treasury Engine** (`src/lib/treasury`): pure, deterministic functions over integer minor units.
+- **Execution** is a durable, request-driven state machine: the server records the exact next call, the wallet signs, the server verifies the receipt and moves on. It works on serverless hosts and survives restarts.
+
+---
+
+# Developer guide
+
+## Wallets
 
 The wallet ownership update adds user choice: Circle Embedded (Hodd email/Google sign-in plus Circle PIN), Circle Passkey (WebAuthn), or an existing MetaMask/Rabby wallet. One selected wallet is authoritative at a time. Funds remain in that wallet; balances are never pooled into the previous developer-controlled treasury.
-
-## Current capabilities
 
 - Deterministic Treasury Engine with integer minor-unit arithmetic, obligations, policy and allocation previews.
 - Workspace schema v4; migration preserves policy and obligations while disconnecting legacy shared wallets.
@@ -146,28 +234,7 @@ For repeatable Arc Testnet regression runs, `next dev` can expose a server-held 
 
 Live TEST_SIGNER run (2026-10-07, smoke scope): Earn deposit 0.5 / withdraw 0.25 / redeem-all (zero residual) and a 0.10 USDC Stage 5 payment to a user-owned test recipient, CONFIRMED with a verified canonical USDC receipt (block 66015915) and the obligation PAID. These prove Hodd's server/ledger path, not MetaMask, Rabby or Circle signing. The browser learns only the public address. Evidence is stored as `TEST_SIGNER` and never counts for MetaMask, Rabby or Circle acceptance.
 
-## Stage 6: Claude connector (MCP)
-
-Users can connect Hodd to Claude (claude.ai, Claude Desktop, Claude mobile) as a custom connector at `https://<app host>/api/mcp` (Streamable HTTP, stateless, `mcp-handler` 2). ChatGPT is not supported yet. The **Connections** page shows the URL, setup steps, connected apps (revocable) and every change made through Claude.
-
-- **Sign-in:** Supabase Auth acts as the OAuth 2.1 server (beta). Claude registers dynamically, the user signs in to Hodd and approves on `/oauth/consent`. A pending consent survives the sign-in round trip (`hodd_after_login` cookie, consent path only). Unauthenticated MCP calls get `401` + `WWW-Authenticate: Bearer resource_metadata=…`; `/.well-known/oauth-protected-resource/api/mcp` publishes `resource` = the exact MCP URL and Supabase as the authorization server.
-- **Tokens:** verified with `jose` against Supabase JWKS (issuer, `aud=authenticated`, expiry) and must carry a `client_id` claim, so normal browser session tokens are refused. Every call re-checks the session (`auth.getUser`), then acts as the user through owner RLS; no service-role key is used.
-- **Reads** (`readOnlyHint`): overview, obligations, "can I pay it?" (`assessPayment` with live balances, a fee estimate and a Morpho funding plan), allocation preview, vaults/positions, policy, activity, payments, Claude requests.
-- **Writes** are two steps. `hodd_prepare_change` changes nothing and returns a preview plus a 10-minute HMAC confirmation (`HODD_MCP_HANDLE_SECRET`, server only) bound to user, connector client, scope, kind, the exact values and the workspace revision. The write tools (`destructiveHint`) repeat the exact values with that confirmation; `hodd_apply_agent_action` writes the workspace and the `agent_actions` record atomically, once (primary key), only for connector tokens. Claude asks the user before each write tool; keep them on "Needs approval" (claude.ai has no MCP elicitation, so "Always allow" would skip the question).
-- **Money:** `hodd_request_payment` / `hodd_request_earn` only create requests (24 h). They appear on the Portfolio page under **Claude requests**, open the normal payment/Earn dialog pre-filled, and finish with a fresh quote and the user's wallet signature (live testnet host or local development).
-- **Concurrency:** workspace rows have a `revision`; every update must name the revision it was based on (`workspace revision conflict` otherwise). Browsers send it and reload on conflict or when the tab regains focus, so a stale tab cannot overwrite a change approved in Claude, and vice versa.
-- **Audit:** connector changes add an `AGENT` activity marked "approved in Claude" and an `agent_actions` row (owner-readable; browsers cannot insert).
-
-Live verification (2026-10-08, production `app.hoddfinance.xyz`): a client registered through dynamic registration, the consent page approved it, and the issued ES256 token (with `client_id` and `session_id`) listed all 19 tools; overview and "can I pay?" returned live Arc balances; in the smoke workspace a bill was created (altered values and a replay were refused), a payment request appeared under **Claude requests** and was dismissed in the app, a stale browser tab picked up the change on focus without conflict, and revoking the connection on **Connections** made the same token fail immediately.
-
-One-time setup (done for the hosted project): in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. No host variable is required: the confirmation key comes from `HODD_MCP_HANDLE_SECRET` if set, else HKDF of `SUPABASE_SECRET_KEY`/`CIRCLE_API_KEY` (label `hodd-mcp-confirmation-v1`), else a random key the database generated (`hodd_agent_confirmation_key()`, connector tokens only). Without Supabase variables the app falls back to the hosted project's public URL and publishable key. Apply `20261008125003_agent_actions.sql` and `20261008133206_agent_confirmation_key.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction.
-
-
-## Next work
-
-Verify Circle Passkey and Circle PIN on the live host, then switch `PROVIDER:CIRCLE_USER_CONTROLLED` on. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
-
-## Stage 5 payment implementation status
+## Payments
 
 Single-obligation, full-amount Arc Testnet USDC payment review uses server-owned policy inputs, fresh balances/positions and integer fee reserves. It does not use investment deployable capital as a payment limit. Earlier obligations, safety buffer, pending reservations and post-payment coverage must remain protected. Pending payments replace their protected obligation with amount + fee reserve, rather than double-counting the same obligation.
 
@@ -188,6 +255,22 @@ The ledger and state-audit migrations are applied. Rollback-only synthetic datab
 Apply all migrations, including `20261006151235_payment_provider_evidence_recovery.sql` and `20261006153410_payment_user_operation_receipt.sql`. Rollback-only `supabase/tests/payment_evidence_recovery.sql` additionally verifies evidence owner isolation/browser write denial, UNKNOWN retention, stale/cross-user failure rejection and EOA/UserOperation failure release without PAID.
 
 Outstanding acceptance work: register real Stage 4 smoke receipt evidence, complete live payment smoke tests of at most 1 USDC to a user-owned test recipient for each enabled signer (Circle PIN, Circle Passkey, MetaMask and Rabby), and compare receipts, balances, positions and canonical records on real sessions. All current automated provider tests are mocks. No live payment has been performed by this checkpoint. Stage 6 originally waited for full Stage 5 live acceptance; on 2026-10-08 the owner chose to start it while MetaMask and Circle Passkey acceptance remain open. The Claude connector never signs or moves money, so it does not depend on those providers. No OpenAI/Anthropic API key, private key, PIN, seed phrase or entity secret is needed for this verification.
+
+## Claude connector (MCP)
+
+Users can connect Hodd to Claude (claude.ai, Claude Desktop, Claude mobile) as a custom connector at `https://<app host>/api/mcp` (Streamable HTTP, stateless, `mcp-handler` 2). ChatGPT is not supported yet. The **Connections** page shows the URL, setup steps, connected apps (revocable) and every change made through Claude.
+
+- **Sign-in:** Supabase Auth acts as the OAuth 2.1 server (beta). Claude registers dynamically, the user signs in to Hodd and approves on `/oauth/consent`. A pending consent survives the sign-in round trip (`hodd_after_login` cookie, consent path only). Unauthenticated MCP calls get `401` + `WWW-Authenticate: Bearer resource_metadata=…`; `/.well-known/oauth-protected-resource/api/mcp` publishes `resource` = the exact MCP URL and Supabase as the authorization server.
+- **Tokens:** verified with `jose` against Supabase JWKS (issuer, `aud=authenticated`, expiry) and must carry a `client_id` claim, so normal browser session tokens are refused. Every call re-checks the session (`auth.getUser`), then acts as the user through owner RLS; no service-role key is used.
+- **Reads** (`readOnlyHint`): overview, obligations, "can I pay it?" (`assessPayment` with live balances, a fee estimate and a Morpho funding plan), allocation preview, vaults/positions, policy, activity, payments, Claude requests.
+- **Writes** are two steps. `hodd_prepare_change` changes nothing and returns a preview plus a 10-minute HMAC confirmation (`HODD_MCP_HANDLE_SECRET`, server only) bound to user, connector client, scope, kind, the exact values and the workspace revision. The write tools (`destructiveHint`) repeat the exact values with that confirmation; `hodd_apply_agent_action` writes the workspace and the `agent_actions` record atomically, once (primary key), only for connector tokens. Claude asks the user before each write tool; keep them on "Needs approval" (claude.ai has no MCP elicitation, so "Always allow" would skip the question).
+- **Money:** `hodd_request_payment` / `hodd_request_earn` only create requests (24 h). They appear on the Portfolio page under **Claude requests**, open the normal payment/Earn dialog pre-filled, and finish with a fresh quote and the user's wallet signature (live testnet host or local development).
+- **Concurrency:** workspace rows have a `revision`; every update must name the revision it was based on (`workspace revision conflict` otherwise). Browsers send it and reload on conflict or when the tab regains focus, so a stale tab cannot overwrite a change approved in Claude, and vice versa.
+- **Audit:** connector changes add an `AGENT` activity marked "approved in Claude" and an `agent_actions` row (owner-readable; browsers cannot insert).
+
+Live verification (2026-10-08, production `app.hoddfinance.xyz`): a client registered through dynamic registration, the consent page approved it, and the issued ES256 token (with `client_id` and `session_id`) listed all 19 tools; overview and "can I pay?" returned live Arc balances; in the smoke workspace a bill was created (altered values and a replay were refused), a payment request appeared under **Claude requests** and was dismissed in the app, a stale browser tab picked up the change on focus without conflict, and revoking the connection on **Connections** made the same token fail immediately.
+
+One-time setup (done for the hosted project): in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. No host variable is required: the confirmation key comes from `HODD_MCP_HANDLE_SECRET` if set, else HKDF of `SUPABASE_SECRET_KEY`/`CIRCLE_API_KEY` (label `hodd-mcp-confirmation-v1`), else a random key the database generated (`hodd_agent_confirmation_key()`, connector tokens only). Without Supabase variables the app falls back to the hosted project's public URL and publishable key. Apply `20261008125003_agent_actions.sql` and `20261008133206_agent_confirmation_key.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction.
 
 ## Hoddie — treasury assistant
 
@@ -222,8 +305,6 @@ The only API endpoints are `/api/hoddie/chat`, `/api/hoddie/consent` and `/api/h
 
 Money requests are saved through the signed review and separate confirmation route. Wallet review requests then open the normal `EarnOperationDialog` with the proposed amount prefilled and current engine limits rechecked, or `PaymentDialog` for the selected obligation. The dialog obtains a fresh quote and requires explicit confirmation and the user wallet signature. Chat text, including typed approvals, never executes a transaction or applies a workspace change.
 
-MIT — see [LICENSE](./LICENSE).
-
 ## Circle Gateway: USDC on every chain
 
 Overview shows the selected wallet's USDC on 12 Circle Gateway testnets plus its Gateway unified balance (`/api/gateway/balances`, public read, display only — the Treasury Engine still counts Arc funds alone). **Bring USDC to Arc** deposits into Gateway on the source chain if needed (exact approval + `GatewayWallet.deposit`), then the user signs one free EIP-712 burn intent; Circle's Forwarding Service mints on Arc to the user's own wallet and Hodd verifies the mint before offering the normal Morpho deposit within the engine's limit. **Pay from another chain** (Obligations) puts a payment proposal on the `GATEWAY` rail: Gateway mints the exact amount straight to the obligation's Arc recipient, and PAID still requires a verified GatewayMinter `Transfer(0x0 → recipient, amount)`. Direct minting to a third-party recipient was verified live before building this (see [Gateway validation](./docs/gateway-validation.md)). Gateway signing is EOA-only (MetaMask, Rabby, dev test signer). No new database migration or environment variable is needed; execution uses the existing Earn/payment gates and kill switches.
@@ -231,3 +312,11 @@ Overview shows the selected wallet's USDC on 12 Circle Gateway testnets plus its
 ## Autopilot (agent wallet)
 
 `/autopilot` gives a separate Circle developer-controlled wallet (one EOA per user on Arc Testnet) a budget. The user funds it with a normal USDC transfer they sign; Hodd's deterministic engine then invests idle budget in the allowlisted Morpho vault, refills the agent's cash reserve, and sends liquidity back to the user's proven wallet when obligations need it. The agent can only call the Earn router for the allowlisted vault and transfer canonical USDC to the owner's verified wallet; every run records its inputs, decision, Circle transaction and verified receipt, and UNKNOWN outcomes are never resubmitted. Mandate changes use a two-step review/confirm. Requires `supabase/migrations/20261010121212_agent_autopilot.sql`, `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET`, `CRON_SECRET` (daily Vercel cron; **Run now** covers the rest), `HODD_AGENT_EXECUTION_ENABLED=true` locally, and the `AGENT` row in `hodd_live_controls` (off by default). Live custody evidence and the fixes it produced: [Autopilot validation](./docs/autopilot-validation.md).
+
+## Next work
+
+Verify Circle Passkey and Circle PIN on the live host, then switch `PROVIDER:CIRCLE_USER_CONTROLLED` on. Run Autopilot end to end in production and switch the `AGENT` row on. Move the Autopilot mandate into a smart-contract wallet so the budget is enforced onchain. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
