@@ -11,6 +11,7 @@ import { PolicyPanel } from "@/components/policy-panel";
 import { useTreasuryWorkspace } from "@/components/treasury-workspace-provider";
 import { WalletPanel } from "@/components/wallet-panel";
 import { AgentRequests } from "@/components/agent-requests";
+import { UnifiedBalancePanel } from "@/components/unified-balance-panel";
 import { getProtectedObligations } from "@/lib/treasury/engine";
 import { formatDate, formatMoney, formatPercentFromBps } from "@/lib/treasury/format";
 import type { Money } from "@/lib/treasury/models";
@@ -35,7 +36,7 @@ export default function PortfolioPage() {
   if (!assessment || !operationalWorkspace) return <>
     <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Treasury Engine</p><p className="mt-2 text-lg text-[#ff9a92]">Awaiting verified balance</p><div className="mt-2"><StatusPill label="PAUSED" tone="danger" /></div></div>} />
     <DemoNotice>Connect your own Arc Testnet wallet to see live USDC balances. Financial calculations wait for a verified balance.</DemoNotice>
-    <PageBody><OnboardingChecklist /><div id="treasury-wallet"><WalletPanel /></div><AgentRequests /><div role="status" className="mt-6 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-5 text-sm text-[#ff9a92]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></PageBody>
+    <PageBody><OnboardingChecklist /><div id="treasury-wallet"><WalletPanel /></div><AgentRequests /><UnifiedBalancePanel /><div role="status" className="mt-6 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-5 text-sm text-[#ff9a92]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></PageBody>
   </>;
 
   const evaluatedAt = new Date(assessment.evaluatedAt);
@@ -66,6 +67,7 @@ export default function PortfolioPage() {
       <OnboardingChecklist />
       {mode === "DEMO" ? <button disabled className={buttonClass.ghost}>Choose wallet · exit demo first</button> : <div id="treasury-wallet"><WalletPanel /></div>}
       {mode === "LIVE" && <AgentRequests />}
+      {mode === "LIVE" && <UnifiedBalancePanel />}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_1fr]">
         <section aria-label="Total treasury" className="flex flex-col justify-between border border-white/[0.14] bg-[#101319] p-6 md:p-8">

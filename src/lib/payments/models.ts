@@ -2,6 +2,7 @@ import { z } from "zod";
 import { policyResultSchema, walletConnectionSchema } from "@/lib/treasury/models";
 import { arcAddressSchema, usdcMoneySchema } from "@/lib/earn/models";
 import { walletFeeQuoteSchema } from "@/lib/wallet/fee-quote";
+import { gatewayPaymentSchema } from "@/lib/gateway/models";
 export const paymentStateSchema = z.enum(["REVIEW_REQUIRED", "AWAITING_SIGNATURE", "SUBMITTED", "CONFIRMED", "FAILED", "CANCELLED", "EXPIRED", "UNKNOWN"]);
 export const paymentProposalSchema = z.object({
   id: z.string().uuid(), obligationId: z.string(), obligationRevision: z.number().int().positive(),
@@ -11,6 +12,8 @@ export const paymentProposalSchema = z.object({
   feeQuote: walletFeeQuoteSchema.nullable().optional(),
   policy: policyResultSchema, expiresAt: z.string().datetime(), startBlock: z.string().regex(/^\d+$/),
   executionEnabled: z.boolean(), executionReason: z.string(),
+  // GATEWAY: paid from the Circle Gateway balance; Gateway mints straight to the Arc recipient.
+  rail: z.enum(["ARC_WALLET", "GATEWAY"]).optional(), gateway: gatewayPaymentSchema.optional(),
 });
 export const paymentRecordSchema = z.object({ id: z.string().uuid(), state: paymentStateSchema, proposal: paymentProposalSchema, txHash: z.string().regex(/^0x[\da-fA-F]{64}$/).nullable(), userOperationHash: z.string().regex(/^0x[\da-fA-F]{64}$/).nullable(), receipt: z.object({ blockNumber: z.string().regex(/^\d+$/), logIndex: z.number().int().nonnegative(), networkFee: usdcMoneySchema }).nullable() });
 export const paymentRequestSchema = z.object({ scope: z.enum(["TREASURY", "SMOKE_TEST"]).default("TREASURY"), action: z.enum(["REVIEW", "CONFIRM", "STATUS", "RECHECK", "REPLY", "RECOVER"]), obligationId: z.string().max(128).optional(), proposalId: z.string().uuid().optional(), confirmed: z.literal(true).optional(), requestId: z.string().uuid().optional(), txHash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional(), userOperationHash: z.string().regex(/^0x[\da-fA-F]{64}$/).optional(), cancelled: z.boolean().optional(), uncertain: z.boolean().optional(), challengeApproved: z.literal(true).optional(), acknowledgeNoPendingTransaction: z.literal(true).optional() }).strict();

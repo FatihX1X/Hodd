@@ -30,6 +30,8 @@ type Row = Awaited<ReturnType<typeof readPayment>>["row"];
 const SIGNATURE_GRACE_MS = 60_000;
 const admin = () => paymentAdmin();
 const pendingOf = (row: Row) => { const parsed = paymentPendingSchema.safeParse(row.pending); return parsed.success ? parsed.data : null; };
+// Gateway-rail payments have their own state machine (src/lib/gateway/payments.ts).
+const arcOnly = (proposal: PaymentProposal) => { if (proposal.rail === "GATEWAY") throw new EarnAccessError("GATEWAY_PAYMENT", "This payment is paid from your Gateway balance. Use the cross-chain payment controls.", 409); };
 const answered = (row: Row, pending: Pending) => Boolean(row.tx_hash || row.user_operation_hash || pending.challengeApproved);
 
 async function validateClaimedPolicy(context: PaymentContext, proposal: PaymentProposal) {
@@ -97,7 +99,7 @@ async function settlePayment(context: PaymentContext, proposal: PaymentProposal,
 /** Claims the proposal (and, through the database trigger, the wallet lease), then records the exact call to sign. */
 export async function startPayment(context: PaymentContext, mode: ExecutionMode, id: string) {
   await assertLiveReady(context, mode, "START");
-  const { row, record } = await readPayment(context, id);
+  const { row, record } = await readPayment(context, id); arcOnly(record.proposal);
   if (!record.proposal.executionEnabled) throw new EarnAccessError("EXECUTION_NOT_ENABLED", record.proposal.executionReason, 409);
   if (row.policy_digest !== context.policyDigest || record.state !== "REVIEW_REQUIRED" || Date.parse(record.proposal.expiresAt) <= Date.now()) throw new EarnAccessError("PROPOSAL_NOT_AVAILABLE", "Request a fresh payment proposal.", 409);
   const live = await freshPaymentWorkspace(context); const obligation = live.obligations.find((item) => item.id === record.proposal.obligationId);
@@ -169,7 +171,7 @@ export async function inspectPayment(context: PaymentContext, id: string, recove
 }
 
 export async function replyPayment(context: PaymentContext, id: string, input: { requestId: string; txHash?: string; userOperationHash?: string; cancelled?: boolean; uncertain?: boolean; challengeApproved?: boolean }) {
-  const { row, record } = await readPayment(context, id); const pending = pendingOf(row);
+  const { row, record } = await readPayment(context, id); arcOnly(record.proposal); const pending = pendingOf(row);
   // A passkey reports its UserOperation first and the mined hash after it.
   const lateHash = pending?.id === input.requestId && input.txHash && !row.tx_hash && ["AWAITING_SIGNATURE", "SUBMITTED"].includes(record.state) && row.user_operation_hash;
   if (!pending || pending.id !== input.requestId || (!lateHash && (record.state !== "AWAITING_SIGNATURE" || answered(row, pending)))) throw new EarnAccessError("REQUEST_ALREADY_ANSWERED", "The signature request is unavailable or already answered.", 409);
@@ -215,7 +217,7 @@ async function resolveHash(context: PaymentContext, row: Row, proposal: PaymentP
 
 /** STATUS: resolve and verify a submission; an unanswered request past its deadline becomes UNKNOWN. */
 export async function advancePayment(context: PaymentContext, id: string, candidateHash?: string, recovery = false) {
-  const { row, record } = await readPayment(context, id, recovery); const pending = pendingOf(row);
+  const { row, record } = await readPayment(context, id, recovery); arcOnly(record.proposal); const pending = pendingOf(row);
   if (record.txHash && candidateHash && record.txHash.toLowerCase() !== candidateHash.toLowerCase()) throw new EarnAccessError("RECEIPT_HASH_MISMATCH", "This payment is already bound to a different submitted hash.", 409);
   if (["AWAITING_SIGNATURE", "SUBMITTED", "UNKNOWN"].includes(record.state)) {
     const hash = (await resolveHash(context, row, record.proposal, pending)) ?? (candidateHash as `0x${string}` | undefined) ?? null;
@@ -237,7 +239,7 @@ export async function advancePayment(context: PaymentContext, id: string, candid
  * Circle reports the PIN challenge as failed or expired.
  */
 export async function recoverPayment(context: PaymentContext, id: string, acknowledged: boolean) {
-  const { row, record } = await readPayment(context, id, true); const pending = pendingOf(row);
+  const { row, record } = await readPayment(context, id, true); arcOnly(record.proposal); const pending = pendingOf(row);
   if (!["AWAITING_SIGNATURE", "UNKNOWN"].includes(record.state) || row.tx_hash || row.user_operation_hash || !pending || Date.parse(record.proposal.expiresAt) > Date.now()) throw new EarnAccessError("RECOVERY_NOT_AVAILABLE", "Only an expired payment without any reported submission can be released.", 409);
   let proof: Record<string, string> | null = null;
   if (pending.challengeId) {

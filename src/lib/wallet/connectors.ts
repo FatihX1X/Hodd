@@ -1,6 +1,6 @@
 "use client";
 
-import { createPublicClient, createWalletClient, custom, http, type Transport } from "viem";
+import { createPublicClient, createWalletClient, custom, defineChain, http, type Transport } from "viem";
 import { arcTestnet } from "viem/chains";
 import { createBundlerClient, toWebAuthnAccount } from "viem/account-abstraction";
 import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
@@ -78,7 +78,50 @@ export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise
   };
   // Free ownership proof (personal_sign); never a transaction.
   const signMessage = (message: string) => createWalletClient({ account: getAddress(walletConnection.address), chain: arcTestnet, transport: custom(provider as Parameters<typeof custom>[0]) }).signMessage({ account: getAddress(walletConnection.address), message });
-  return { runtime: { connection: walletConnection, adapter, sendCalls, signMessage, expiresAt: Date.now() + 55 * 60_000 }, provider };
+  const assertSameAccount = async () => {
+    let current: unknown;
+    try { current = await provider.request({ method: "eth_accounts" }); }
+    catch { throw new WalletPreflightError("WALLET_PROVIDER_UNAVAILABLE", "The selected wallet could not confirm its account. Reconnect it."); }
+    if (!Array.isArray(current) || String(current[0]).toLowerCase() !== walletConnection.address.toLowerCase()) throw new WalletPreflightError("WALLET_SESSION_CHANGED", "The wallet account changed. Reconnect and review again.");
+  };
+  // Circle Gateway burn intent: a free EIP-712 signature, never a transaction.
+  const signGatewayIntent: NonNullable<ActiveWalletRuntime["signGatewayIntent"]> = async ({ typedData }) => {
+    await walletPreflight(assertSameAccount);
+    const signature = await provider.request({ method: "eth_signTypedData_v4", params: [walletConnection.address, JSON.stringify(typedData)] });
+    if (typeof signature !== "string" || !/^0x[\da-fA-F]{130}$/.test(signature)) throw new Error("The wallet returned an invalid signature.");
+    return signature as `0x${string}`;
+  };
+  // Gateway deposits on another testnet: switch, send each call after the previous one is mined, then return to Arc.
+  const sendOnChain: NonNullable<ActiveWalletRuntime["sendOnChain"]> = async (target, calls, onSent) => {
+    await walletPreflight(async () => { await assertSameAccount(); await switchChain(provider, target); });
+    const account = getAddress(walletConnection.address);
+    const chain = defineChain({ id: target.chainId, name: target.label, nativeCurrency: { name: target.nativeSymbol, symbol: target.nativeSymbol, decimals: 18 }, rpcUrls: { default: { http: [target.rpc] } } });
+    const wallet = createWalletClient({ account, chain, transport: custom(provider as Parameters<typeof custom>[0]) });
+    const reader = createPublicClient({ chain, transport: http(target.rpc, { retryCount: 0, timeout: 20_000 }) });
+    const hashes: `0x${string}`[] = [];
+    try {
+      for (const [index, call] of calls.entries()) {
+        const hash = await wallet.sendTransaction({ to: call.to, data: call.data, value: BigInt(call.value ?? "0"), chain });
+        hashes.push(hash); onSent?.(hash, index);
+        const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 });
+        if (receipt.status !== "success") throw new Error(`The ${target.label} transaction reverted. Inspect ${target.explorerTx}${hash}`);
+      }
+    } finally { await ensureArcTestnet(provider).catch(() => undefined); }
+    return hashes;
+  };
+  return { runtime: { connection: walletConnection, adapter, sendCalls, signMessage, signGatewayIntent, sendOnChain, expiresAt: Date.now() + 55 * 60_000 }, provider };
+}
+
+async function switchChain(provider: InjectedProvider, target: Readonly<{ chainId: number; label: string; rpc: string; nativeSymbol: string; explorerTx: string }>) {
+  const hex = `0x${target.chainId.toString(16)}`;
+  if (String(await provider.request({ method: "eth_chainId" })).toLowerCase() === hex) return;
+  try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] }); }
+  catch (error) {
+    if ((error as { code?: number }).code !== 4902) throw error;
+    await provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: hex, chainName: target.label, nativeCurrency: { name: target.nativeSymbol, symbol: target.nativeSymbol, decimals: 18 }, rpcUrls: [target.rpc], blockExplorerUrls: [target.explorerTx.replace(/\/tx\/$/, "")] }] });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] });
+  }
+  if (String(await provider.request({ method: "eth_chainId" })).toLowerCase() !== hex) throw new WalletPreflightError("WALLET_SESSION_CHANGED", `Switch your wallet to ${target.label}.`);
 }
 
 export async function connectModularWallet(mode: "REGISTER" | "LOGIN"): Promise<ActiveWalletRuntime> {
@@ -179,5 +222,12 @@ export async function connectTestSigner(): Promise<ActiveWalletRuntime> {
     if (body?.status === "ERROR" && body.submitted === false) throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", `Test signer refused (${body.code ?? "UNKNOWN"}): ${body.message ?? ""}`.trim());
     throw new Error("The test signer outcome is unknown.");
   };
-  return { connection: walletConnection, adapter: null, sendCalls, expiresAt: Date.now() + 55 * 60_000 };
+  // Gateway intents: the server signs only this session's sealed move or open payment request.
+  const signGatewayIntent: NonNullable<ActiveWalletRuntime["signGatewayIntent"]> = async ({ intent, handle }) => {
+    const response = await fetch("/api/dev/test-signer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "GATEWAY_INTENT", intent, ...(handle ? { handle } : {}) }) });
+    const body = await response.json().catch(() => null) as { status?: string; signature?: string; code?: string; message?: string } | null;
+    if (body?.status === "SIGNED" && body.signature && /^0x[\da-fA-F]{130}$/.test(body.signature)) return body.signature as `0x${string}`;
+    throw new WalletPreflightError("WALLET_PREFLIGHT_FAILED", `Test signer refused (${body?.code ?? "UNKNOWN"}): ${body?.message ?? ""}`.trim());
+  };
+  return { connection: walletConnection, adapter: null, sendCalls, signGatewayIntent, expiresAt: Date.now() + 55 * 60_000 };
 }
