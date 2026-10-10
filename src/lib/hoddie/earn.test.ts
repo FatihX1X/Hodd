@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessTreasury } from "@/lib/treasury/engine";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import type { EarnPortfolioResponse } from "@/lib/earn/models";
 import { morphoDepositLimit, planEarn, type EarnContext } from "./earn";
 

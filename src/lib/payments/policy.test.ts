@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import { assessTreasury } from "@/lib/treasury/engine";
 import { assessPayment, paymentRecipient } from "./policy";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { DemoNotice, PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, labelClass } from "@/components/primitives";
+import { TreasuryNotice, PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, labelClass } from "@/components/primitives";
 import { PolicyForm } from "@/components/policy-form";
 import { useTreasuryWorkspace } from "@/components/treasury-workspace-provider";
 import { formatPercentFromBps } from "@/lib/treasury/format";
@@ -12,7 +12,7 @@ export function PolicyView() {
   return (
     <>
       <PageHeader eyebrow="04 · Policy" title="The rules behind every number." description="The treasury policy in plain language, the checks it passes today and the values you can change." />
-      <DemoNotice>Policy protects your bills and safety buffer before investment planning. Your wallet signs every transaction.</DemoNotice>
+      <TreasuryNotice>Policy protects your bills and safety buffer before investment planning. Your wallet signs every transaction.</TreasuryNotice>
       <PageBody>
         <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-6">

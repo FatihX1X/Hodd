@@ -8,20 +8,21 @@ test("landing page is reachable at /landing on any host and does not overflow", 
   await expect(page.getByRole("heading", { level: 1, name: /your capital,\s*ahead of time/i })).toBeVisible();
   // Same-origin hosts (previews, localhost) link straight into the console.
   await expect(page.getByRole("link", { name: /launch app/i }).first()).toHaveAttribute("href", "/");
-  await expect(page.getByRole("link", { name: /try the demo/i }).first()).toHaveAttribute("href", "/?demo=1");
+  await expect(page.getByRole("link", { name: /try the demo/i })).toHaveCount(0);
+  await expect(page.getByText("Live Arc Testnet wallet balance")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   expect(errors).toEqual([]);
 });
 
-test("system tabs switch the illustrative panel", async ({ page }) => {
+test("system tabs describe live features", async ({ page }) => {
   await page.goto("/landing");
   const liquidity = page.getByRole("button", { name: /02\s*liquidity/i });
   await liquidity.scrollIntoViewIfNeeded();
   await liquidity.click();
   await expect(liquidity).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByText("Liquidity position")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Protect bills before yield" })).toBeVisible();
   await page.getByRole("button", { name: /03\s*obligations/i }).click();
-  await expect(page.getByText("Upcoming obligations")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your bills, your approval" })).toBeVisible();
 });
 
 test("the marketing host serves the landing page and nothing else", async ({ request }) => {
@@ -33,7 +34,7 @@ test("the marketing host serves the landing page and nothing else", async ({ req
   // The landing page links to the console on its own subdomain.
   expect(await home.text()).toContain('href="https://app.hoddfinance.xyz/"');
 
-  expect(await home.text()).toContain('href="https://app.hoddfinance.xyz/?demo=1"');
+  expect(await home.text()).not.toContain("?demo=1");
 
   const consolePage = await request.get("/invest?tab=vaults", { headers: host, maxRedirects: 0 });
   expect(consolePage.status()).toBe(308);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sampleWorkspace, usdc } from "./fixtures";
+import { sampleWorkspace, usdc } from "@/test/fixtures";
 import { canDeleteObligation, hasSampleData, removeSampleData } from "./sample-cleanup";
 import { createLiveStarterWorkspace } from "./starter";
 import { treasuryWorkspaceSchema } from "./models";
@@ -11,7 +11,7 @@ describe("sample cleanup", () => {
     const output = removeSampleData(before, now);
     expect(before).toEqual(sampleWorkspace);
     expect(hasSampleData(before)).toBe(true); expect(hasSampleData(output)).toBe(false);
-    expect(output.obligations).toEqual([]); expect(output.activities).toEqual([]); expect(output.decisions).toEqual([]);
+    expect(output.obligations).toEqual([]); expect(output.activities).toEqual([expect.objectContaining({ actor: "SYSTEM", action: "Sample records removed" })]); expect(output.decisions).toEqual([]);
     expect(output.policy.safetyBuffer).toEqual(usdc("1000000"));
     expect(output.targetAllocationsBps).toEqual(createLiveStarterWorkspace(now).targetAllocationsBps);
     expect(treasuryWorkspaceSchema.safeParse(output).success).toBe(true);
@@ -28,7 +28,8 @@ describe("sample cleanup", () => {
     input.targetAllocationsBps = { LIQUID: 6000, MORPHO: 4000, USYC: 0, BTC_RESERVE: 0 };
     const output = removeSampleData(input, now);
     expect(output.obligations).toEqual(input.obligations);
-    expect(output.activities.map((item) => item.id)).toEqual(["my-activity"]);
+    expect(output.activities.map((item) => item.action)).toContain("Sample records removed");
+    expect(output.activities.slice(1).map((item) => item.id)).toEqual(["my-activity"]);
     expect(output.decisions.map((item) => item.id)).toEqual(["my-decision"]);
     expect(output.targetAllocationsBps).toEqual(input.targetAllocationsBps); expect(output.policy).toEqual(input.policy);
     expect(canDeleteObligation(input, input.obligations[0])).toBe(false);
@@ -40,5 +41,14 @@ describe("sample cleanup", () => {
     const starter = createLiveStarterWorkspace(now); expect(hasSampleData(starter)).toBe(false);
     const cleaned = removeSampleData(sampleWorkspace, now);
     expect(removeSampleData(cleaned, now)).toEqual(cleaned);
+  });
+});
+
+describe("automatic cleanup never rewrites a user's own policy", () => {
+  it("keeps a deliberately chosen 1,000 USDC buffer when no legacy record remains", () => {
+    const own = createLiveStarterWorkspace(now);
+    own.policy.safetyBuffer = usdc("1000000000");
+    expect(hasSampleData(own)).toBe(false);
+    expect(removeSampleData(own, now)).toEqual(own);
   });
 });

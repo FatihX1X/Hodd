@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace } from "./fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import { treasuryWorkspaceSchema } from "./models";
 import { assessTreasury } from "./engine";
 

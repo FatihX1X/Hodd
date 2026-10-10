@@ -19,24 +19,24 @@ type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST"; sour
  * request opens the normal Hodd flow (fresh quote, confirmation, wallet signature).
  */
 export function AgentRequests() {
-  const { workspaceScope, workspace, assessment, operationalWorkspace, earnState, hydrated, mode, readOnly } = useTreasuryWorkspace();
+  const { workspaceScope, workspace, assessment, operationalWorkspace, earnState, hydrated, readOnly } = useTreasuryWorkspace();
   const [requests, setRequests] = useState<AgentRequest[]>([]);
   const [error, setError] = useState("");
   const [loadedAt, setLoadedAt] = useState(0);
   const resolving = useRef(new Set<string>());
 
   const load = useCallback(async () => {
-    if (mode === "DEMO" || readOnly) return;
+    if (readOnly) return;
     const client = createSupabaseBrowserClient();
     if (!client) return;
     const { data: auth } = await client.auth.getUser();
     if (!auth.user) { setRequests([]); return; }
     const { data } = await client.from("agent_actions").select("id,kind,source,summary,change,created_at,expires_at").eq("user_id", auth.user.id).eq("scope", workspaceScope).eq("status", "OPEN").order("created_at", { ascending: false }).limit(20);
     setRequests((data ?? []) as AgentRequest[]); setLoadedAt(Date.now());
-  }, [workspaceScope, mode, readOnly]);
+  }, [workspaceScope, readOnly]);
 
   const resolve = useCallback(async (id: string, status: "DONE" | "DISMISSED") => {
-    if (mode === "DEMO" || readOnly) return;
+    if (readOnly) return;
     if (resolving.current.has(id)) return;
     resolving.current.add(id);
     const client = createSupabaseBrowserClient();
@@ -44,7 +44,7 @@ export function AgentRequests() {
     resolving.current.delete(id);
     if (rpcError) setError("The request could not be updated. Reload and try again."); else setError("");
     await load();
-  }, [load, mode, readOnly]);
+  }, [load, readOnly]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -64,7 +64,7 @@ export function AgentRequests() {
     return () => window.clearTimeout(timer);
   }, [requests, workspace.obligations, resolve]);
 
-  if (!requests.length || mode === "DEMO" || readOnly) return null;
+  if (!requests.length || readOnly) return null;
   const portfolio = earnState.status === "READY" ? earnState.portfolio : null;
   const localExecution = portfolio ? isExecutionAvailable(portfolio.integration.execution) : false;
 

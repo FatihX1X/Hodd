@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 
 const fake = vi.hoisted(() => ({ revision: 4, upserts: [] as Record<string, unknown>[], conflict: false }));
 vi.mock("./client", () => ({ createSupabaseBrowserClient: () => ({

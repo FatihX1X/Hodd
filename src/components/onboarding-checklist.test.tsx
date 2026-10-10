@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OnboardingChecklist } from "./onboarding-checklist";
 import { createLiveStarterWorkspace } from "@/lib/treasury/starter";
-import { sampleWorkspace } from "@/lib/treasury/fixtures";
+import { sampleWorkspace } from "@/test/fixtures";
 import type { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 type ChecklistContext = Pick<ReturnType<typeof useTreasuryWorkspace>, "mode" | "signedIn" | "workspace" | "walletState" | "earnState">;
@@ -35,8 +35,4 @@ it("copies the connected public address and collapses only when complete", async
   expect(screen.getAllByText("Done")).toHaveLength(6);
   await user.click(screen.getByRole("button", { name: "Collapse checklist" })); expect(screen.queryByRole("list")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Show checklist" })); expect(screen.getByRole("list")).toBeVisible();
-});
-
-it("does not present onboarding progress in DEMO", () => {
-  fake.context.mode = "DEMO"; const { container } = render(<OnboardingChecklist />); expect(container).toBeEmptyDOMElement();
 });

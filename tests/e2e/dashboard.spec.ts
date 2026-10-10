@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { liveSession } from "./live-session";
 import { createLiveStarterWorkspace } from "../../src/lib/treasury/starter";
-import { sampleWorkspace, usdc } from "../../src/lib/treasury/fixtures";
+import { sampleWorkspace, usdc } from "@/test/fixtures";
 import type { TreasuryWorkspace } from "../../src/lib/treasury/models";
 
 const address = "0x0000000000000000000000000000000000000001";
@@ -11,14 +11,14 @@ async function liveReads(page: import("@playwright/test").Page, minorUnits = "10
   await page.route("**/api/earn/portfolio*", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "READY", integration: { discovery: "READY", positionAccess: "READY", execution: "READ_ONLY", configuredWalletAddress: address, message: "Live fixture vault discovery" }, vaults: [], positions: [], observedAt: "2026-10-09T12:00:00.000Z" }) }));
 }
 
-const routes = ["/", "/invest", "/obligations", "/policy", "/activity", "/connections"];
+const routes = ["/", "/invest", "/obligations", "/policy", "/activity", "/connections", "/hoddie"];
 for (const route of routes) {
   test(route + " defaults to the signed-out live welcome gate without fake data or overflow", async ({ page }) => {
     const errors: string[] = []; page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(route);
     await expect(page.getByRole("heading", { name: "Sign in to start a live testnet treasury", level: 1 })).toBeVisible();
     await expect(page.getByRole("main").getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute("href", "/login");
-    await expect(page.getByRole("button", { name: "Explore the read-only demo" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Circle testnet faucet", exact: true })).toHaveAttribute("href", "https://faucet.circle.com");
     await expect(page.getByText("October payroll", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/10,000/)).toHaveCount(0);
     await expect(page.getByRole("button", { name: /choose wallet|new obligation/i })).toHaveCount(0);
@@ -27,15 +27,7 @@ for (const route of routes) {
   });
 }
 
-test("welcome button enters demo and exit returns to live without saving samples", async ({ page }) => {
-  await page.goto("/"); await page.getByRole("button", { name: "Explore the read-only demo" }).click();
-  await expect(page.getByRole("note").filter({ hasText: "READ-ONLY DEMO" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Liquidity before yield." })).toBeVisible();
-  await expect(page.getByRole("button", { name: /choose wallet/i })).toBeDisabled();
-  await page.getByRole("button", { name: "Exit demo", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to start a live testnet treasury" })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("hodd.stage5.workspace.v4"))).toBeNull();
-});
+
 
 test("corrupt guest storage never becomes a live financial source", async ({ page }) => {
   await page.goto("/"); await page.evaluate(() => localStorage.setItem("hodd.stage5.workspace.v4", "not-json")); await page.reload();
@@ -59,14 +51,18 @@ test("signed-in users start empty and get onboarding without any stored sample t
 });
 
 test("obligation create, edit, persistence and delete recalculate live capital", async ({ page }) => {
-  await liveSession(page, linkedWorkspace()); await liveReads(page); await page.goto("/obligations");
+  test.setTimeout(60_000);
+  const session = await liveSession(page, linkedWorkspace()); await liveReads(page); await page.goto("/obligations");
   await page.getByRole("button", { name: "New obligation", exact: true }).click();
   await page.getByLabel("Obligation title").fill("Urgent invoice"); await page.getByLabel("Obligation amount").fill("2000"); await page.getByLabel("Due date").fill("2026-10-09"); await page.getByRole("button", { name: /save and recalculate/i }).click();
   await expect(page.getByText("2,001.00 USDC", { exact: true })).toBeVisible(); await expect(page.getByText("7,999.00 USDC", { exact: true })).toBeVisible();
+  await expect.poll(() => session.getWorkspace().obligations[0]?.amount.minorUnits).toBe("2000000000");
   await page.reload(); await expect(page.getByRole("heading", { name: "Urgent invoice", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Edit Urgent invoice" }).click(); await page.getByLabel("Obligation amount").fill("2500"); await page.getByRole("button", { name: /save and recalculate/i }).click();
   await expect(page.getByText("2,501.00 USDC", { exact: true })).toBeVisible(); await expect(page.getByText("7,499.00 USDC", { exact: true })).toBeVisible();
+  await expect.poll(() => session.getWorkspace().obligations[0]?.amount.minorUnits).toBe("2500000000");
   await page.getByRole("button", { name: "Delete Urgent invoice" }).click(); await page.getByRole("button", { name: "Confirm deletion" }).click(); await expect(page.getByRole("heading", { name: "Urgent invoice", exact: true })).toHaveCount(0);
+  await expect.poll(() => session.getWorkspace().obligations).toEqual([]);
   await page.reload(); await expect(page.getByRole("heading", { name: "Urgent invoice", exact: true })).toHaveCount(0);
 });
 
@@ -112,36 +108,9 @@ test("policy page explains and saves the same live workspace policy", async ({ p
   await expect(page.getByText(/1,500.00 USDC safety buffer/)).toBeVisible(); await page.reload(); await expect(page.getByText(/1,500.00 USDC safety buffer/)).toBeVisible();
 });
 
-test("older sample workspace requires confirmation before removing its exact sample records", async ({ page }) => {
-  const session = await liveSession(page, structuredClone(sampleWorkspace)); await page.goto("/");
-  await expect(page.getByText(/10,000/)).toHaveCount(0);
-  await page.getByRole("button", { name: "Remove sample data", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Remove sample data?", exact: true });
-  for (const id of ["obl-payroll-oct", "obl-aws-oct", "obl-invoice-104", "act-1", "act-2", "decision-1"]) await expect(dialog).toContainText(id);
-  await expect(dialog).toContainText("1,000 USDC"); await expect(dialog).toContainText("1 USDC");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click(); expect(session.getWorkspace().obligations).toHaveLength(3);
-  await page.getByRole("button", { name: "Remove sample data", exact: true }).click(); await page.getByRole("button", { name: "Confirm removal", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Remove sample data", exact: true })).toHaveCount(0);
-  expect(session.getWorkspace().obligations).toEqual([]); expect(session.getWorkspace().policy.safetyBuffer.minorUnits).toBe("1000000");
-  await page.reload(); await expect(page.getByRole("button", { name: "Remove sample data", exact: true })).toHaveCount(0);
-});
 
-test("a signed-in demo stays separate from the user's wallet and payment ledger", async ({ page }) => {
-  const workspace = linkedWorkspace(); const session = await liveSession(page, workspace); await liveReads(page, "20000000"); await page.goto("/");
-  await expect(page.getByText("Custody: user")).toBeVisible();
-  const writes = session.getWriteCount();
-  await page.getByRole("button", { name: "Explore the read-only demo", exact: true }).click();
-  await expect(page.getByRole("button", { name: /choose wallet/i })).toBeDisabled();
-  await expect(page.getByText("Custody: user")).toHaveCount(0);
-  await page.getByRole("link", { name: "Activity", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Every decision leaves a trace." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Server payment ledger", exact: true })).toHaveCount(0);
-  await expect(page.getByText("Treasury Engine baseline evaluated")).toBeVisible();
-  expect(session.getWriteCount()).toBe(writes); expect(session.getWorkspace()).toEqual(workspace);
-  await page.getByRole("button", { name: "Exit demo", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Server payment ledger", exact: true })).toBeVisible();
-});
+
+
 
 test("production execution routes fail closed even with the development flag", async ({ request }) => {
   for (const path of ["/api/payments", "/api/earn/quote", "/api/earn/execute", "/api/earn/execution", "/api/circle-proxy/v1/w3s/user/transactions/transfer"]) {
@@ -163,4 +132,25 @@ test("OAuth consent keeps the request across sign-in", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
   const cookie = (await page.context().cookies()).find((item) => item.name === "hodd_after_login");
   expect(decodeURIComponent(cookie?.value ?? "")).toBe("/oauth/consent?authorization_id=test-authorization-123");
+});
+
+test("obsolete demo preferences keep visitors at the sign-in gate", async ({ page }) => {
+  await page.addInitScript(() => sessionStorage.setItem("hodd:workspace-mode", "DEMO"));
+  await page.goto("/?demo=1");
+  await expect(page.getByRole("heading", { name: "Sign in to start a live testnet treasury" })).toBeVisible();
+  await expect(page.getByText(/10,000/)).toHaveCount(0);
+});
+
+test("legacy cleanup runs automatically once and preserves paid and user bills", async ({ page }) => {
+  const workspace = structuredClone(sampleWorkspace);
+  workspace.obligations[0].status = "PAID";
+  workspace.obligations.push({ ...workspace.obligations[1], id: "my-bill", title: "My bill" });
+  const session = await liveSession(page, workspace); await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Your live testnet treasury", exact: true })).toBeVisible();
+  await expect.poll(() => session.getWorkspace().obligations.map(item => item.id)).toEqual([workspace.obligations[0].id, "my-bill"]);
+  expect(session.getWorkspace().activities).toEqual([expect.objectContaining({ actor: "SYSTEM", action: "Sample records removed" })]);
+  expect(session.getWorkspace().policy.safetyBuffer.minorUnits).toBe("1000000");
+  expect(session.getWriteCount()).toBe(1);
+  await page.reload(); await expect(page.getByRole("heading", { name: "Your live testnet treasury", exact: true })).toBeVisible();
+  expect(session.getWriteCount()).toBe(1);
 });

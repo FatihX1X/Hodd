@@ -25,7 +25,7 @@ export function overviewView(workspace: TreasuryWorkspace, evaluatedAt = new Dat
   return {
     evaluatedAt: assessment.evaluatedAt,
     totalTreasury: usdc(workspace.totalTreasury), liquidUsdc: usdc(workspace.liquidUsdc),
-    strategies: workspace.strategies.filter((item) => BigInt(item.balance.minorUnits) > 0n || item.kind === "LIQUID").map((item) => ({ kind: item.kind, name: item.name, balance: usdc(item.balance), redeemable: usdc(item.redeemable), integration: item.integration })),
+    strategies: workspace.strategies.filter((item) => BigInt(item.balance.minorUnits) > 0n || item.kind === "LIQUID").map((item) => ({ kind: item.kind, name: item.name, balance: usdc(item.balance), redeemable: usdc(item.redeemable), integration: item.integration === "DEMO" ? "NOT_CONNECTED" : item.integration })),
     upcomingObligations30d: usdc(assessment.upcomingObligations), safetyBuffer: usdc(workspace.policy.safetyBuffer), pendingPayments: usdc(workspace.pendingTransactions),
     protectedCapital: usdc(assessment.protectedCapital), deployableCapital: usdc(assessment.deployableCapital),
     safelyAvailableLiquidity: usdc(assessment.safelyAvailableLiquidity), liquidityCoverage: pct(assessment.liquidityCoverageBps), minimumCoverage: pct(workspace.policy.minimumLiquidityCoverageBps), coverageStatus: assessment.coverageStatus,

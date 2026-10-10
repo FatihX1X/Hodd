@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assessTreasury } from "@/lib/treasury/engine";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import type { EarnPortfolioResponse } from "@/lib/earn/models";
 const fake = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], mode: "LIVE", readOnly: false, limit: "4500000000", rpc: vi.fn(), earn: vi.fn(), payment: vi.fn() }));
 const money = (minorUnits: string) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits });
@@ -38,8 +38,8 @@ describe("Hoddie wallet-review handoff", () => {
     const obligation = initialWorkspace.obligations[0]; fake.rows = [request("PAYMENT_REQUEST", { obligationId: obligation.id })]; render(<AgentRequests />);
     await screen.findByRole("button", { name: "Open normal payment review" }); expect(fake.payment).toHaveBeenCalledWith({ obligation }); expect(fake.rpc).not.toHaveBeenCalled();
   });
-  it("demo never loads or resolves stored money requests", async () => {
-    fake.mode = "DEMO"; fake.readOnly = true; fake.rows = [request("EARN_REQUEST", { operation: "DEPOSIT", amount: "100", vaultAddress: address })]; render(<AgentRequests />);
+  it("read-only workspace never loads or resolves stored money requests", async () => {
+    fake.readOnly = true; fake.rows = [request("EARN_REQUEST", { operation: "DEPOSIT", amount: "100", vaultAddress: address })]; render(<AgentRequests />);
     await waitFor(() => expect(screen.queryByText("Reviewed Hoddie request")).not.toBeInTheDocument()); expect(fake.earn).not.toHaveBeenCalled(); expect(fake.rpc).not.toHaveBeenCalled();
   });
 });

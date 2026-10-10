@@ -18,7 +18,7 @@ export function EarnRecoveryPanel() {
   const [candidates, setCandidates] = useState<Record<string, string>>({}); const [messages, setMessages] = useState<Record<string, string>>({}); const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let active = true; const client = createSupabaseBrowserClient();
-    if (!client || mode === "DEMO") return;
+    if (!client) return;
     void (async () => {
       const { data: auth } = await client.auth.getUser();
       if (!auth.user) { if (active) setRows([]); return; }
