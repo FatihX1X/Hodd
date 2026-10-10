@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 vi.mock("server-only", () => ({}));
 const mocks = vi.hoisted(() => ({ cookie: "", client: vi.fn() }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => mocks.cookie ? { value: mocks.cookie } : undefined }) }));

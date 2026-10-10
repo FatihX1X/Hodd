@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessPayment, assessTreasury } from "./engine";
-import { initialWorkspace, usdc } from "./fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import { allocationByLiquidity, capUsage, liquidityRamp, policyChecks, policySentences, runwayProjection, usdcNumber, weeklyOutflows } from "./views";
 
 const clone = () => structuredClone(initialWorkspace);

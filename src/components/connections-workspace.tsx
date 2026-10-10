@@ -11,7 +11,7 @@ type Action = { id: string; kind: string; summary: string; status: string; creat
 
 /** Claude connector: setup, connected clients (revocable) and changes made through Claude. */
 export function ConnectionsWorkspace() {
-  const { workspaceScope, hydrated, mode } = useTreasuryWorkspace();
+  const { workspaceScope, hydrated } = useTreasuryWorkspace();
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [signedIn, setSignedIn] = useState<boolean | null>(null);
@@ -21,7 +21,7 @@ export function ConnectionsWorkspace() {
 
   const load = useCallback(async () => {
     setOrigin(window.location.origin);
-    if (mode === "DEMO") return;
+
     const client = createSupabaseBrowserClient();
     if (!client) return;
     const { data: auth } = await client.auth.getUser();
@@ -32,7 +32,7 @@ export function ConnectionsWorkspace() {
     else { setGrantNote(""); setGrants((listed.data ?? []).map((grant) => ({ clientId: grant.client.id, name: grant.client.name || "Unnamed app", uri: grant.client.uri, grantedAt: grant.granted_at }))); }
     const { data } = await client.from("agent_actions").select("id,kind,summary,status,created_at").eq("user_id", auth.user.id).eq("scope", workspaceScope).order("created_at", { ascending: false }).limit(25);
     setActions((data ?? []) as Action[]);
-  }, [mode, workspaceScope]);
+  }, [workspaceScope]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -41,7 +41,7 @@ export function ConnectionsWorkspace() {
   }, [hydrated, load]);
 
   const revoke = async (clientId: string) => {
-    if (mode === "DEMO") return;
+
     const client = createSupabaseBrowserClient();
     if (!client) return;
     const { error } = await client.auth.oauth.revokeGrant({ clientId });
@@ -79,7 +79,7 @@ export function ConnectionsWorkspace() {
       <SectionHeading index="06.2" title="Connected apps" description="Apps you allowed to use your Hodd account" />
       <div className="divide-y divide-white/10">
         {signedIn === false && <p className="p-5 text-sm text-white/65">Sign in to see and manage connected apps.</p>}
-        {grants?.map((grant) => <article key={grant.clientId} className="flex flex-wrap items-center justify-between gap-3 p-5"><div><p className="text-sm font-semibold">{grant.name}</p><p className="mono mt-1 text-[10px] text-white/55">{grant.uri || grant.clientId} · allowed {new Date(grant.grantedAt).toLocaleString()}</p></div><button disabled={mode === "DEMO"} onClick={() => void revoke(grant.clientId)} className="border border-white/20 px-3 py-2 text-xs text-[#ff9a92]">Revoke</button></article>)}
+        {grants?.map((grant) => <article key={grant.clientId} className="flex flex-wrap items-center justify-between gap-3 p-5"><div><p className="text-sm font-semibold">{grant.name}</p><p className="mono mt-1 text-[10px] text-white/55">{grant.uri || grant.clientId} · allowed {new Date(grant.grantedAt).toLocaleString()}</p></div><button onClick={() => void revoke(grant.clientId)} className="border border-white/20 px-3 py-2 text-xs text-[#ff9a92]">Revoke</button></article>)}
         {grants?.length === 0 && !grantNote && <p className="p-5 text-sm text-white/65">No apps are connected yet.</p>}
         {grantNote && <p role="status" className="p-5 text-sm text-white/70">{grantNote}</p>}
       </div>

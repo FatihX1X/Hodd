@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import type { WalletConnection } from "@/lib/treasury/models";
 import { PaymentDialog } from "./payment-dialog";
 const fake = vi.hoisted(() => ({ sync: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined), runtime: vi.fn(), approve: vi.fn(async () => undefined) }));

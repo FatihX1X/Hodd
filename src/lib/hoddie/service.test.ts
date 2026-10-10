@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import type { TreasuryWorkspace } from "@/lib/treasury/models";
 vi.mock("server-only", () => ({}));
 const mocks = vi.hoisted(() => ({ live: vi.fn(), cookie: "" }));

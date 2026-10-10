@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import { assessEarnOperation } from "./server-policy";
 import type { EarnPosition } from "./models";
 const now = new Date("2026-10-01T12:00:00Z");

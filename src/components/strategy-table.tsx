@@ -15,6 +15,7 @@ const liquidityNote: Record<StrategyPosition["liquidity"], string> = {
 };
 
 function strategyStatus(workspace: TreasuryWorkspace, strategy: StrategyPosition) {
+  if (strategy.integration === "DEMO") return { label: "Not connected", tone: "neutral" as const };
   if (strategy.integration === "LIVE") return { label: "LIVE", tone: "success" as const };
   if (workspace.policy.enabledStrategies[strategy.kind]) return { label: "Preview enabled", tone: "success" as const };
   return { label: strategy.integration, tone: "neutral" as const };
@@ -83,7 +84,7 @@ export function StrategyTable({ workspace, strategies }: { workspace: TreasuryWo
             <div><dt className={labelClass}>Share of treasury</dt><dd className="mono mt-2 text-sm">{(usage.share * 100).toFixed(1)}%</dd></div>
             <div><dt className={labelClass}>APY</dt><dd className="mono mt-2 text-sm">{selected.apyBps === null ? "Not available" : formatPercentFromBps(selected.apyBps, 2)}</dd></div>
             <div><dt className={labelClass}>Risk</dt><dd className="mono mt-2 text-sm">{selected.risk}</dd></div>
-            <div><dt className={labelClass}>Integration</dt><dd className="mono mt-2 text-sm">{selected.integration}</dd></div>
+            <div><dt className={labelClass}>Integration</dt><dd className="mono mt-2 text-sm">{selected.integration === "DEMO" ? "Not connected" : selected.integration}</dd></div>
           </dl>
           {capped && (
             <div className="mt-5 border-t border-white/10 pt-5">

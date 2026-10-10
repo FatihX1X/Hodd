@@ -1,7 +1,7 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { useCallback, useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import type { HoddieMessage } from "@/lib/hoddie/models";
 const fake = vi.hoisted(() => ({ auth: undefined as undefined | ((event: string, session: { user: { id: string } } | null) => void), scope: "TREASURY", refresh: vi.fn(), mode: "LIVE", readOnly: false, available: false, send: vi.fn(), onError: undefined as undefined | (() => void) }));
 vi.mock("@/lib/supabase/client", () => ({ createSupabaseBrowserClient: () => ({ auth: { onAuthStateChange: (callback: typeof fake.auth) => { fake.auth = callback; return { data: { subscription: { unsubscribe: vi.fn() } } }; } } }) }));
@@ -59,8 +59,7 @@ describe("Hoddie session-local isolation", () => {
 });
 
 describe("unified deterministic conversation", () => {
-  it.each(["signed out", "no consent", "no key", "demo"])("answers without a model in %s mode", async (scenario) => {
-    if (scenario === "demo") { fake.mode = "DEMO"; fake.readOnly = true; }
+  it.each(["signed out", "no consent", "no key"])("answers without a model in %s mode", async (scenario) => {
     render(<HoddieProvider><Probe /></HoddieProvider>);
     await waitFor(() => expect(state.providers).toHaveLength(1));
     if (scenario !== "signed out") await act(async () => fake.auth?.("SIGNED_IN", { user: { id: "owner" } }));
@@ -74,8 +73,8 @@ describe("unified deterministic conversation", () => {
     expect(part?.type).toBe("data-hoddie");
     if (part?.type === "data-hoddie") {
       expect(part.data.language).toBe("tr");
-      expect(part.data.source).toBe(scenario === "demo" ? "DEMO" : "NOT_CONNECTED");
-      expect(part.data.message).toContain(scenario === "demo" ? "10,000.00 USDC" : "0.00 USDC");
+      expect(part.data.source).toBe("NOT_CONNECTED");
+      expect(part.data.message).toContain("0.00 USDC");
       expect(part.data.proposal).toBeUndefined();
     }
     expect(fake.send).not.toHaveBeenCalled(); expect(vi.mocked(fetch).mock.calls).toHaveLength(before);
@@ -94,8 +93,8 @@ describe("unified deterministic conversation", () => {
     if (part?.type === "data-hoddie") { expect(part.data.proposal).toBeUndefined(); expect(part.data.message).toMatch(/cannot change|cannot.*move/i); }
     expect(fake.send).toHaveBeenCalledTimes(1);
   });
-  it("demo prevents consent, preparation, confirmation and request writes even with a session", async () => {
-    fake.mode = "DEMO"; fake.readOnly = true; render(<HoddieProvider><Probe /></HoddieProvider>);
+  it("read-only state prevents preparation and confirmation even with a session", async () => {
+    fake.readOnly = true; render(<HoddieProvider><Probe /></HoddieProvider>);
     await waitFor(() => expect(state.providers).toHaveLength(1));
     await act(async () => fake.auth?.("SIGNED_IN", { user: { id: "owner" } }));
     const before = vi.mocked(fetch).mock.calls.length;
