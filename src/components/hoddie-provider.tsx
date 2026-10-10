@@ -34,7 +34,7 @@ function useHoddieState() {
     });
     return () => data.subscription.unsubscribe();
   }, [clear]);
-  const walletIdentity = `${mode}:${workspaceScope}:${workspace.walletConnection?.provider ?? "demo"}:${workspace.walletConnection?.address ?? ""}:${workspace.walletConnection?.connectedAt ?? ""}`;
+  const walletIdentity = `${mode}:${workspaceScope}:${workspace.walletConnection?.provider ?? "not-connected"}:${workspace.walletConnection?.address ?? ""}:${workspace.walletConnection?.connectedAt ?? ""}`;
   useEffect(() => { const timer = window.setTimeout(clear, 0); return () => window.clearTimeout(timer); }, [walletIdentity, clear]);
   useEffect(() => {
     const controller = new AbortController();
@@ -42,20 +42,20 @@ function useHoddieState() {
     return () => controller.abort();
   }, []);
   useEffect(() => {
-    if (!signedIn || mode === "DEMO") return;
+    if (!signedIn) return;
     const controller = new AbortController();
     void fetch(`/api/hoddie/consent?provider=${provider}`, { signal: controller.signal }).then((response) => response.json()).then((data) => { if (controller.signal.aborted) return; setAllowed(data.allowed === true); if (data.status === "READY") setSignedIn(true); if (data.code === "AUTH_REQUIRED") setSignedIn(false); }).catch(() => undefined);
     return () => controller.abort();
   }, [provider, signedIn, mode]);
   const busy = manualBusy || chat.status === "submitted" || chat.status === "streaming";
   const accept = async () => {
-    if (mode === "DEMO" || readOnly || !signedIn) return;
+    if (readOnly || !signedIn) return;
     const epoch = generation.current; setManualBusy(true); setIssue("");
     try { const response = await fetch("/api/hoddie/consent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, allow: true }) }); const data = await response.json(); if (epoch !== generation.current) return; if (data.status !== "READY") throw new Error(data.message); setAllowed(true); }
     catch (error) { if (epoch === generation.current) setIssue(error instanceof Error ? error.message : "Permission could not be saved."); }
     finally { if (epoch === generation.current) setManualBusy(false); }
   };
-  const revoke = async () => { clear(); setAllowed(false); if (mode === "DEMO") return; try { await fetch("/api/hoddie/consent", { method: "DELETE" }); } catch { setIssue("Permission revocation could not be confirmed. Reload before sending another command."); } };
+  const revoke = async () => { clear(); setAllowed(false); try { await fetch("/api/hoddie/consent", { method: "DELETE" }); } catch { setIssue("Permission revocation could not be confirmed. Reload before sending another command."); } };
   const append = (result: HoddieResult) => { setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", parts: [{ type: "data-hoddie", data: result }] }]); if (result.selectionRef) setSelectionRef(result.selectionRef); };
   // useChat reports HTTP/stream failures via onError, rather than throwing from sendMessage.
   useEffect(() => {
@@ -65,17 +65,16 @@ function useHoddieState() {
     };
   });
   const localAnswer = (message: string) => {
-    const demo = mode === "DEMO";
-    const current = !demo && !signedIn ? { ...workspace, walletConnection: null } : workspace;
-    const complete = demo || !current.walletConnection || earnState?.status === "READY" && earnState.portfolio.integration.positionAccess === "READY";
-    const result = deterministicResult(answerContext(message, current, complete ? operationalWorkspace : null, complete ? assessment : null, demo), demo ? "DEMO" : !current.walletConnection ? "NOT_CONNECTED" : complete && operationalWorkspace ? "LIVE" : "PARTIAL");
-    if (!demo && current.walletConnection && walletState?.status === "READY") result.observedAt = walletState.snapshot.observedAt;
+    const current = !signedIn ? { ...workspace, walletConnection: null } : workspace;
+    const complete = !current.walletConnection || earnState?.status === "READY" && earnState.portfolio.integration.positionAccess === "READY";
+    const result = deterministicResult(answerContext(message, current, complete ? operationalWorkspace : null, complete ? assessment : null), !current.walletConnection ? "NOT_CONNECTED" : complete && operationalWorkspace ? "LIVE" : "PARTIAL");
+    if (current.walletConnection && walletState?.status === "READY") result.observedAt = walletState.snapshot.observedAt;
     return result;
   };
   const send = async (message: string) => {
     if (busy || sending.current || workspaceScope !== "TREASURY") return;
     clearError(); language.current = questionLanguage(message);
-    if (canAnswerInstantly(message) || mode === "DEMO" || readOnly || !signedIn || !allowed || !providers.some((item) => item.ready)) {
+    if (canAnswerInstantly(message) || readOnly || !signedIn || !allowed || !providers.some((item) => item.ready)) {
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: message }] }]);
       append(localAnswer(message)); return;
     }
@@ -85,14 +84,14 @@ function useHoddieState() {
     finally { if (epoch === generation.current) { sending.current = false; setManualBusy(false); } }
   };
   const manual = async (input: { mode: "PREPARE"; kind: string; change: Record<string, unknown> } | { mode: "SELECT"; handle: string }) => {
-    if (busy || mode === "DEMO" || readOnly || !signedIn || !allowed || workspaceScope !== "TREASURY") return;
+    if (busy || readOnly || !signedIn || !allowed || workspaceScope !== "TREASURY") return;
     const epoch = generation.current; setManualBusy(true); setIssue("");
     try { const response = await fetch("/api/hoddie/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...input, provider }) }); const data = await response.json(); if (epoch !== generation.current) return; if (data.status !== "READY") throw new Error(data.message); append(resultSchema.parse(data.result)); }
     catch (error) { if (epoch === generation.current) setIssue(error instanceof Error ? error.message : "The preparation failed."); }
     finally { if (epoch === generation.current) setManualBusy(false); }
   };
   const confirm = async (handle: string) => {
-    if (mode === "DEMO" || readOnly || !signedIn || !allowed || workspaceScope !== "TREASURY") return;
+    if (readOnly || !signedIn || !allowed || workspaceScope !== "TREASURY") return;
     if (used.current.has(handle)) return;
     used.current.add(handle); setHandled([...used.current]);
     const epoch = generation.current; setManualBusy(true); setIssue("");

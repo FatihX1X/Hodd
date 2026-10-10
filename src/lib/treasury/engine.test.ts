@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessTreasury, buildWaterfall, getProtectedObligations, previewAllocation } from "./engine";
-import { initialWorkspace, usdc } from "./fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 
 const clone = () => structuredClone(initialWorkspace);
 describe("Treasury Engine", () => {
@@ -13,4 +13,3 @@ describe("Treasury Engine", () => {
   it("uses the waterfall in order and reports an unresolved remainder", () => { const result = buildWaterfall(usdc("3000000000"), [{ source: "LIQUID_USDC", available: usdc("800000000") }, { source: "MORPHO", available: usdc("1200000000") }]); expect(result.steps.map((item) => item.source)).toEqual(["LIQUID_USDC", "MORPHO"]); expect(result.shortfall.minorUnits).toBe("1000000000"); });
   it("keeps disabled and capped allocation amounts liquid", () => { const workspace = clone(); workspace.policy.strategyCapsBps.MORPHO = 3000; const plan = previewAllocation(workspace, assessTreasury(workspace, new Date("2026-09-27T00:00:00.000Z"))); expect(plan.lines.find((item) => item.strategy === "MORPHO")?.approved.minorUnits).toBe("1350000000"); expect(plan.unallocatedToLiquid.minorUnits).toBe("3150000000"); expect(plan.status).toBe("REVIEW"); });
 });
-

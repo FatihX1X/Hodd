@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { initialWorkspace } from "../../src/lib/treasury/fixtures";
+import { liveSession } from "./live-session";
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/earn/portfolio*", (route) => route.fulfill({ json: { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Read only" }, vaults: [], positions: [], observedAt: "2026-10-08T12:00:00Z" } }));
 });
 test("Hoddie navigation and read-only setup reflow without console errors", async ({ page }, testInfo) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message)); page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-  // Signed-out visitors get the live welcome gate; the read-only demo shows the assistant layout.
-  await page.goto("/hoddie?demo=1"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
+  await liveSession(page);
+  await page.route("**/api/hoddie/consent*", route => route.fulfill({ json: { status: "READY", allowed: false } }));
+  await page.goto("/hoddie"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
   await expect(page.locator('[data-theme="dark"]')).toBeVisible();
   await expect(page.getByRole("region", { name: "Hoddie conversation" })).toHaveCSS("background-color", "rgb(16, 19, 25)");
   if (testInfo.project.name === "desktop") {
@@ -35,21 +36,7 @@ test("Hoddie navigation and read-only setup reflow without console errors", asyn
   expect(errors).toEqual([]);
 });
 test("mocked interpretation shows sourced cards, user-only confirmation and session-only history", async ({ page }, testInfo) => {
-  // Synthetic browser session only; every Supabase request is intercepted below.
-  const user = { id: "11111111-1111-4111-8111-111111111111", email: "hoddie-e2e@example.invalid", aud: "authenticated", role: "authenticated", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: {}, created_at: "2026-10-08T12:00:00Z" };
-  const expiry = Math.floor(Date.now() / 1000) + 3600;
-  const token = `${Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url")}.${Buffer.from(JSON.stringify({ sub: user.id, aud: "authenticated", role: "authenticated", exp: expiry })).toString("base64url")}.mock-signature`;
-  const session = { access_token: token, refresh_token: "synthetic-test-only", token_type: "bearer", expires_in: 3600, expires_at: expiry, user };
-  await page.context().addCookies([{ name: "sb-lbdtfzyulgegpsxhszfw-auth-token", value: `base64-${Buffer.from(JSON.stringify(session)).toString("base64url")}`, domain: "127.0.0.1", path: "/" }]);
-  await page.route("https://*.supabase.co/**", (route) => {
-    const url = route.request().url();
-    if (url.includes("/auth/v1/user")) return route.fulfill({ json: user });
-    if (url.includes("/rest/v1/treasury_workspaces")) {
-      const row = { workspace: initialWorkspace, revision: 1 };
-      return route.fulfill({ json: route.request().headers().accept?.includes("object") ? row : [row] });
-    }
-    return route.fulfill({ json: [] });
-  });
+  await liveSession(page);
   let allowed = false; let confirms = 0; const bodies: Record<string, unknown>[] = [];
   await page.route("**/api/hoddie/consent*", (route) => {
     if (route.request().method() === "POST") allowed = true;
@@ -82,7 +69,8 @@ test("mocked interpretation shows sourced cards, user-only confirmation and sess
   await page.reload(); await expect(page.getByText("Canonical server result")).toHaveCount(0);
 });
 
-test("demo answers locally in English and Turkish without interpretation or writes, and matches the console at 1280/375", async ({ page }, testInfo) => {
+test("disconnected signed-in accounts answer locally in English and Turkish without interpretation or writes", async ({ page }, testInfo) => {
+  await liveSession(page);
   const width = testInfo.project.name === "desktop" ? 1280 : 375;
   await page.setViewportSize({ width, height: 900 });
   const posts: string[] = [];
@@ -90,26 +78,21 @@ test("demo answers locally in English and Turkish without interpretation or writ
     if (route.request().method() !== "GET") posts.push(route.request().url());
     return route.fulfill({ json: { status: "READY", providers: [{ id: "GEMINI", ready: true }] } });
   });
-  await page.goto("/hoddie?demo=1");
+  await page.goto("/hoddie");
   await page.getByLabel("Your command").fill("Summarize my treasury"); await page.getByRole("button", { name: "Send command" }).click();
   const log = page.getByRole("log", { name: "Conversation messages" });
-  await expect(log).toContainText("10,000.00 USDC"); await expect(log).toContainText("DEMO");
+  await expect(log).toContainText("0.00 USDC"); await expect(log).toContainText("NOT CONNECTED");
   await expect(log.getByRole("navigation", { name: "Answer sources" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await page.screenshot({ path: "test-results/hoddie-demo-" + width + ".png", fullPage: true, scale: "css" });
+  await page.screenshot({ path: "test-results/hoddie-disconnected-" + width + ".png", fullPage: true, scale: "css" });
   await page.getByLabel("Your command").fill("Hesabımı özetle"); await page.getByRole("button", { name: "Send command" }).click();
-  await expect(log).toContainText("Hazinenizde 10,000.00 USDC var"); await expect(log).toContainText("Toplam hazine");
+  await expect(log).toContainText("Hazinenizde 0.00 USDC var"); await expect(log).toContainText("Toplam hazine");
   await page.getByLabel("Your command").fill("Create a 500 USDC obligation due tomorrow"); await page.getByRole("button", { name: "Send command" }).click();
   await expect(log).toContainText("cannot change it or move funds");
   await expect(page.getByRole("button", { name: "Apply change" })).toHaveCount(0);
   expect(posts).toEqual([]); await expect(page.getByRole("main")).not.toContainText(/Gemini|OpenRouter|NVIDIA|Nemotron/);
-  await page.goto("/?demo=1"); await expect(page.getByRole("heading", { name: "Liquidity before yield." })).toBeVisible();
+  await page.goto("/"); await expect(page.getByRole("heading", { name: "Your live testnet treasury", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
-  await page.screenshot({ path: "test-results/overview-demo-" + width + ".png", fullPage: true });
-});
-test("signed-out Hoddie is available and reports zero disconnected balances", async ({ page }) => {
-  await page.goto("/hoddie"); await expect(page.getByRole("heading", { name: "Hoddie", exact: true })).toBeVisible();
-  await page.getByLabel("Your command").fill("Summarize my treasury"); await page.getByRole("button", { name: "Send command" }).click();
-  const log = page.getByRole("log"); await expect(log).toContainText("0.00 USDC"); await expect(log).toContainText("NOT CONNECTED"); await expect(log).not.toContainText("10,000");
+  await page.screenshot({ path: "test-results/overview-disconnected-" + width + ".png", fullPage: true });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import { mergePaymentLedger } from "./workspace";
 describe("authoritative payment facts", () => {
   it("does not let a newer local cache revert a server PAID record", () => {

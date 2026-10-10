@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addMoney, MoneyMismatchError, parseMoneyInput, subtractMoneyFloor } from "./money";
-import { usdc } from "./fixtures";
+import { usdc } from "@/test/fixtures";
 
 describe("money arithmetic", () => {
   it("parses six-decimal input without floating point", () => { expect(parseMoneyInput("12.345678").minorUnits).toBe("12345678"); expect(() => parseMoneyInput("1.0000001")).toThrow(/up to 6 decimals/); });
