@@ -34,18 +34,19 @@ export type LiveView = Readonly<{
 
 /**
  * Applies fresh Arc balances and Morpho positions, exactly like the browser does.
- * Without a wallet nothing is live: balances are reported as zero, never as stored or sample numbers.
+ * Without a wallet nothing is live: balances are reported as zero, never as stored numbers.
  */
 export async function liveWorkspace(workspace: TreasuryWorkspace, deps: { readSnapshot?: (address: string) => Promise<WalletSnapshot>; readPortfolio?: typeof getEarnPortfolio } = {}): Promise<LiveView> {
   if (workspace.treasuryMode === "LOCAL_DEMO" || !workspace.walletConnection) {
     const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
-    return { workspace: { ...workspace, totalTreasury: zero, liquidUsdc: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero })) }, source: "NOT_CONNECTED", note: "No wallet is connected in Hodd, so there are no live balances. Connect a wallet at app.hoddfinance.xyz first.", snapshot: null, portfolio: null };
+    return { workspace: { ...workspace, totalTreasury: zero, liquidUsdc: zero, pendingTransactions: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" as const })) }, source: "NOT_CONNECTED", note: "No wallet is connected in Hodd, so there are no live balances. Connect a wallet at app.hoddfinance.xyz first.", snapshot: null, portfolio: null };
   }
   const address = workspace.walletConnection.address;
   let snapshot: WalletSnapshot;
   try { snapshot = await (deps.readSnapshot ?? ((value: string) => new ViemArcTreasuryReader().readSnapshot(value)))(address); }
   catch { throw new AgentError("BALANCE_UNAVAILABLE", "Arc Testnet balances are unavailable right now, so Hodd will not calculate with stale numbers. Try again shortly."); }
-  const withWallet = applyWalletSnapshot(workspace, snapshot);
+  const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
+  const withWallet = applyWalletSnapshot({ ...workspace, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" })) }, snapshot);
   try {
     const portfolio = await (deps.readPortfolio ?? getEarnPortfolio)(address);
     const complete = portfolio.integration.positionAccess === "READY";

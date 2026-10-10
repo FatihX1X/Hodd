@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import { dueDate, maskCommand, percentageBps, slotValue } from "./privacy";
 import { intentSchema } from "./models";
 

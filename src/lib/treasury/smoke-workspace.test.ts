@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSmokeWorkspace } from "./smoke-workspace";
-import { initialWorkspace } from "./fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import { assessTreasury } from "./engine";
 import { LocalTreasuryRepository } from "./repository";
 describe("isolated Earn smoke workspace", () => {

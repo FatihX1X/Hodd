@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { onboardingStates } from "./onboarding";
 import { createLiveStarterWorkspace } from "./starter";
-import { sampleWorkspace } from "./fixtures";
+import { sampleWorkspace } from "@/test/fixtures";
 import type { TreasuryWorkspace, WalletReadState } from "./models";
 import type { EarnPortfolioResponse } from "@/lib/earn/models";
 

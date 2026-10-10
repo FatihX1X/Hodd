@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import { HoddieError } from "./models";
 vi.mock("server-only", () => ({}));
 const fake = vi.hoisted(() => ({ context: vi.fn(), consent: vi.fn(), usage: vi.fn(), parse: vi.fn(), availability: vi.fn(), resolve: vi.fn(), prepare: vi.fn(), select: vi.fn(), confirm: vi.fn(), live: vi.fn() }));

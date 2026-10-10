@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { createLiveStarterWorkspace } from "./starter";
 import { treasuryWorkspaceSchema } from "./models";
 import { assessTreasury, previewAllocation } from "./engine";
-import { initialWorkspace, sampleWorkspace } from "./fixtures";
 
 const now = "2026-10-09T12:00:00.000Z";
 describe("live starter", () => {
@@ -17,10 +16,8 @@ describe("live starter", () => {
     const assessment = assessTreasury(workspace, new Date(now));
     expect(previewAllocation(workspace, assessment).violations.some((item) => item.code === "STRATEGY_DISABLED")).toBe(false);
   });
-  it("keeps fixtures compatible and makes independent starter objects", () => {
-    expect(sampleWorkspace).toBe(initialWorkspace);
+  it("makes independent starter objects", () => {
     const first = createLiveStarterWorkspace(now); first.policy.enabledStrategies.MORPHO = false;
     expect(createLiveStarterWorkspace(now).policy.enabledStrategies.MORPHO).toBe(true);
-    expect(sampleWorkspace.totalTreasury.minorUnits).toBe("10000000000");
   });
 });

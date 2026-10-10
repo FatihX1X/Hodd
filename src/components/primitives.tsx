@@ -1,7 +1,6 @@
 "use client";
 
 import clsx from "clsx";
-import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import type { Money, PolicyResult } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 
@@ -31,13 +30,12 @@ export function PageHeader({ eyebrow, title, description, aside, compact = false
   );
 }
 
-export function DemoNotice({ children }: { children?: React.ReactNode }) {
-  const { mode } = useTreasuryWorkspace();
+export function TreasuryNotice({ children }: { children?: React.ReactNode }) {
   return (
     <div className="border-b border-white/10 bg-[#101319] px-5 py-3 md:px-8 lg:px-10" role="note">
       <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#c9cbd3]">
         <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#7fa6ff]" />
-        {mode === "DEMO" ? "Read-only sample data. Nothing is saved and transaction actions are disabled." : children ?? "Live Arc Testnet balances · your own wallet signs every transaction."}
+        {children ?? "Live Arc Testnet balances · your own wallet signs every transaction."}
       </div>
     </div>
   );

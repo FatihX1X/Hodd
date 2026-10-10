@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessTreasury } from "@/lib/treasury/engine";
-import { initialWorkspace, usdc } from "@/lib/treasury/fixtures";
+import { initialWorkspace, usdc } from "@/test/fixtures";
 import { answerQuestion, starterPrompts, type HoddieReply } from "./answers";
 
 const at = new Date("2026-09-27T00:00:00.000Z");

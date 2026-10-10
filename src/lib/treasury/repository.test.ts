@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createLiveStarterWorkspace } from "./starter";
-import { initialWorkspace } from "./fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import { LEGACY_WORKSPACE_STORAGE_KEY, LocalTreasuryRepository, STAGE3_WORKSPACE_STORAGE_KEY, WORKSPACE_STORAGE_KEY } from "./repository";
 
 function memoryStorage(seed?: string, key = WORKSPACE_STORAGE_KEY) { const data = new Map<string, string>(); if (seed !== undefined) data.set(key, seed); return { getItem: (item: string) => data.get(item) ?? null, setItem: (item: string, value: string) => { data.set(item, value); }, removeItem: (item: string) => { data.delete(item); } }; }

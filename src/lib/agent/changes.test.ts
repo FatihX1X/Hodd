@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 import type { TreasuryWorkspace } from "@/lib/treasury/models";
 import { applyChange } from "./changes";
 import { paymentCheckView } from "./views";

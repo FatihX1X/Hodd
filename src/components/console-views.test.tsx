@@ -6,18 +6,19 @@ import { ObligationExplorer } from "./obligation-explorer";
 import { PolicyView } from "./policy-view";
 import { StrategyTable } from "./strategy-table";
 import { TreasuryWorkspaceProvider } from "./treasury-workspace-provider";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { loadCloudWorkspace } from "@/lib/supabase/workspace-sync";
+import { initialWorkspace } from "@/test/fixtures";
 import { allocationByLiquidity, runwayProjection, weeklyOutflows } from "@/lib/treasury/views";
 
 vi.mock("@/lib/supabase/client", () => ({ createSupabaseBrowserClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: "test-user" } } }), onAuthStateChange: (callback: (event: string, session: { user: { id: string } }) => void) => { queueMicrotask(() => callback("INITIAL_SESSION", { user: { id: "test-user" } })); return { data: { subscription: { unsubscribe: () => undefined } } }; } } }) }));
-vi.mock("@/lib/supabase/workspace-sync", () => ({ loadCloudWorkspace: async () => null, syncWorkspaceToCloud: async () => undefined, knownWorkspaceRevision: () => undefined, cloudWorkspaceRevision: async () => null, isRevisionConflict: () => false }));
+vi.mock("@/lib/supabase/workspace-sync", () => ({ loadCloudWorkspace: vi.fn(async () => null), syncWorkspaceToCloud: async () => undefined, knownWorkspaceRevision: () => undefined, cloudWorkspaceRevision: async () => null, isRevisionConflict: () => false }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 const earnReadOnlyResponse = { status: "READY", integration: { discovery: "READY", positionAccess: "NOT_CONFIGURED", execution: "READ_ONLY", configuredWalletAddress: null, message: "Live vault discovery; wallet credentials are not configured." }, vaults: [], positions: [], observedAt: "2026-09-28T12:00:00.000Z" };
 const renderWorkspace = (node: React.ReactNode) => render(<TreasuryWorkspaceProvider>{node}</TreasuryWorkspaceProvider>);
 const at = new Date("2026-09-27T00:00:00.000Z");
 
-beforeEach(() => { window.localStorage.clear(); window.sessionStorage.clear(); window.history.replaceState(null, "", "/"); vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => earnReadOnlyResponse }))); });
+beforeEach(() => { window.localStorage.clear(); window.sessionStorage.clear(); window.history.replaceState(null, "", "/"); vi.mocked(loadCloudWorkspace).mockResolvedValue(null); vi.stubGlobal("fetch", vi.fn(async () => ({ json: async () => earnReadOnlyResponse }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("strategy table", () => {
@@ -75,14 +76,25 @@ describe("charts", () => {
   });
 });
 
-describe("obligations detail in read-only demo", () => {
-  beforeEach(() => { window.sessionStorage.setItem("hodd:workspace-mode", "DEMO"); });
+describe("obligations detail in a live test workspace", () => {
+  beforeEach(() => {
+    const workspace = structuredClone(initialWorkspace);
+    workspace.obligations.forEach((item, index) => { item.id = "user-bill-" + index; });
+    workspace.activities = []; workspace.decisions = [];
+    workspace.targetAllocationsBps = { LIQUID: 5000, MORPHO: 5000, USYC: 0, BTC_RESERVE: 0 };
+    workspace.policy.safetyBuffer.minorUnits = "1000000";
+    const address = "0x0000000000000000000000000000000000000001";
+    workspace.treasuryMode = "ARC_TESTNET_WALLET";
+    workspace.walletConnection = { provider: "INJECTED_METAMASK", custody: "USER_CONTROLLED", accountType: "EOA", chain: "ARC-TESTNET", chainId: 5042002, address, label: "Test wallet", connectedAt: "2026-09-27T00:00:00.000Z" };
+    vi.mocked(loadCloudWorkspace).mockResolvedValue(workspace);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ json: async () => url.includes("/api/arc/") ? { status: "READY", snapshot: { address, chain: "ARC-TESTNET", chainId: 5042002, balance: workspace.liquidUsdc, blockNumber: "42", observedAt: workspace.updatedAt } } : earnReadOnlyResponse })));
+  });
   it("shows the funding plan for the next payment and follows the selection", async () => {
     const user = userEvent.setup();
     renderWorkspace(<ObligationExplorer />);
     const plan = await screen.findByRole("complementary", { name: "Payment plan" });
     expect(within(plan).getByText(/plan for october payroll/i)).toBeVisible();
-    expect(within(plan).getByText("SAFE")).toBeVisible();
+    await waitFor(() => expect(within(plan).getByText("SAFE")).toBeVisible());
     await user.click(screen.getByRole("button", { name: "AWS infrastructure" }));
     expect(within(screen.getByRole("complementary", { name: "Payment plan" })).getByText(/plan for aws infrastructure/i)).toBeVisible();
   });

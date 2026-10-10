@@ -30,7 +30,7 @@ export const draftSchema = z.object({ kind: kindSchema, values: z.record(z.strin
 export const proposalSchema = z.object({ handle: z.string(), kind: kindSchema, summary: z.string(), lines: z.array(z.string()), expiresAt: z.string().datetime(), impact: z.array(z.object({ label: z.string(), before: z.string(), after: z.string() })) });
 export const resultSchema = z.object({
   message: z.string(), language: z.enum(["en", "tr"]), cards: z.array(cardSchema),
-  source: z.enum(["LIVE", "NOT_CONNECTED", "PARTIAL", "DEMO"]).optional(), observedAt: z.string().optional(),
+  source: z.enum(["LIVE", "NOT_CONNECTED", "PARTIAL"]).optional(), observedAt: z.string().optional(),
   status: z.object({ label: z.string(), tone: z.enum(["success", "warning", "danger", "info", "neutral"]) }).optional(),
   sources: z.array(z.object({ label: z.string(), href: routeSchema.or(z.literal("/policy")) })).optional(),
   followUps: z.array(z.string()).optional(),

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { initialWorkspace } from "@/lib/treasury/fixtures";
+import { initialWorkspace } from "@/test/fixtures";
 
 const fake = vi.hoisted(() => ({ rpc: vi.fn(), revision: 5 }));
 vi.mock("server-only", () => ({}));
