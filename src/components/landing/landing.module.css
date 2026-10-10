@@ -52,6 +52,22 @@
   color: transparent;
 }
 
+/* Hero grid, drawn once on load: each 120px rule grows from its edge. */
+.gridLine {
+  position: absolute;
+  background: rgba(11, 11, 13, 0.06);
+  pointer-events: none;
+}
+.gridV { top: 0; bottom: 0; width: 1px; transform-origin: top; animation: drawY 1.4s cubic-bezier(0.19, 1, 0.22, 1) both; }
+.gridH { left: 0; right: 0; height: 1px; transform-origin: left; animation: drawX 1.6s cubic-bezier(0.19, 1, 0.22, 1) both; }
+@keyframes drawY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes drawX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* Hero headline, line by line. Pure CSS so it runs before hydration and never hides text from slow devices for long. */
+.lineMask { display: block; overflow: hidden; padding-bottom: 0.1em; margin-bottom: -0.1em; }
+.lineIn { display: block; animation: lineIn 1s cubic-bezier(0.19, 1, 0.22, 1) both; }
+@keyframes lineIn { from { transform: translateY(110%); } to { transform: translateY(0); } }
+
 @media (prefers-reduced-motion: reduce) {
-  .ticker { animation: none; }
+  .ticker, .gridV, .gridH, .lineIn { animation: none; }
 }

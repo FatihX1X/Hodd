@@ -14,6 +14,83 @@ test("landing page is reachable at /landing on any host and does not overflow", 
   expect(errors).toEqual([]);
 });
 
+test("landing copy matches what ships today", async ({ page }) => {
+  await page.goto("/landing");
+  await expect(page).toHaveTitle("Hodd Finance — Treasury that plans ahead");
+  await expect(page.getByRole("heading", { level: 2, name: /proactive\.\s*never\s*unaccountable\./i })).toBeVisible();
+  const text = await page.locator("main").innerText();
+  // Every move stays inside limits the user sets, so the page does not promise autonomy, and the principle has no ® mark.
+  expect(text).not.toMatch(/autonomous/i);
+  expect(text).not.toMatch(/unaccountable\.?\s*®/);
+});
+
+test("the hero treasury loops through all six moves", async ({ page }) => {
+  await page.goto("/landing");
+  const treasury = page.locator("[data-step]");
+  await treasury.scrollIntoViewIfNeeded();
+  const seen = new Set<string>();
+  await expect.poll(async () => {
+    seen.add((await treasury.getAttribute("data-step")) ?? "");
+    return seen.size;
+  }, { timeout: 20_000, intervals: [400] }).toBeGreaterThanOrEqual(6);
+  expect([...seen].sort()).toEqual(["bill", "income", "morpho", "paid", "protect", "withdraw"]);
+  // The story is also available as text for screen readers.
+  await expect(page.getByText(/6,200 USDC is paid on time with the buffer intact/)).toBeAttached();
+});
+
+test("the how-it-works timeline follows the scroll on wide screens", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile", "The pinned timeline is a wide-screen layout.");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/landing");
+  const steps = page.locator("#how ol > li");
+  await expect(steps).toHaveCount(4);
+  await steps.first().scrollIntoViewIfNeeded();
+  await expect(steps.first()).toHaveAttribute("data-active", "true");
+  await steps.last().evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await expect(steps.last()).toHaveAttribute("data-active", "true");
+  await expect(steps.first()).toHaveAttribute("data-active", "false");
+});
+
+test("the Hoddie section shows Hoddie and Autopilot's real decisions", async ({ page }) => {
+  await page.goto("/landing");
+  const section = page.locator("#hoddie");
+  await section.scrollIntoViewIfNeeded();
+  await expect(section.getByRole("heading", { level: 2, name: /ask first\.\s*automate later\./i })).toBeVisible();
+  await expect(section.getByText("Available now")).toBeVisible();
+  await expect(section.getByText("Arc Testnet", { exact: true })).toBeVisible();
+  await expect(section.getByText(/only invest in the allowlisted Morpho vault or return USDC to your verified wallet/)).toBeVisible();
+  // Autopilot's own decision kinds; it never pays third parties.
+  for (const verdict of ["INVEST", "TOP UP", "REFILL", "RETURN", "HOLD"]) await expect(section.getByText(new RegExp(`^${verdict}:`)).first()).toBeAttached();
+  await expect(section.getByText(/^(PAY|ESCALATE):/)).toHaveCount(0);
+});
+
+test.describe("with reduced motion", () => {
+  test.use({ reducedMotion: "reduce" });
+
+  test("every scene renders still and complete", async ({ page }) => {
+    await page.goto("/landing");
+    const treasury = page.locator("[data-step]");
+    await treasury.scrollIntoViewIfNeeded();
+    await expect(treasury).toHaveAttribute("data-step", "paid");
+    await page.waitForTimeout(3_000);
+    await expect(treasury).toHaveAttribute("data-step", "paid");
+    const section = page.locator("#hoddie");
+    await section.scrollIntoViewIfNeeded();
+    await expect(section.getByText("Prepare it.", { exact: true })).toBeVisible();
+    await expect(section.getByText("Withdraw 600 USDC from Morpho", { exact: true })).toBeVisible();
+    await expect(page.locator("#how ol > li[data-active]")).toHaveCount(0);
+  });
+});
+
+test("mobile layout keeps every scene inside the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/landing");
+  for (const id of ["top", "how", "hoddie"]) {
+    await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), id).toBe(false);
+  }
+});
+
 test("system tabs describe live features", async ({ page }) => {
   await page.goto("/landing");
   const liquidity = page.getByRole("button", { name: /02\s*liquidity/i });
