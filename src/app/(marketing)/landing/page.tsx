@@ -3,16 +3,22 @@ import { headers } from "next/headers";
 import Image from "next/image";
 import clsx from "clsx";
 import { SystemTabs } from "@/components/landing/system-tabs";
+import { CountUp } from "@/components/landing/motion/count-up";
+import { HoddiePreview } from "@/components/landing/motion/hoddie-preview";
+import { HowTimeline } from "@/components/landing/motion/how-timeline";
+import { LiveTreasury } from "@/components/landing/motion/live-treasury";
+import { MagneticLink } from "@/components/landing/motion/magnetic-link";
+import { RevealLines } from "@/components/landing/motion/reveal-lines";
 import styles from "@/components/landing/landing.module.css";
 import { APP_ORIGIN, siteForHost } from "@/lib/site/hosts";
 
 export const metadata: Metadata = {
-  title: { absolute: "Hodd Finance — Autonomous treasury systems" },
-  description: "Hodd keeps idle capital working, liquidity ready and obligations funded before they are due. Built on Arc.",
+  title: { absolute: "Hodd Finance — Treasury that plans ahead" },
+  description: "Hodd keeps liquidity ready for what is due, protects your bills before yield, and keeps every move inside the limits you set. Built on Arc.",
   alternates: { canonical: "/" },
   // Page-level openGraph replaces the root one, so the share image is repeated here.
-  openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc.", url: "/", siteName: "Hodd Finance", type: "website", images: [{ url: "/opengraph-image.png", width: 1200, height: 630, alt: "Hodd Finance" }] },
-  twitter: { card: "summary_large_image", title: "Hodd Finance — Your capital, ahead of time.", description: "Autonomous treasury systems on Arc.", images: ["/opengraph-image.png"] },
+  openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Treasury that plans ahead, on Arc.", url: "/", siteName: "Hodd Finance", type: "website", images: [{ url: "/opengraph-image.png", width: 1200, height: 630, alt: "Hodd Finance" }] },
+  twitter: { card: "summary_large_image", title: "Hodd Finance — Your capital, ahead of time.", description: "Treasury that plans ahead, on Arc.", images: ["/opengraph-image.png"] },
 };
 
 const wrap = "mx-auto max-w-[1360px] px-[clamp(16px,4vw,56px)]";
@@ -24,7 +30,7 @@ const buttonPaper = clsx(button, "border-[#f4f1e8] bg-[#f4f1e8] text-[#0b0b0d] h
 const buttonLight = clsx(button, "border-[#f4f1e8]/65 text-[#f4f1e8] hover:shadow-[4px_4px_0_#f4f1e8]");
 const navLink = clsx(label, "inline-flex min-h-11 items-center hover:underline hover:underline-offset-[6px]");
 
-const tickerItems = ["Hodd Finance®", "Autonomous treasury systems", "Capital", "Liquidity", "Obligations", "Autonomously", "On Arc", "Money should know what’s next"];
+const tickerItems = ["Hodd Finance®", "Treasury that plans ahead", "Capital", "Liquidity", "Obligations", "Approved by you", "On Arc", "Money should know what’s next"];
 
 const facts = [
   { label: "Network", value: "Arc", note: "Testnet today" },
@@ -58,6 +64,16 @@ function Spark({ className }: { className?: string }) {
   );
 }
 
+/** The hero's 120px ruled grid, drawn once on load (CSS only, see landing.module.css). */
+function GridLines() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      {Array.from({ length: 16 }, (_, index) => <span key={`v${index}`} className={clsx(styles.gridLine, styles.gridV)} style={{ left: index * 120, animationDelay: `${index * 45}ms` }} />)}
+      {Array.from({ length: 14 }, (_, index) => <span key={`h${index}`} className={clsx(styles.gridLine, styles.gridH)} style={{ top: index * 120, animationDelay: `${200 + index * 55}ms` }} />)}
+    </div>
+  );
+}
+
 export default async function LandingPage() {
   // On the marketing host the console lives on its own subdomain; everywhere else (previews, localhost) it is same-origin.
   const appBase = siteForHost((await headers()).get("host")) === "marketing" ? APP_ORIGIN : "";
@@ -81,11 +97,12 @@ export default async function LandingPage() {
       <header className="sticky top-0 z-50 border-b border-[#0b0b0d] bg-[#ece8dd]/90 backdrop-blur">
         <div className={clsx(wrap, "flex h-[68px] items-center justify-between gap-6")}>
           <a href="#top" aria-label="Hodd Finance, home" className="flex min-h-11 items-center">
-            <Image src="/brand/hodd-lockup-light.png" alt="" width={1912} height={608} priority className="block h-auto w-[140px]" />
+            <Image src="/brand/hodd-lockup-light.png" alt="" width={1912} height={608} sizes="140px" loading="eager" className="block h-auto w-[140px]" />
           </a>
           <nav aria-label="Primary" className="hidden gap-9 md:flex">
             <a className={navLink} href="#system">System</a>
             <a className={navLink} href="#how">How it works</a>
+            <a className={navLink} href="#hoddie">Hoddie</a>
             <a className={navLink} href="#principles">Principles</a>
           </nav>
           <div className="flex items-center gap-5">
@@ -97,33 +114,38 @@ export default async function LandingPage() {
 
       <main>
         {/* Hero */}
-        <section id="top" className="metric-grid relative overflow-hidden border-b border-[#0b0b0d]">
-          <div className={wrap}>
+        <section id="top" className="relative overflow-hidden border-b border-[#0b0b0d]">
+          <GridLines />
+          <div className={clsx(wrap, "relative")}>
             <div className="flex items-start justify-between gap-6 pt-8">
-              <div className={clsx(label, "flex-1")}>Autonomous<br />Treasury<br />Systems</div>
+              <div className={clsx(label, "flex-1")}>Policy-bound<br />Treasury<br />Systems</div>
               <div aria-hidden="true" className={clsx(styles.crosshair, "mt-1.5 hidden sm:block")} />
               <div className={clsx(label, "flex-1 text-right")}>On Arc<br />For a brighter tomorrow</div>
             </div>
 
             <div className="pb-[clamp(20px,2.5vw,36px)] pt-[clamp(24px,4vw,56px)]">
-              <Image src="/brand/hodd-lockup-light.png" alt="Hodd Finance" width={1912} height={608} priority sizes="(min-width: 1360px) 1240px, 100vw" className="-ml-[2%] block h-auto w-full max-w-[1240px]" />
+              <Image src="/brand/hodd-lockup-light.png" alt="Hodd Finance" width={1912} height={608} loading="eager" fetchPriority="high" sizes="(min-width: 1360px) 1240px, 100vw" className="-ml-[2%] block h-auto w-full max-w-[1240px]" />
             </div>
 
             <div className="flex items-end justify-between gap-6 pb-11">
-              <div className={clsx(label, "flex-1")}>Capital<br />Liquidity<br />Obligations<br />Autonomously</div>
+              <div className={clsx(label, "flex-1")}>Capital<br />Liquidity<br />Obligations<br />Ahead of time</div>
               <div aria-hidden="true" className={clsx(styles.crosshair, "mb-1.5 hidden sm:block")} />
               <div className={clsx(label, "flex-1 text-right")}>Money<br />should know<br />what’s next.</div>
             </div>
 
             <div className="flex flex-wrap items-end gap-x-[72px] gap-y-9 border-t border-[#0b0b0d] pb-[68px] pt-[52px]">
-              <h1 className="disp m-0 flex-[1_1_520px] text-[clamp(2.1rem,5.2vw,4.75rem)]">Your capital,<br />ahead of time.</h1>
+              <h1 className="disp m-0 flex-[1_1_520px] text-[clamp(2.1rem,5.2vw,4.75rem)]"><span className={styles.lineMask}><span className={styles.lineIn} style={{ animationDelay: "120ms" }}>Your capital,</span></span>{" "}<span className={styles.lineMask}><span className={styles.lineIn} style={{ animationDelay: "240ms" }}>ahead of time.</span></span></h1>
               <div className="max-w-[520px] flex-[1_1_360px]">
                 <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Manage your own wallet on Arc Testnet. Read live USDC balances and Morpho vault positions, track your bills, and review every transaction before signing.</p>
                 <div className="flex flex-wrap gap-3.5">
-                  <a className={buttonInk} href={launch}>Launch app <Arrow /></a>
+                  <MagneticLink className={buttonInk} href={launch}>Launch app <Arrow /></MagneticLink>
                   <a className={buttonLine} href="#system">See how it thinks</a>
                 </div>
               </div>
+            </div>
+
+            <div className="pb-[clamp(56px,7vw,96px)]">
+              <LiveTreasury />
             </div>
           </div>
         </section>
@@ -136,7 +158,7 @@ export default async function LandingPage() {
                 <div key={fact.label} className="flex-[1_1_240px] bg-[#f4f1e8] p-7">
                   <dt className={clsx(label, "text-[#5a5953]")}>{fact.label}</dt>
                   <dd className="m-0">
-                    <span className={clsx("disp mb-2.5 mt-3.5 block whitespace-nowrap text-[clamp(1.75rem,3vw,2.75rem)]", fact.label === "Network" && "text-[#0a52e8]")}>{fact.value}</span>
+                    <span className={clsx("disp mb-2.5 mt-3.5 block whitespace-nowrap text-[clamp(1.75rem,3vw,2.75rem)]", fact.label === "Network" && "text-[#0a52e8]")}>{fact.label === "Horizon" ? <><CountUp to={30} />&nbsp;days</> : fact.value}</span>
                     <span className={clsx(label, "text-[#5a5953]")}>{fact.note}</span>
                   </dd>
                 </div>
@@ -150,7 +172,7 @@ export default async function LandingPage() {
           <Image src="/brand/hodd-star.png" alt="" aria-hidden="true" width={640} height={640} className="pointer-events-none absolute -right-[10%] -top-[12%] h-auto w-[min(50vw,720px)] opacity-30" />
           <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
             <div className={clsx(label, "text-[#8fb0ff]")}>01 — The system</div>
-            <h2 className="disp mb-[clamp(36px,5vw,64px)] mt-5 max-w-[920px] text-[clamp(2.1rem,5vw,4.5rem)]">Three verbs.<br />One autonomous treasury.</h2>
+            <RevealLines lines={["Three verbs.", "One treasury that plans ahead."]} className="disp mb-[clamp(36px,5vw,64px)] mt-5 max-w-[920px] text-[clamp(2.1rem,5vw,4.5rem)]" />
             <SystemTabs />
           </div>
         </section>
@@ -158,23 +180,21 @@ export default async function LandingPage() {
         {/* How it works */}
         <section id="how" className="border-b border-[#0b0b0d] bg-[#ece8dd]">
           <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
-            <div className="mb-[clamp(40px,5vw,72px)] flex flex-wrap items-end justify-between gap-x-12 gap-y-6">
+            <HowTimeline steps={steps} intro="Connect your wallet, add your bills, and set your liquidity policy. Hoddie explains the results; the Claude connector prepares changes for your review." outlineClass={styles.outline} />
+          </div>
+        </section>
+
+        {/* Hoddie and Autopilot */}
+        <section id="hoddie" className="relative overflow-hidden border-b border-[#0b0b0d] bg-[#0b0b0d] text-[#f4f1e8]" style={{ backgroundImage: "radial-gradient(ellipse 55% 45% at 12% 8%,rgba(40,90,255,.3),rgba(40,90,255,0) 70%)" }}>
+          <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
+            <div className="mb-[clamp(36px,5vw,64px)] flex flex-wrap items-end justify-between gap-x-12 gap-y-6">
               <div>
-                <div className={clsx(label, "text-[#0a52e8]")}>02 — How it works</div>
-                <h2 className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]">From idle<br />to ahead of time.</h2>
+                <div className={clsx(label, "text-[#8fb0ff]")}>03 — Hoddie</div>
+                <RevealLines lines={["Ask first.", "Automate later."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]" />
               </div>
-              <p className="m-0 max-w-[380px] text-[17px] leading-[1.55] text-[#3b3a36]">Connect your wallet, add your bills, and set your liquidity policy. Hoddie explains the results; the Claude connector prepares changes for your review.</p>
+              <p className="m-0 max-w-[440px] text-[17px] leading-[1.55] text-[#c9cbd3]">Hoddie answers questions about your treasury and drafts changes for you to review. Autopilot runs a separate agent wallet on a budget you set: it invests idle cash in Morpho and sends liquidity back when your bills need it.</p>
             </div>
-            <ol className="m-0 flex list-none flex-wrap gap-x-8 p-0">
-              {steps.map((step, index) => (
-                <li key={step.no} className="flex-[1_1_240px] border-t border-[#0b0b0d] pb-10 pt-5">
-                  <div className={clsx(label, "flex items-center gap-2.5")}>Step{index === steps.length - 1 && <Spark className="size-3 text-[#0a52e8]" />}</div>
-                  <div className={clsx("disp mb-[18px] mt-2.5 text-[96px]", styles.outline)}>{step.no}</div>
-                  <h3 className="disp mb-3 text-2xl">{step.title}</h3>
-                  <p className="m-0 text-base leading-[1.55] text-[#3b3a36]">{step.body}</p>
-                </li>
-              ))}
-            </ol>
+            <HoddiePreview />
           </div>
         </section>
 
@@ -183,8 +203,8 @@ export default async function LandingPage() {
           <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
             <div className="flex flex-wrap items-center gap-x-12 gap-y-14">
               <div className="min-w-0 flex-[2.2_1_560px]">
-                <div className={clsx(label, "mb-6 text-[#0a52e8]")}>03 — Principles</div>
-                <h2 className="disp m-0 text-[clamp(1.7rem,4.6vw,4.25rem)]">Autonomous.<br />Never<br />unaccountable.<sup className="relative top-[0.4em] align-top text-[0.14em] tracking-normal">®</sup></h2>
+                <div className={clsx(label, "mb-6 text-[#0a52e8]")}>04 — Principles</div>
+                <RevealLines lines={["Proactive.", "Never", "unaccountable."]} className="disp m-0 text-[clamp(1.7rem,4.6vw,4.25rem)]" />
               </div>
               <div className="flex flex-[1_1_300px] justify-center">
                 <div aria-hidden="true" className="relative aspect-square w-[min(100%,340px)]">
@@ -219,11 +239,11 @@ export default async function LandingPage() {
           <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
             <div className="flex flex-wrap items-center gap-x-12 gap-y-14">
               <div className="min-w-0 flex-[1.4_1_480px]">
-                <div className={clsx(label, "text-[#d6e4ff]")}>04 — Get started</div>
-                <h2 className="disp mb-7 mt-[22px] text-[clamp(2.25rem,5.4vw,4.75rem)]">Money should<br />know what’s next.</h2>
+                <div className={clsx(label, "text-[#d6e4ff]")}>05 — Get started</div>
+                <RevealLines lines={["Money should", "know what’s next."]} className="disp mb-7 mt-[22px] text-[clamp(2.25rem,5.4vw,4.75rem)]" />
                 <p className="mb-9 max-w-[480px] text-lg leading-[1.55] text-[#eaf1ff]">Start with an empty treasury. Connect your own Arc Testnet wallet and get free testnet USDC from the Circle faucet.</p>
                 <div className="flex flex-wrap gap-3.5">
-                  <a className={buttonPaper} href={launch}>Launch app <Arrow /></a>
+                  <MagneticLink className={buttonPaper} href={launch}>Launch app <Arrow /></MagneticLink>
                   <a className={buttonLight} href={signIn}>Sign in</a>
                 </div>
               </div>
@@ -252,12 +272,12 @@ export default async function LandingPage() {
           <div className="flex flex-wrap justify-between gap-12">
             <div className="max-w-[360px] flex-[1_1_280px]">
               <Image src="/brand/hodd-lockup-dark.png" alt="Hodd Finance" width={1000} height={318} className="block h-auto w-[200px]" />
-              <p className="mt-5 text-base leading-[1.55] text-[#a5a8b3]">Autonomous treasury systems, on Arc.</p>
+              <p className="mt-5 text-base leading-[1.55] text-[#a5a8b3]">Treasury that plans ahead, on Arc.</p>
             </div>
             <nav aria-label="Footer" className="flex flex-wrap gap-x-[72px] gap-y-10">
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Product</div>
-                <div className="flex flex-col"><a className={navLink} href="#system">System</a><a className={navLink} href="#how">How it works</a><a className={navLink} href="#principles">Principles</a></div>
+                <div className="flex flex-col"><a className={navLink} href="#system">System</a><a className={navLink} href="#how">How it works</a><a className={navLink} href="#hoddie">Hoddie</a><a className={navLink} href="#principles">Principles</a></div>
               </div>
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Console</div>
