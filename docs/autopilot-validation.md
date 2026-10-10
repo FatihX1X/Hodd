@@ -26,5 +26,5 @@ The same flow passed in two earlier full runs (deposit `0x054a4573…`, `0x61b64
 
 ## Not yet verified live
 
-- The Supabase part (mandate review/confirm, run/step ledger, budget accounting trigger, rate limits, cron). It needs `supabase/migrations/20261010112126_agent_autopilot.sql` applied to the hosted project, which is an owner decision. `supabase/tests/agent_autopilot.sql` is the rollback-only test to run after applying it.
+- The Supabase migration is applied to the hosted project as version `20261010121212` (2026-10-10) and `supabase/tests/agent_autopilot.sql` passed there in a rolled-back transaction (owner isolation, browser write denial, server-only RPCs, one open run, lease, cross-owner step rejection, budget accounting once per verified step, AGENT off). A full signed-in run through the routes (mandate review/confirm, Run now, cron) still waits for the owner.
 - Production needs `CIRCLE_ENTITY_SECRET` and `CRON_SECRET` in Vercel (Production scope), optionally `CIRCLE_AGENT_WALLET_SET_ID=3c2826ec-e4fb-5b44-8610-223296cb1a3f`, and the `AGENT` row in `hodd_live_controls` switched on after the owner's own run. Locally: `HODD_AGENT_EXECUTION_ENABLED=true` in `.env.development.local`.

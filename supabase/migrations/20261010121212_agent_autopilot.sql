@@ -1,4 +1,4 @@
--- Local migration only. Apply to an isolated/local database before hosted rollout.
+-- Server-written Autopilot ledger: developer-controlled agent wallets, mandates, runs and steps.
 create table public.agent_wallets (
   user_id uuid primary key references auth.users(id) on delete restrict,
   circle_wallet_id uuid not null unique, wallet_set_id uuid not null,
