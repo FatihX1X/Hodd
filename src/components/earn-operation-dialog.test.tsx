@@ -74,7 +74,8 @@ describe("two-step Earn confirmation", () => {
   it.each(["browser", "passkey", "embedded"])("requires separate confirmation and records only verified completion for %s", async (provider) => {
     const activeJob = provider === "embedded" ? { ...job, pending: { ...pending, calls: [], challengeId: "challenge" } } : job;
     fetchResponses([{ status: "READY", quote }, activeJob, complete]); await review();
-    await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" })); await screen.findByText("Arc Testnet receipt returned.");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm onchain deposit" })); await screen.findByText("Deposit verified on Arc Testnet.");
+    expect(screen.getByRole("link", { name: /open transaction/i })).toHaveAttribute("href", `https://testnet.arcscan.app/tx/${hash}`);
     expect(provider === "embedded" ? fake.pin : fake.send).toHaveBeenCalledTimes(1);
     if (provider === "browser") expect(fake.send).toHaveBeenCalledWith(pending.calls, pending.gasBudgetWei, expect.any(Function), undefined, pending.gasCeiling);
     expect(fake.event).toHaveBeenCalledWith("EARN_CONFIRMED", hash);
