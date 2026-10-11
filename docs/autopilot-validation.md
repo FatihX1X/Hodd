@@ -24,6 +24,12 @@ The same flow passed in two earlier full runs (deposit `0x054a4573…`, `0x61b64
 1. **Circle rejected the agent's fee format** (`400 API parameter invalid: priorityFee too low`). Arc is EIP-1559; developer wallets need `{ type: "absolute", maxFee, priorityFee, gasLimit }`. `agentFeeConfig` now sends the approved per-gas ceiling as `maxFee` (debit stays ≤ gasLimit × ceiling) and a tip of 2× the network estimate, at least 2 gwei, never above the ceiling.
 2. **Withdrawals were refused by the agent's own guard.** Earn Kit approves the whole share balance (+1) to the router and passes the whole balance as the router input, withdrawing exactly the quoted assets and sweeping the spare shares back. The guard now caps the approval and input at the wallet's share balance and requires the vault-share sweep back to the agent wallet; `validateEarnCall` still enforces `withdraw(assets) == quote` and the beneficiary rules.
 
+## Production return-all (2026-10-11)
+
+The owner's return stalled as `UNKNOWN / AGENT_RECEIPT_NOT_VERIFIED` although Arc confirmed it (`0x6be5253ae2e0ddc462a8cb685a0e141aba6a1bb923001ef4bff47bad76722c88`). The withdrawal was quoted at Circle's rounded maximum (7.969328 USDC) and routed as a full exit, so the vault paid 7.969330; the receipt check required the exact quote. `verifyEarnReceipt` now accepts up to 0.01% (min 100 units) above a WITHDRAW quote only when the router burned every share it pulled and swept none back; a partial withdrawal stays exact. The live receipt is the regression fixture `src/test/arc-withdraw-full-exit.json`.
+
+Return all is now one run (withdraw, then transfer of all cash minus that transfer's gas ceiling to the verified owner) and is not limited by the budget or the per-run cap, since the only destination is the owner. Earlier it needed several capped runs five minutes apart.
+
 ## Not yet verified live
 
 - The Supabase migration is applied to the hosted project as version `20261010121212` (2026-10-10) and `supabase/tests/agent_autopilot.sql` passed there in a rolled-back transaction (owner isolation, browser write denial, server-only RPCs, one open run, lease, cross-owner step rejection, budget accounting once per verified step, AGENT off). A full signed-in run through the routes (mandate review/confirm, Run now, cron) still waits for the owner.
