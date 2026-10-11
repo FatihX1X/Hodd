@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { InjectedProvider } from "./connectors";
+import { connectInjectedWallet, forgetAnnouncedWallets, type InjectedProvider } from "./connectors";
+import { WalletPreflightError } from "./preflight";
 
 const fakeGas = vi.hoisted(() => ({ estimate: vi.fn(), price: vi.fn(), send: vi.fn() }));
 vi.mock("viem", async (importOriginal) => ({
@@ -7,13 +8,11 @@ vi.mock("viem", async (importOriginal) => ({
   createPublicClient: () => ({ estimateGas: fakeGas.estimate, getGasPrice: fakeGas.price }),
   createWalletClient: () => ({ sendTransaction: fakeGas.send }),
 }));
-// Every test gets a fresh connectors module: its EIP-6963 registry would otherwise keep earlier tests' announcements.
-let connectInjectedWallet: typeof import("./connectors").connectInjectedWallet;
-let WalletPreflightError: typeof import("./preflight").WalletPreflightError;
-beforeEach(async () => {
+// One module import (re-importing the wallet stack per test timed out under full-suite load); the EIP-6963 registry is cleared instead.
+beforeEach(() => {
   vi.clearAllMocks(); fakeGas.estimate.mockResolvedValue(21000n); fakeGas.price.mockResolvedValue(20000000000n); fakeGas.send.mockResolvedValue(`0x${"1".repeat(64)}`);
-  vi.resetModules(); ({ connectInjectedWallet } = await import("./connectors")); ({ WalletPreflightError } = await import("./preflight"));
-}, 30_000);
+  forgetAnnouncedWallets();
+});
 
 vi.mock("@circle-fin/adapter-viem-v2", () => ({ createViemAdapterFromProvider: vi.fn(async () => ({})) }));
 const stopWallets: Array<() => void> = [];

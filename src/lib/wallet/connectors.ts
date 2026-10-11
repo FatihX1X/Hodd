@@ -32,6 +32,8 @@ const METAMASK_LOOKALIKES = ["isRabby", "isBraveWallet", "isCoinbaseWallet", "is
 
 // EIP-6963 announcements are collected from module load, so one that arrives before the user clicks is not lost.
 const announced = new Map<string, Eip6963Detail>();
+/** Tests only: forget every announcement (real wallets re-announce on request). */
+export function forgetAnnouncedWallets() { announced.clear(); }
 const announcedProvider = (kind: InjectedKind) => [...announced.values()].find((detail) => detail.info.rdns === EIP6963_RDNS[kind])?.provider ?? null;
 if (typeof window !== "undefined") {
   window.addEventListener("eip6963:announceProvider", (event) => {
