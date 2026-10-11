@@ -102,6 +102,23 @@ test("browser wallet connection uses its own balance and survives refresh as pub
   await page.reload(); await expect(page.getByText("20.00 USDC").first()).toBeVisible(); await expect(page.getByText("Signer session: reconnect required")).toBeVisible();
 });
 
+test("MetaMask connects through EIP-6963 while Rabby owns window.ethereum (Brave with both installed)", async ({ page }) => {
+  await liveSession(page); await liveReads(page, "20000000");
+  await page.addInitScript(({ address }) => {
+    const wallet = (name: string, flags: object) => ({ ...flags, request: async ({ method }: { method: string }) => { (window as unknown as { asked: string[] }).asked.push(`${name}:${method}`); if (method === "eth_chainId") return "0x4cef52"; if (method === "eth_accounts" || method === "eth_requestAccounts") return [address]; throw new Error(`Unexpected wallet request: ${method}`); }, on: () => undefined, removeListener: () => undefined });
+    (window as unknown as { asked: string[] }).asked = [];
+    const rabby = wallet("rabby", { isRabby: true, isMetaMask: true }); const metamask = wallet("metamask", { isMetaMask: true });
+    Object.defineProperty(window, "ethereum", { value: rabby });
+    // Like the real extensions: announce on load and whenever a dapp asks.
+    const announce = () => { for (const [rdns, provider] of [["io.rabby", rabby], ["io.metamask", metamask]] as const) window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail: Object.freeze({ info: { uuid: rdns, name: rdns, icon: "data:,", rdns }, provider }) })); };
+    window.addEventListener("eip6963:requestProvider", announce); announce();
+  }, { address });
+  await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask", exact: true }).click();
+  await expect(page.getByText("Custody: user")).toBeVisible();
+  const asked = await page.evaluate(() => (window as unknown as { asked: string[] }).asked);
+  expect(asked).toContain("metamask:eth_requestAccounts"); expect(asked.filter((item) => item.startsWith("rabby:"))).toEqual([]);
+});
+
 test("policy page explains and saves the same live workspace policy", async ({ page }) => {
   await liveSession(page); await page.goto("/policy"); await expect(page.getByText(/place at most 60% in morpho/i)).toBeVisible();
   await page.getByLabel("Safety buffer", { exact: true }).fill("1500"); await page.getByRole("button", { name: /save policy and recalculate/i }).click();
