@@ -19,17 +19,20 @@ export function decideAutopilot(i: DecisionInputs): Decision {
   const d: Decision = { kind: "NO_ACTION", depositMinor: "0", withdrawMinor: "0", transferMinor: "0", remainingBudgetMinor: remaining.toString(), protectedMinor, explanation: "No safe movement is required." };
   const no = (reason: string) => ({ ...d, explanation: reason });
   if ((!m.enabled || m.paused) && !i.returnAll) return no("The mandate is disabled or paused.");
-  if (limit <= fee) return no("The remaining funded budget cannot cover the fee reserve.");
-  const positions = [...i.ownerPositions, i.agentPosition];
-  if (positions.some(p => p.liquidityStatus !== "READY" || now.getTime() - Date.parse(p.observedAt) > 60_000 || Date.parse(p.observedAt) > now.getTime() + 5000)) return no("Fresh balances and redeemable positions are required.");
+  const fresh = (p: EarnPosition) => p.liquidityStatus === "READY" && now.getTime() - Date.parse(p.observedAt) <= 60_000 && Date.parse(p.observedAt) <= now.getTime() + 5000;
   const redeemable = min(position, BigInt(i.agentPosition.redeemable.minorUnits));
   const liquid = max(0n, cash - fee);
-  // One economic leg per decision: after withdrawal a fresh run decides the transfer.
+  // Returning goes only to the verified owner, so neither the budget nor the per-run cap may strand funds.
+  // One economic leg per decision: the runner re-decides the transfer after the withdrawal settles.
   if (i.returnAll) {
-    if (redeemable > 0n && cash >= fee) return { ...d, kind: "RETURN_ALL", withdrawMinor: min(redeemable, limit - fee).toString(), explanation: "Redeem the safely withdrawable agent position before returning cash. The mandate is paused." };
-    if (liquid > 0n) return { ...d, kind: "RETURN_ALL", transferMinor: min(liquid, limit - fee).toString(), explanation: "Return funded agent cash to the verified owner, retaining the maximum network fee." };
+    if (!fresh(i.agentPosition)) return no("A fresh agent position is required before returning funds.");
+    if (redeemable > 0n && cash >= fee) return { ...d, kind: "RETURN_ALL", withdrawMinor: redeemable.toString(), explanation: "Withdraw the agent's Morpho position, then send all agent USDC to the verified owner wallet." };
+    if (liquid > 0n) return { ...d, kind: "RETURN_ALL", transferMinor: liquid.toString(), explanation: "Send all agent USDC to the verified owner wallet, keeping only the network fee." };
     return no("No return is possible without liquid gas funds or withdrawable assets.");
   }
+  if (limit <= fee) return no("The remaining funded budget cannot cover the fee reserve.");
+  const positions = [...i.ownerPositions, i.agentPosition];
+  if (!positions.every(fresh)) return no("Fresh balances and redeemable positions are required.");
   const a = assessTreasury(i.workspace, now);
   const coverage = (BigInt(a.upcomingObligations.minorUnits) * BigInt(i.workspace.policy.minimumLiquidityCoverageBps) + 9999n) / 10000n;
   const shortfall = max(0n, max(BigInt(a.protectedCapital.minorUnits), coverage) - BigInt(i.workspace.liquidUsdc.minorUnits));

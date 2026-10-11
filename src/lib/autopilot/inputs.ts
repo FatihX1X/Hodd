@@ -6,6 +6,12 @@ import { boundedArcGasPrice } from "@/lib/earn/gas";
 import { nativeWeiToUsdcCeil } from "@/lib/earn/money";
 import { agentDb, loadMandate, loadWallet } from "./store";
 import { assertAgentDestination } from "./destination";
+/** Agent cash plus its Morpho position now, to size a budget that covers funds it already holds. */
+export async function agentHoldings(address: string) {
+  const vaults=await discoverAllowedVaults(); if(vaults.length!==1)throw new Error("AGENT_VAULT_CONFIGURATION_CHANGED");
+  const [cash,position]=await Promise.all([new ViemArcTreasuryReader().readSnapshot(address),getEarnPosition(address,vaults[0])]);
+  return BigInt(cash.balance.minorUnits)+BigInt(position.currentBalance.minorUnits);
+}
 export async function agentInputs(userId: string) {
   const [wallet, stored, result] = await Promise.all([loadWallet(userId), loadMandate(userId), agentDb().from("treasury_workspaces").select("workspace,revision").eq("user_id",userId).single()]);
   if (!wallet || !stored || result.error) throw new Error("AGENT_SETUP_REQUIRED");

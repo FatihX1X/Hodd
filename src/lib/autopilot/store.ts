@@ -24,6 +24,11 @@ export async function patchRun(run: AgentRun, state: RunStatus, failure: string 
   const {error}=await agentDb().from("agent_runs").update({state,failure,updated_at:new Date().toISOString()}).eq("id",run.id).eq("user_id",run.user_id);
   if(error)throw new Error("AGENT_STORE_UNAVAILABLE"); return {...run,state,failure};
 }
+/** Records a leg amount derived from live balances (return all) before its step exists. */
+export async function patchRunDecision(run: AgentRun) {
+  const {error}=await agentDb().from("agent_runs").update({decision:run.decision,updated_at:new Date().toISOString()}).eq("id",run.id).eq("user_id",run.user_id).in("state",["RUNNING"]);
+  if(error)throw new Error("AGENT_STORE_UNAVAILABLE");
+}
 export async function patchStep(step: AgentStep, patch: Partial<AgentStep>) {
   const {data,error}=await agentDb().from("agent_run_steps").update(patch).eq("id",step.id).eq("state",step.state).select("*").maybeSingle();
   if(error || !data)throw new Error("AGENT_STEP_CHANGED");return data as AgentStep;

@@ -13,7 +13,7 @@ import { assertAgentDestination } from "./destination";
 import { decideAutopilot } from "./decision";
 import { agentInputs } from "./inputs";
 import { agentEarnQuote } from "./quotes";
-import { agentDb, openRun, patchRun, patchStep, type AgentRun, type AgentStep } from "./store";
+import { agentDb, openRun, patchRun, patchRunDecision, patchStep, type AgentRun, type AgentStep } from "./store";
 import { stepAction } from "./state";
 import { agentFeeConfig, validateAgentEarnCall } from "./calls";
 const same=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
@@ -47,7 +47,9 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
     if(pending && stepAction(pending.state)==="RECHECK")return await settleStep(run,pending);
     if(run.state==="UNKNOWN")return run;
     if(steps.some(s=>s.state==="FAILED"))return await patchRun(run,"FAILED","AGENT_STEP_FAILED");
-    if(steps.some(s=>s.state==="VERIFIED" && s.stage!=="APPROVAL"))return await finish(run);
+    // Return all is one run: a settled Morpho withdrawal continues straight into the transfer leg.
+    const continuing=returnLegPending(run,steps);
+    if(!continuing && steps.some(s=>s.state==="VERIFIED" && s.stage!=="APPROVAL"))return await finish(run);
     if(!allowSubmission)return run;
     const controls=await liveControls();
     if(!controls?.get("AGENT") || !controls.get("EXECUTION"))return await patchRun(run,steps.length ? "PARTIAL" : "FAILED","AGENT_PAUSED");
@@ -57,8 +59,12 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
     const reserveLeft=BigInt(String(run.snapshot.feeReserveMinor))-feesSpent;
     if(reserveLeft<=0n)throw new Error("AGENT_FEE_RESERVE_EXHAUSTED");
     const fresh=decisionOf(i,reserveLeft.toString());
-    if(fresh.kind!==run.decision.kind || ["depositMinor","withdrawMinor","transferMinor"].some(key=>BigInt(fresh[key as "depositMinor"])<BigInt(run.decision[key as "depositMinor"])))return await patchRun(run,steps.length ? "PARTIAL":"FAILED","AGENT_FRESH_POLICY_BLOCKED");
-    const step=pending ?? await prepareStep(run,i,steps);
+    // Return-all amounts are re-derived from live balances below; only the owner can receive them.
+    if(run.return_all ? fresh.kind!=="RETURN_ALL" : fresh.kind!==run.decision.kind || ["depositMinor","withdrawMinor","transferMinor"].some(key=>BigInt(fresh[key as "depositMinor"])<BigInt(run.decision[key as "depositMinor"]))) {
+      if(continuing && fresh.kind==="NO_ACTION")return await finish(run);
+      return await patchRun(run,steps.length ? "PARTIAL":"FAILED","AGENT_FRESH_POLICY_BLOCKED");
+    }
+    const step=pending ?? await prepareStep(run,i,steps,continuing);
     if(step.stage!=="TRANSFER") {
       if(!run.quote?.expiresAt || Date.parse(run.quote.expiresAt)<=Date.now())return await patchRun(run,steps.length ? "PARTIAL":"FAILED","AGENT_QUOTE_EXPIRED");
       validateAgentEarnCall(step.call,run.quote,i.wallet.address,await shares(i.wallet.address,run.quote.vaultAddress),await shareDecimals(run.quote.vaultAddress));
@@ -67,7 +73,8 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
     const [gas,price]=await Promise.all([arcClient.estimateGas({account:getAddress(i.wallet.address),to:step.call.to,data:step.call.data,value:0n}),arcClient.getGasPrice()]);
     const debit=BigInt(step.stage==="TRANSFER"?run.decision.transferMinor:step.stage==="EARN" && run.quote?.operation==="DEPOSIT"?run.decision.depositMinor:"0") + BigInt(nativeWeiToUsdcCeil(fee.toString()).minorUnits);
     const remaining=BigInt(i.stored.mandate.budgetMinor)-BigInt(i.stored.spent_minor);
-    if(BigInt(nativeWeiToUsdcCeil(fee.toString()).minorUnits)>reserveLeft || gas>BigInt(step.gas_limit) || price>BigInt(step.gas_price_wei) || debit>BigInt(i.cash.balance.minorUnits) || debit>remaining)throw new Error("AGENT_SIGNING_LIMIT_EXCEEDED");
+    // The budget limits what the agent may spend, never what it may hand back to the verified owner.
+    if(BigInt(nativeWeiToUsdcCeil(fee.toString()).minorUnits)>reserveLeft || gas>BigInt(step.gas_limit) || price>BigInt(step.gas_price_wei) || debit>BigInt(i.cash.balance.minorUnits) || (!run.return_all && debit>remaining))throw new Error("AGENT_SIGNING_LIMIT_EXCEEDED");
     const current=await liveControls();if(!current?.get("AGENT") || !current.get("EXECUTION"))throw new Error("AGENT_PAUSED");
     const fence=await patchStep(step,{state:"SUBMITTING"});
     try {
@@ -103,12 +110,24 @@ function failureCause(error: unknown) {
 const decimalsCache=new Map<string,number>();
 async function shareDecimals(vault:string) {const key=getAddress(vault);const known=decimalsCache.get(key);if(known!==undefined)return known;const value=await arcClient.readContract({address:key,abi:erc20Abi,functionName:"decimals"});decimalsCache.set(key,value);return value;}
 async function shares(wallet:string,vault:string) {return arcClient.readContract({address:getAddress(vault),abi:erc20Abi,functionName:"balanceOf",args:[getAddress(wallet)]});}
-async function prepareStep(run: AgentRun, i: Awaited<ReturnType<typeof agentInputs>>, steps: AgentStep[]) {
+/** A return-all run whose withdrawal settled and whose transfer leg has not been prepared yet. */
+function returnLegPending(run: AgentRun, steps: AgentStep[]) {
+  return run.return_all && steps.some(s=>s.state==="VERIFIED" && s.stage==="EARN") && !steps.some(s=>s.stage==="TRANSFER");
+}
+async function prepareStep(run: AgentRun, i: Awaited<ReturnType<typeof agentInputs>>, steps: AgentStep[], continuing = false) {
   let call:EarnCall;let stage:AgentStep["stage"];let gasLimit:bigint;let gasPrice=BigInt(i.gasPriceWei);
-  if(run.decision.transferMinor!=="0") {
+  if(run.decision.transferMinor!=="0" || continuing) {
     assertAgentDestination({token:ARC_TESTNET_USDC,destination:i.wallet.owner_address,verifiedOwner:i.wallet.owner_address,boundOwner:i.wallet.owner_address,chainId:5042002});
-    call={to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[getAddress(i.wallet.owner_address),BigInt(run.decision.transferMinor)]}),value:"0"};stage="TRANSFER";
-    gasLimit=(await arcClient.estimateGas({account:getAddress(i.wallet.address),to:call.to,data:call.data,value:0n})*120n+99n)/100n;
+    const transfer=(amount:bigint):EarnCall=>({to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[getAddress(i.wallet.owner_address),amount]}),value:"0"});
+    let amount=BigInt(run.decision.transferMinor);
+    gasLimit=(await arcClient.estimateGas({account:getAddress(i.wallet.address),to:ARC_TESTNET_USDC,data:transfer(amount>0n?amount:1n).data,value:0n})*120n+99n)/100n;
+    if(run.return_all) {
+      // Everything except this transfer's own gas ceiling (gas is paid in USDC on Arc): no fee reserve is stranded.
+      amount=BigInt(i.cash.balance.minorUnits)-BigInt(nativeWeiToUsdcCeil((gasLimit*gasPrice).toString()).minorUnits);
+      if(amount<=0n)throw new Error("AGENT_NOTHING_TO_RETURN");
+      run.decision={...run.decision,transferMinor:amount.toString()};await patchRunDecision(run);
+    }
+    call=transfer(amount);stage="TRANSFER";
   } else {
     if(!run.quote || !isAllowedVault(run.quote.vaultAddress) || !run.quote.expiresAt || Date.parse(run.quote.expiresAt)<=Date.now())throw new Error("AGENT_QUOTE_EXPIRED");
     const captured=await captureNextEarnCall(run.quote,i.wallet.address);call=captured.call;stage=captured.stage;
@@ -151,8 +170,10 @@ async function settleStep(run: AgentRun, initial: AgentStep): Promise<AgentRun> 
       const exact=receipt.logs.some(log=>{if(!same(log.address,ARC_TESTNET_USDC))return false;try{const e=decodeEventLog({abi:erc20Abi,data:log.data,topics:log.topics});return e.eventName==="Transfer" && same(e.args.from,wallet.address) && same(e.args.to,wallet.owner_address) && e.args.value===BigInt(step.amount_minor);}catch{return false;}});if(!exact)throw new Error();
     }
     await patchStep(step,{state:"VERIFIED",receipt:{status:"VERIFIED",blockNumber:receipt.blockNumber.toString(),feeMinor,gasUsed:receipt.gasUsed.toString(),gasPriceWei:receipt.effectiveGasPrice.toString()}});
-    if(run.state==="UNKNOWN")return await patchRun(run,"PARTIAL","AGENT_RECOVERED_REVIEW_BEFORE_NEXT_RUN");
-    if(step.stage==="APPROVAL")return run;
+    // A verified return-all withdrawal resumes: its only next leg pays the verified owner.
+    const next=run.return_all && step.stage==="EARN";
+    if(run.state==="UNKNOWN")return await (next ? patchRun(run,"RUNNING") : patchRun(run,"PARTIAL","AGENT_RECOVERED_REVIEW_BEFORE_NEXT_RUN"));
+    if(step.stage==="APPROVAL" || next)return run;
     return finish(run);
   } catch {
     if(step.state!=="UNKNOWN")await patchStep(step,{state:"UNKNOWN"}).catch(()=>undefined);
@@ -161,7 +182,8 @@ async function settleStep(run: AgentRun, initial: AgentStep): Promise<AgentRun> 
 }
 async function finish(run: AgentRun) {
   let i;try{i=await agentInputs(run.user_id);}catch{return patchRun(run,"PARTIAL","AGENT_FINAL_BALANCE_UNAVAILABLE");}
-  const stillReturning=run.return_all && (BigInt(i.agentPosition.currentBalance.minorUnits)>0n || BigInt(i.cash.balance.minorUnits)>0n);
-  const needsTransfer=run.decision.withdrawMinor!=="0" && (run.decision.kind==="LIQUIDITY_TOP_UP" || run.return_all);
+  // Only a network-fee remainder may stay with the agent after a return.
+  const stillReturning=run.return_all && (BigInt(i.agentPosition.currentBalance.minorUnits)>0n || BigInt(i.cash.balance.minorUnits)>BigInt(i.feeReserveMinor));
+  const needsTransfer=run.decision.withdrawMinor!=="0" && run.decision.transferMinor==="0" && (run.decision.kind==="LIQUIDITY_TOP_UP" || run.return_all);
   return patchRun(run,stillReturning || needsTransfer ? "PARTIAL":"COMPLETED",stillReturning ? "AGENT_RETURN_HAS_RESIDUAL_ASSETS":null);
 }

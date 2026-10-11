@@ -33,20 +33,25 @@ export function verifyEarnReceipt(receipt: TransactionReceipt, quote: EarnQuote)
   // Redeem-all burns every share; the vault may return a unit more than quoted (rounding),
   // never less. Partial withdrawals must match exactly.
   const quoted = BigInt(quote.amount.minorUnits);
-  const expectedAssets = (assets: bigint) => quote.operation === "REDEEM_ALL" ? assets >= quoted : assets === quoted;
   // Earn Kit routers pull the wallet's shares and withdraw as owner. Accept a
   // router owner only when this wallet's net share transfer to it equals
   // exactly the shares burned by that withdrawal.
   const vault = quote.vaultAddress.toLowerCase();
   const shareTransfers = receipt.logs.flatMap((log) => { if (log.address.toLowerCase() !== vault) return []; try { const event = decodeEventLog({ abi, data: log.data, topics: log.topics }); return event.eventName === "Transfer" ? [event.args] : []; } catch { return []; } });
   const ownedBy = (owner: string, shares: bigint) => owner.toLowerCase() === address || shares > 0n && shareTransfers.reduce((net, item) => net + (item.from.toLowerCase() === address && item.to.toLowerCase() === owner.toLowerCase() ? item.value : item.from.toLowerCase() === owner.toLowerCase() && item.to.toLowerCase() === address ? -item.value : 0n), 0n) === shares;
+  // A withdrawal quoted at Circle's rounded maximum is routed as a full exit: the router burns every
+  // share it pulled and sweeps none back, and the vault pays a few units more. Accept that surplus
+  // (max 0.01%, min 100 units); a partial withdrawal with a sweep must still match exactly.
+  const tolerance = quoted / 10_000n > 100n ? quoted / 10_000n : 100n;
+  const fullExit = (owner: string, shares: bigint) => owner.toLowerCase() !== address && shares > 0n && !shareTransfers.some((item) => item.from.toLowerCase() === owner.toLowerCase() && item.to.toLowerCase() === address);
+  const expectedAssets = (assets: bigint, owner: string, shares: bigint) => quote.operation === "REDEEM_ALL" ? assets >= quoted : assets === quoted || assets > quoted && assets - quoted <= tolerance && fullExit(owner, shares);
   // Router withdrawals can receive assets first and then forward them. Bind the
   // forwarding leg to the receiver of this wallet's exact vault withdrawal.
   if (quote.operation !== "DEPOSIT") for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== quote.vaultAddress.toLowerCase()) continue;
     try {
       const event = decodeEventLog({ abi, data: log.data, topics: log.topics });
-      if (event.eventName === "Withdraw" && ownedBy(event.args.owner, event.args.shares) && expectedAssets(event.args.assets)) withdrawalReceivers.set(event.args.receiver.toLowerCase(), event.args.assets);
+      if (event.eventName === "Withdraw" && ownedBy(event.args.owner, event.args.shares) && expectedAssets(event.args.assets, event.args.owner, event.args.shares)) withdrawalReceivers.set(event.args.receiver.toLowerCase(), event.args.assets);
     } catch { /* unrelated event */ }
   }
   for (const log of receipt.logs) {
@@ -54,7 +59,7 @@ export function verifyEarnReceipt(receipt: TransactionReceipt, quote: EarnQuote)
       const event = decodeEventLog({ abi, data: log.data, topics: log.topics });
       if (log.address.toLowerCase() === quote.vaultAddress.toLowerCase()) {
         if (event.eventName === "Deposit" && quote.operation === "DEPOSIT" && event.args.assets === BigInt(quote.amount.minorUnits) && event.args.owner.toLowerCase() === address) { operation = true; received = true; }
-        if (event.eventName === "Withdraw" && quote.operation !== "DEPOSIT" && expectedAssets(event.args.assets) && ownedBy(event.args.owner, event.args.shares)) { operation = true; if (event.args.receiver.toLowerCase() === address) received = true; }
+        if (event.eventName === "Withdraw" && quote.operation !== "DEPOSIT" && expectedAssets(event.args.assets, event.args.owner, event.args.shares) && ownedBy(event.args.owner, event.args.shares)) { operation = true; if (event.args.receiver.toLowerCase() === address) received = true; }
         if (event.eventName === "Transfer" && quote.operation === "DEPOSIT" && event.args.to.toLowerCase() === address && event.args.value > 0n) received = true;
       }
       if (log.address.toLowerCase() === ARC_TESTNET_USDC.toLowerCase() && event.eventName === "Transfer" && quote.operation !== "DEPOSIT" && withdrawalReceivers.get(event.args.from.toLowerCase()) === event.args.value && event.args.to.toLowerCase() === address) received = true;

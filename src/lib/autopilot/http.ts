@@ -7,12 +7,24 @@ import { EarnAccessError } from "@/lib/earn/security";
 import { liveControls } from "@/lib/earn/live-controls";
 import { agentAccess } from "./access";
 import { agentCircle } from "./circle";
+import { encodeFunctionData, erc20Abi, getAddress } from "viem";
+import { arcClient } from "@/lib/earn/gateway";
+import { boundedArcGasPrice } from "@/lib/earn/gas";
+import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { createAgentWallet, agentIdempotencyKey } from "./wallets";
-import { validateMandate } from "./models";
+import { AGENT_MAX_BUDGET_MINOR, validateMandate, type AgentWallet, type Mandate } from "./models";
 import { agentDb, loadWallet, loadMandate, openRun } from "./store";
-import { agentInputs } from "./inputs";
+import { agentHoldings, agentInputs } from "./inputs";
 import { advanceAgentRun, startAgentRun } from "./runner";
 const headers={"Cache-Control":"no-store"};
+const messages:Record<string,string>={
+  AGENT_SCHEMA_UNAVAILABLE:"Autopilot is not provisioned. Its local migration has not been applied.",
+  AGENT_RATE_LIMIT:"Autopilot starts at most one run every 5 minutes. Nothing was sent; it will start shortly.",
+  AGENT_RUN_OPEN:"The agent is still finishing its current step. Nothing new was sent; try again in a moment.",
+  AGENT_BUDGET_LIMIT:"Autopilot manages at most 1,000 USDC in total on testnet. Choose a smaller amount.",
+  AGENT_OWNER_PROOF_REQUIRED:"Verify ownership of your connected wallet on Overview first. Nothing was sent.",
+  AGENT_OWNER_WALLET_CHANGED:"Your agent belongs to another of your wallets. Connect that wallet to use it.",
+};
 const env=()=>({nodeEnv:process.env.NODE_ENV,vercel:process.env.VERCEL,vercelEnv:process.env.VERCEL_ENV,liveFlag:process.env.HODD_TESTNET_LIVE,localFlag:process.env.HODD_AGENT_EXECUTION_ENABLED});
 async function access(request:Request, execution:boolean,cron=false) {
   const decision=agentAccess(request,env(),await liveControls(),execution,cron);
@@ -30,7 +42,38 @@ async function context() {
   }
   return {...c,sessionId:String(data!.claims.session_id)};
 }
-export async function agentHttp(request:Request,action:"wallet"|"mandate"|"run"|"status"|"return-all"|"pause"|"recover") {
+type Ctx=Awaited<ReturnType<typeof context>>;
+type Kind="MANDATE"|"RETURN_ALL";
+/** Creates the user's agent wallet once; an existing one must belong to the connected owner. */
+async function ensureWallet(c:Ctx,mode:"TESTNET_LIVE"|"LOCAL_ENABLED"):Promise<AgentWallet> {
+  const existing=await loadWallet(c.userId);
+  if(existing) {
+    if(existing.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_OWNER_WALLET_CHANGED");
+    return existing;
+  }
+  await reserveLiveUsage(c.client,mode,"CIRCLE_SESSION");
+  const circle=agentCircle();
+  // Env is server-only. Otherwise a deterministic wallet-set creation key survives lost responses.
+  const walletSetId=process.env.CIRCLE_AGENT_WALLET_SET_ID?.trim() || (await circle.createWalletSet({name:"Hodd Autopilot Testnet",idempotencyKey:agentIdempotencyKey("wallet-set","hodd-autopilot-testnet")})).data?.walletSet?.id;
+  if(!walletSetId)throw new Error("AGENT_WALLET_SET_UNAVAILABLE");
+  const wallet=await createAgentWallet(circle,c.userId,walletSetId,"EOA");
+  const stored={user_id:c.userId,circle_wallet_id:wallet.id,wallet_set_id:walletSetId,address:wallet.address.toLowerCase(),owner_address:c.wallet.address.toLowerCase(),account_type:"EOA"};
+  const {error}=await agentDb().from("agent_wallets").upsert(stored,{onConflict:"user_id",ignoreDuplicates:true});if(error)throw new Error("AGENT_WALLET_STORE_UNAVAILABLE");
+  const created=await loadWallet(c.userId);if(!created)throw new Error("AGENT_WALLET_STORE_UNAVAILABLE");return created;
+}
+/** Binds exact limits to this session, workspace revision, mandate revision and verified owner. */
+async function review(c:Ctx,wallet:AgentWallet,mandateRevision:number,kind:Kind,mandate:Mandate) {
+  const {data:row,error}=await c.client.from("treasury_workspaces").select("revision").eq("user_id",c.userId).single();if(error)throw new Error("AGENT_WORKSPACE_UNAVAILABLE");
+  const reviewId=randomUUID();const {error:reviewError}=await agentDb().rpc("hodd_agent_review",{p_id:reviewId,p_user:c.userId,p_session:c.sessionId,p_workspace_revision:row.revision,p_mandate_revision:mandateRevision,p_owner:wallet.owner_address,p_mandate:mandate,p_kind:kind});
+  if(reviewError)throw new Error("AGENT_REVIEW_UNAVAILABLE");
+  return reviewId;
+}
+async function confirm(c:Ctx,reviewId:string,kind:Kind) {
+  const {data,error}=await agentDb().rpc("hodd_confirm_agent_review",{p_id:reviewId,p_user:c.userId,p_session:c.sessionId,p_kind:kind});
+  if(error && /run unresolved/i.test(error.message))throw new Error("AGENT_RUN_OPEN");
+  if(error || data!==kind)throw new Error("AGENT_REVIEW_CHANGED");
+}
+export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"run"|"status"|"return-all"|"pause"|"recover") {
   try {
     const read=request.method==="GET";
     // GETs are read-only. Reuse same-origin JSON guards without requiring an Origin on normal navigation reads.
@@ -45,45 +88,55 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"run"|
       if(stepError)throw new Error("AGENT_SCHEMA_UNAVAILABLE");
       let balances=null, balanceError=null;
       if(wallet && stored)try{const i=await agentInputs(c.userId);balances={cashMinor:i.cash.balance.minorUnits,positionMinor:i.agentPosition.currentBalance.minorUnits,redeemableMinor:i.agentPosition.redeemable.minorUnits,observedAt:i.cash.observedAt};}catch{balanceError="Fresh balances are unavailable. Execution stays closed until they can be read.";}
-      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? []},{headers});
+      const policy=c.workspace.policy;
+      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
     }
     const body=await request.json();
     if(action==="wallet") {
       z.object({}).strict().parse(body);
       await access(request,true);
-      await reserveLiveUsage(c.client,mode,"CIRCLE_SESSION");
-      const existing=await loadWallet(c.userId);
-      if(existing) {
-        if(existing.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_OWNER_WALLET_CHANGED");
-        return Response.json({status:"READY",wallet:existing},{headers});
-      }
-      const circle=agentCircle();
-      // Env is server-only. Otherwise a deterministic wallet-set creation key survives lost responses.
-      const walletSetId=process.env.CIRCLE_AGENT_WALLET_SET_ID?.trim() || (await circle.createWalletSet({name:"Hodd Autopilot Testnet",idempotencyKey:agentIdempotencyKey("wallet-set","hodd-autopilot-testnet")})).data?.walletSet?.id;
-      if(!walletSetId)throw new Error("AGENT_WALLET_SET_UNAVAILABLE");
-      const wallet=await createAgentWallet(circle,c.userId,walletSetId,"EOA");
-      const stored={user_id:c.userId,circle_wallet_id:wallet.id,wallet_set_id:walletSetId,address:wallet.address.toLowerCase(),owner_address:c.wallet.address.toLowerCase(),account_type:"EOA"};
-      const {error}=await agentDb().from("agent_wallets").upsert(stored,{onConflict:"user_id",ignoreDuplicates:true});if(error)throw new Error("AGENT_WALLET_STORE_UNAVAILABLE");
-      return Response.json({status:"READY",wallet:await loadWallet(c.userId)},{headers});
+      return Response.json({status:"READY",wallet:await ensureWallet(c,mode)},{headers});
+    }
+    if(action==="invest") {
+      // One click: the agent wallet, an enabled mandate covering this amount and the funding call the owner signs.
+      const input=z.object({amountMinor:z.string().regex(/^[1-9]\d{0,15}$/),maxMorphoBps:z.number().int().min(0).max(10_000).optional()}).strict().parse(body);
+      await access(request,true);
+      await reserveLiveUsage(c.client,mode,"QUOTE");
+      const wallet=await ensureWallet(c,mode);
+      if(await openRun(c.userId))throw new Error("AGENT_RUN_OPEN");
+      const current=await loadMandate(c.userId), policy=c.workspace.policy;
+      const cap=policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0;
+      // The budget covers what the agent already holds plus this amount; fees and returns already counted stay counted.
+      const budget=BigInt(current?.spent_minor ?? "0")+await agentHoldings(wallet.address)+BigInt(input.amountMinor);
+      if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
+      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
+      await confirm(c,await review(c,wallet,current?.revision ?? 0,"MANDATE",mandate),"MANDATE");
+      // A plain USDC transfer to the agent; its gas budget covers a buffered ERC-20 transfer at the bounded Arc price.
+      const gasBudgetWei=(120_000n*boundedArcGasPrice(await arcClient.getGasPrice())).toString();
+      const call={to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[getAddress(wallet.address),BigInt(input.amountMinor)]}),value:"0"};
+      return Response.json({status:"READY",agentAddress:wallet.address,mandate,funding:{call,gasBudgetWei,amountMinor:input.amountMinor}},{headers});
     }
     if(action==="pause") {
       z.object({}).strict().parse(body);const {error}=await agentDb().rpc("hodd_pause_agent",{p_user:c.userId});if(error)throw new Error("AGENT_PAUSE_UNAVAILABLE");
       return Response.json({status:"PAUSED"},{headers});
     }
     if(action==="mandate" || action==="return-all") {
-      const input=z.discriminatedUnion("phase",[z.object({phase:z.literal("review"),mandate:z.unknown().optional()}).strict(),z.object({phase:z.literal("confirm"),reviewId:z.string().uuid(),confirmed:z.literal(true)}).strict()]).parse(body);
+      const reviewPhase=z.object({phase:z.literal("review"),mandate:z.unknown().optional()}).strict(), confirmPhase=z.object({phase:z.literal("confirm"),reviewId:z.string().uuid(),confirmed:z.literal(true)}).strict();
+      const input=(action==="return-all" ? z.discriminatedUnion("phase",[reviewPhase,confirmPhase,z.object({phase:z.literal("now")}).strict()]) : z.discriminatedUnion("phase",[reviewPhase,confirmPhase])).parse(body);
+      const kind:Kind=action==="return-all"?"RETURN_ALL":"MANDATE";
       await reserveLiveUsage(c.client,mode,"QUOTE");
-      if(input.phase==="review") {
-        const wallet=await loadWallet(c.userId),current=await loadMandate(c.userId);
-        if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
-        const mandate=validateMandate(action==="return-all" ? {...current?.mandate,maxMorphoBps:c.workspace.policy.enabledStrategies.MORPHO?Math.min(current?.mandate.maxMorphoBps ?? 0,c.workspace.policy.strategyCapsBps.MORPHO):0,paused:true,enabled:false} : input.mandate,c.workspace.policy);
-        const {data:row,error}=await c.client.from("treasury_workspaces").select("revision").eq("user_id",c.userId).single();if(error)throw new Error("AGENT_WORKSPACE_UNAVAILABLE");
-        const reviewId=randomUUID();const {error:reviewError}=await agentDb().rpc("hodd_agent_review",{p_id:reviewId,p_user:c.userId,p_session:c.sessionId,p_workspace_revision:row.revision,p_mandate_revision:current?.revision ?? 0,p_owner:wallet.owner_address,p_mandate:mandate,p_kind:action==="return-all"?"RETURN_ALL":"MANDATE"});
-        if(reviewError)throw new Error("AGENT_REVIEW_UNAVAILABLE");
-        return Response.json({status:"REVIEW",reviewId,mandate,network:"Arc Testnet (5042002)",token: "0x3600000000000000000000000000000000000000",destination:wallet.owner_address,agentAddress:wallet.address,explanation:action==="return-all"?"Pause the mandate. Redeem and return available USDC in capped runs; fees, low liquidity or budget exhaustion can leave residual funds.":"Authorize server signing from this separate Circle wallet within these limits. Funding is a separate transfer you sign."},{headers});
+      if(input.phase==="confirm") {await confirm(c,input.reviewId,kind);return Response.json({status:"CONFIRMED",runRequired:kind==="RETURN_ALL"},{headers});}
+      const wallet=await loadWallet(c.userId),current=await loadMandate(c.userId);
+      if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
+      const mandate=validateMandate(kind==="RETURN_ALL" ? {...current?.mandate,maxMorphoBps:c.workspace.policy.enabledStrategies.MORPHO?Math.min(current?.mandate.maxMorphoBps ?? 0,c.workspace.policy.strategyCapsBps.MORPHO):0,paused:true,enabled:false} : input.phase==="review" ? input.mandate : undefined,c.workspace.policy);
+      if(input.phase==="now") {
+        // One click: the only destination is the verified owner, so authorizing and starting happen together.
+        await access(request,true);
+        await confirm(c,await review(c,wallet,current?.revision ?? 0,kind,mandate),kind);
+        return Response.json({status:"READY",run:await startAgentRun(c.userId)},{headers});
       }
-      const {data:kind,error}=await agentDb().rpc("hodd_confirm_agent_review",{p_id:input.reviewId,p_user:c.userId,p_session:c.sessionId,p_kind:action==="return-all"?"RETURN_ALL":"MANDATE"});if(error || kind!==(action==="return-all"?"RETURN_ALL":"MANDATE"))throw new Error("AGENT_REVIEW_CHANGED");
-      return Response.json({status:"CONFIRMED",runRequired:kind==="RETURN_ALL"},{headers});
+      const reviewId=await review(c,wallet,current?.revision ?? 0,kind,mandate);
+      return Response.json({status:"REVIEW",reviewId,mandate,network:"Arc Testnet (5042002)",token: "0x3600000000000000000000000000000000000000",destination:wallet.owner_address,agentAddress:wallet.address,explanation:kind==="RETURN_ALL"?"Pause the mandate. Withdraw the Morpho position and send all agent USDC to your verified wallet in one run; only a network-fee remainder stays.":"Authorize server signing from this separate Circle wallet within these limits. Funding is a separate transfer you sign."},{headers});
     }
     if(action==="recover") {
       const input=z.object({stepId:z.string().uuid(),txHash:z.string().regex(/^0x[0-9a-fA-F]{64}$/)}).strict().parse(body);
@@ -97,8 +150,8 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"run"|
   } catch(error) {
     const known=error instanceof EarnAccessError;
     const code=known ? error.code : error instanceof z.ZodError ? "INVALID_REQUEST" : error instanceof Error && /^AGENT_[A-Z_]+$/.test(error.message) ? error.message : "AGENT_UNAVAILABLE";
-    const status=known?error.status:code==="AGENT_RATE_LIMIT"?429:code==="INVALID_REQUEST"?400:503;
-    return Response.json({status:"ERROR",code,message:known?error.message:code==="AGENT_SCHEMA_UNAVAILABLE"?"Autopilot is not provisioned. Its local migration has not been applied.":code==="AGENT_RATE_LIMIT"?"Autopilot starts at most one run every 5 minutes. Nothing was sent; try Run now again shortly.":"Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
+    const status=known?error.status:code==="AGENT_RATE_LIMIT"?429:code==="AGENT_RUN_OPEN"?409:code==="INVALID_REQUEST" || code==="AGENT_BUDGET_LIMIT"?400:code==="AGENT_OWNER_PROOF_REQUIRED" || code==="AGENT_OWNER_WALLET_CHANGED"?403:503;
+    return Response.json({status:"ERROR",code,message:known?error.message:messages[code] ?? "Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
   }
 }
 export async function agentCron(request:Request) {

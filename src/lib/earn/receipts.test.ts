@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, type TransactionReceipt } from "viem";
 import { ARC_USDC_SYSTEM_EMITTER, verifyApprovalReceipt, verifyEarnReceipt } from "./receipts";
 import type { EarnQuote } from "./models";
+import fullExit from "@/test/arc-withdraw-full-exit.json";
 const wallet = "0x0000000000000000000000000000000000000001";
 const vault = "0x0000000000000000000000000000000000000002";
 const stranger = "0x0000000000000000000000000000000000000003";
@@ -53,8 +54,13 @@ describe("Arc Earn receipt evidence", () => {
     expect(() => verifyEarnReceipt(routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_122n)), redeem)).not.toThrow();
     // Never less than quoted, and the forwarded leg must equal the withdrawn assets.
     for (const value of [routed(pulled, withdraw(750_120n), transfer(usdc, router, wallet, 750_120n)), routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_121n))]) expect(() => verifyEarnReceipt(value, redeem)).toThrow();
-    // A partial withdrawal still requires the exact amount.
-    expect(() => verifyEarnReceipt(routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_122n)), { ...redeem, operation: "WITHDRAW" })).toThrow();
+    // A withdrawal at Circle's rounded max is a full exit (no shares swept back): a rounding surplus is accepted.
+    const withdrawal = { ...redeem, operation: "WITHDRAW" as const };
+    expect(() => verifyEarnReceipt(routed(pulled, withdraw(750_122n), transfer(usdc, router, wallet, 750_122n)), withdrawal)).not.toThrow();
+    // A partial withdrawal (spare shares swept back) still requires the exact amount; never beyond the tolerance or below the quote.
+    const swept = (assets: bigint) => routed(transfer(vault, wallet, router, 800n), withdraw(assets), transfer(vault, router, wallet, 100n), transfer(usdc, router, wallet, assets));
+    expect(() => verifyEarnReceipt(swept(750_121n), withdrawal)).not.toThrow();
+    for (const value of [swept(750_122n), routed(pulled, withdraw(750_222n), transfer(usdc, router, wallet, 750_222n)), routed(pulled, withdraw(750_120n), transfer(usdc, router, wallet, 750_120n))]) expect(() => verifyEarnReceipt(value, withdrawal)).toThrow();
   });
   it("correlates smart-account approval receipts to owner, spender and exact allowance", () => {
     const call = { to: vault, data: encodeFunctionData({ abi, functionName: "approve", args: [stranger, 100n] }) } as const;
@@ -67,5 +73,12 @@ describe("Arc Earn receipt evidence", () => {
     expect(() => verifyApprovalReceipt(value, call, wallet)).not.toThrow();
     value.logs[0].data = encodeAbiParameters([{ type: "uint256" }], [99n]);
     expect(() => verifyApprovalReceipt(value, call, wallet)).toThrow();
+  });
+  it("verifies the live Arc withdrawal that paid two units above Circle's rounded max", () => {
+    const live = { walletAddress: "0xae407aa884d859e10475e609ad03a7cb6c11750b", vaultAddress: "0xaabbef1d3971c710276ed41ec791bbe14cdb8e88", operation: "WITHDRAW", amount: { minorUnits: "7969328" } } as EarnQuote;
+    const value = fullExit as unknown as TransactionReceipt;
+    expect(() => verifyEarnReceipt(value, live)).not.toThrow();
+    expect(() => verifyEarnReceipt(value, { ...live, amount: { ...live.amount, minorUnits: "7969331" } })).toThrow();
+    expect(() => verifyEarnReceipt(value, { ...live, walletAddress: stranger })).toThrow();
   });
 });
