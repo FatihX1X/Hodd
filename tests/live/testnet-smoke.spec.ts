@@ -56,8 +56,8 @@ test("deposit, withdraw, redeem and pay with a live EOA wallet", async ({ browse
   for (const [operation, amount] of [["Deposit", "0.5"], ["Withdraw", "0.25"], ["Redeem all", null]] as const) {
     await page.getByRole("button", { name: operation, exact: true }).click();
     if (amount) await page.getByLabel(`${operation} amount`).fill(amount);
-    await page.getByRole("button", { name: "Review fresh quote" }).click();
-    await page.getByRole("button", { name: new RegExp(`^Confirm onchain ${operation.toLowerCase()}`) }).click({ timeout: 60_000 });
+    // One click: a clean quote opens the wallet straight away (the test signer signs without a popup).
+    await page.getByRole("button", { name: `${operation} now` }).click();
     await untilDone(page, operation);
     await page.keyboard.press("Escape");
     await page.waitForTimeout(4_000);
