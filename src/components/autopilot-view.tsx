@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
 import { PageBody, PageHeader, SectionCard, SectionHeading, KpiGrid, Kpi, StatusPill, buttonClass, inputClass } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
+import { AutopilotProgress, type AutopilotLocalPhase, type AutopilotProgressInput } from "./autopilot-progress";
 import type { Mandate, Decision } from "@/lib/autopilot/models";
 import { decimalStringToMoney } from "@/lib/earn/money";
 import { getActiveWalletRuntime, isSignerFor, type EarnGasCeiling, type WalletCall } from "@/lib/wallet/runtime";
@@ -67,7 +68,9 @@ export function AutopilotView() {
   const [busy, setBusy] = useState(false);
   const [amount, setAmount] = useState("");
   const [share, setShare] = useState<string | null>(null);
-  const [phase, setPhase] = useState<string | null>(null);
+  const [phase, setPhase] = useState<AutopilotLocalPhase | null>(null);
+  // A failure before the agent run exists halts the rail at the step it reached (wallet cancel, refusal, revert).
+  const [failure, setFailure] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [intent, setIntent] = useState<"invest" | "return" | null>(null);
   const [manualAddress, setManualAddress] = useState("");
@@ -91,7 +94,7 @@ export function AutopilotView() {
     acting.current = false;
     queueMicrotask(() => {
       if (controller.signal.aborted) return;
-      setStatus(null); setActiveRun(null); setIntent(null); setPhase(null); setMessage(""); setBusy(false);
+      setStatus(null); setActiveRun(null); setIntent(null); setPhase(null); setFailure(null); setMessage(""); setBusy(false);
       setManualAddress(""); setCountdown(null); setShare(null);
       if (signedIn) void load(controller.signal).catch(error => {
         if (!controller.signal.aborted) setMessage(errorMessage(error));
@@ -126,14 +129,17 @@ export function AutopilotView() {
     return () => controller.abort();
   }, [open, runId, signedIn, load]);
 
-  async function act(action: (signal: AbortSignal) => Promise<void>) {
+  /** `flow`: Invest or Return. Their failures stop the progress rail where they happened instead of raising an alert. */
+  async function act(action: (signal: AbortSignal) => Promise<void>, flow?: "invest" | "return") {
     const signal = lifecycle.current?.signal;
     if (!signal || signal.aborted || acting.current) return;
-    acting.current = true; setBusy(true); setMessage("");
+    acting.current = true; setBusy(true); setMessage(""); setFailure(null);
+    if (flow) setIntent(flow);
     try { await action(signal); }
     catch (error) {
       if (!signal.aborted) {
-        setMessage(errorMessage(error)); setPhase(null); setCountdown(null);
+        if (flow) setFailure(errorMessage(error)); else { setMessage(errorMessage(error)); setPhase(null); }
+        setCountdown(null);
         if (error instanceof ApiError && error.code === "AGENT_RUN_OPEN") await load(signal).catch(() => {});
       }
     } finally {
@@ -153,7 +159,7 @@ export function AutopilotView() {
         return;
       } catch (error) {
         if (!(error instanceof ApiError) || error.code !== "AGENT_RATE_LIMIT" || Date.now() >= deadline) throw error;
-        setPhase(action === "run" ? "The agent will start investing shortly" : "The agent will start returning your USDC shortly");
+        setPhase("cooldown");
         const retryAt = Math.min(Date.now() + 30_000, deadline);
         while (Date.now() < retryAt) {
           setCountdown(Math.ceil((retryAt - Date.now()) / 1_000));
@@ -171,7 +177,7 @@ export function AutopilotView() {
     if (BigInt(amountMinor) <= 0n) throw new Error("Enter an amount greater than zero.");
     const maxMorphoBps = Math.round(Number(share ?? status.policyMorphoCapBps / 100) * 100);
     if (!Number.isFinite(maxMorphoBps) || maxMorphoBps < 0 || maxMorphoBps > status.policyMorphoCapBps) throw new Error("Choose a Morpho share within your policy limit.");
-    setActiveRun(null); setManualAddress(""); setFundingHash(null); setPhase("Preparing agent");
+    setActiveRun(null); setManualAddress(""); setFundingHash(null); setPhase("preparing");
     const before = await load(signal);
     // Balances exist only once a mandate does; a wallet without one starts from zero.
     if (before.balanceError) throw new Error(before.balanceError);
@@ -181,7 +187,7 @@ export function AutopilotView() {
     const signer = getActiveWalletRuntime();
     if (!isSignerFor(signer, workspace.walletConnection) || !signer.sendCalls) {
       setMessage("Reconnect your wallet to sign the funding transfer");
-      setManualAddress(result.agentAddress); setPhase("Waiting for the transfer");
+      setManualAddress(result.agentAddress); setPhase("funding");
       // PIN wallets can fund manually. Observe the requested cash increase before investing.
       for (;;) {
         await wait(3_000, signal);
@@ -189,7 +195,7 @@ export function AutopilotView() {
         if (fresh.wallet?.address.toLowerCase() === result.agentAddress.toLowerCase() && fresh.balances && BigInt(fresh.balances.cashMinor) >= baseline + BigInt(result.funding.amountMinor)) break;
       }
     } else {
-      setPhase("Confirm in your wallet");
+      setPhase("wallet");
       let hash: Hash;
       // The server already checked the balance and estimated gas: the wallet signs inside that ceiling with no browser RPC.
       try { hash = await signer.sendCalls([result.funding.call], result.funding.gasBudgetWei, undefined, undefined, result.funding.gasCeiling); }
@@ -198,10 +204,10 @@ export function AutopilotView() {
         if (error instanceof WalletPreflightError) throw new Error(error.code === "WALLET_SESSION_CHANGED" ? "Your wallet switched account or network. Choose your Hodd account on Arc Testnet and press Invest again. Nothing was sent." : "Your wallet could not prepare the transfer. Nothing was sent; press Invest again.");
         throw error;
       }
-      signal.throwIfAborted(); setFundingHash(hash); setPhase("Waiting for the transfer");
+      signal.throwIfAborted(); setFundingHash(hash); setPhase("funding");
       await arrived(hash, signal);
     }
-    setManualAddress(""); setMessage(""); setPhase("Agent investing");
+    setManualAddress(""); setMessage(""); setPhase("starting");
     await startRun("run", signal);
   }
 
@@ -222,14 +228,12 @@ export function AutopilotView() {
   const total = status?.balances ? (BigInt(status.balances.cashMinor) + BigInt(status.balances.positionMinor)).toString() : null;
   const unknownStep = status?.steps.find(step => step.state === "UNKNOWN" || step.state === "SUBMITTING");
   const runSteps = status?.steps.filter(step => step.run_id === run?.id) ?? [];
-  const currentStep = runSteps.find(step => step.state !== "COMPLETED" && step.state !== "CONFIRMED" && step.state !== "VERIFIED") ?? runSteps.at(-1);
   const returning = run?.decision.kind === "RETURN_ALL" || intent === "return";
-  const withdrawing = BigInt(run?.decision.withdrawMinor ?? "0") > 0n;
-  const stage = currentStep?.stage === "TRANSFER" ? "Sending to your wallet" : returning ? (withdrawing ? "Withdrawing from Morpho" : "Sending to your wallet") : currentStep?.stage === "APPROVAL" ? "Agent investing · Approving" : withdrawing ? "Withdrawing from Morpho" : "Agent investing · Depositing";
-  const lastTx = runSteps.filter(step => step.tx_hash).at(-1)?.tx_hash;
   const destination = status?.wallet?.owner_address;
   const result = run?.state === "COMPLETED" ? returning ? "Done. " + rounded(run.decision.transferMinor) + " sent to your wallet." : status?.balances ? "Done. " + rounded(status.balances.positionMinor) + " in Morpho, " + rounded(status.balances.cashMinor) + " ready as cash." : "Done." : run?.state === "NO_ACTION" ? returning ? "Nothing to return." : run.decision.explanation : run?.state === "FAILED" || run?.state === "PARTIAL" ? (run.failure ? outcome(run.failure) : run.decision.explanation) : null;
 
+  // Status lists steps newest first; the rail reads them oldest first.
+  const progress: AutopilotProgressInput = { flow: intent ?? (returning ? "return" : "invest"), local: phase, run: run ? { ...run, state: run.state as NonNullable<AutopilotProgressInput["run"]>["state"] } : null, steps: [...runSteps].reverse(), error: failure, countdown, result, fundingHash };
   return <>
     <PageHeader eyebrow="Agent treasury · Arc Testnet" title="Autopilot" description="Invest with your agent or return its USDC to your verified wallet in one click." />
     <PageBody>
@@ -241,7 +245,7 @@ export function AutopilotView() {
       {status?.balanceError && <p className="mb-5 text-sm text-[#ffd27f]">{status.balanceError}</p>}
       <KpiGrid columns={3} label="Agent balances"><Kpi label="Agent cash" value={status?.balances ? display(status.balances.cashMinor) : "Unavailable"} /><Kpi label="In Morpho" value={status?.balances ? display(status.balances.positionMinor) : "Unavailable"} /><Kpi label="Total with agent" value={total === null ? "Unavailable" : display(total)} /></KpiGrid>
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <SectionCard><SectionHeading index="01" title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest); }}>
+        <SectionCard><SectionHeading index="01" title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
           <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
           <button className={buttonClass.primary} disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</button>
           <p className="text-sm text-white/60">Your wallet sends the USDC to your agent; the agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s limits and keeps the rest ready as cash.</p>
@@ -249,17 +253,13 @@ export function AutopilotView() {
         <SectionCard><SectionHeading index="02" title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
           <p>{total === null ? "Balance unavailable" : display(total)} with your agent. A tiny network-fee remainder stays behind.</p>
           <p className="text-white/60">Destination: {destination ? <span title={destination} className="font-mono">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : "Connect your verified wallet"}</p>
-          <button className={buttonClass.primary} disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("Preparing your return"); await startRun("return-all", signal); })}>Return everything</button>
+          <button className={buttonClass.primary} disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</button>
         </div></SectionCard>
       </div>
-      {(phase || open || result) && <SectionCard className="mt-6"><SectionHeading index="03" title="Progress" /><div className="space-y-3 p-5 text-sm" role="status" aria-live="polite">
-        <p>{phase ?? (open ? stage : result)}</p>
-        {countdown !== null && <p className="text-white/60">Retrying in {countdown}s.</p>}
-        {run?.state === "UNKNOWN" && <p className="text-[#ffd27f]">The transaction is uncertain. Hodd is checking it; use recovery below if needed.</p>}
-        {manualAddress && <><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}>Copy agent address</button></>}
-        {fundingHash && phase && <a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/tx/" + fundingHash} target="_blank" rel="noreferrer">View your transfer on ArcScan</a>}
-        {lastTx && <a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/tx/" + lastTx} target="_blank" rel="noreferrer">View last transaction on ArcScan</a>}
-      </div></SectionCard>}
+      {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading index="03" title="Progress" />
+        <AutopilotProgress input={progress} />
+        {manualAddress && <div className="space-y-3 px-5 pb-5 text-sm"><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}>Copy agent address</button></div>}
+      </SectionCard>}
       <details className="mt-6 border border-white/15"><summary className="cursor-pointer p-5 text-sm">Settings</summary><div className="space-y-4 p-5 text-sm">
         <label className="block text-xs text-white/60">Morpho share (%)<input className={inputClass} type="number" min="0" max={(status?.policyMorphoCapBps ?? 0) / 100} step="0.01" value={share ?? (status ? String(status.policyMorphoCapBps / 100) : "")} onChange={event => setShare(event.target.value)} disabled={busy || open} /></label>
         <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}>Pause autopilot</button>

@@ -97,7 +97,8 @@ test("Autopilot returns everything with one click", async ({ page }) => {
   await page.goto("/autopilot");
   await expect(page.getByRole("button", { name: "Return everything", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Return everything", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Done. 19.98 USDC sent to your wallet." })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("link", { name: "View last transaction on ArcScan" })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
+  const rail = page.getByRole("region", { name: "Return progress" });
+  await expect(rail).toContainText("Done. 19.98 USDC sent to your wallet.", { timeout: 15_000 });
+  await expect(rail.getByRole("link", { name: /Open transaction/ })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
   expect(returns).toBe(1); expect(polls).toBe(1);
 });

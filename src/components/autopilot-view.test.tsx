@@ -1,5 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MotionGlobalConfig } from "motion/react";
 import { AutopilotView } from "./autopilot-view";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
 
@@ -26,6 +27,10 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+// The progress rail animates its caption; tests read the settled state.
+MotionGlobalConfig.skipAnimations = true;
+/** The progress rail of a flow ("Invest progress" / "Return progress"). */
+const rail = (name: "Invest" | "Return") => screen.getByRole("region", { name: name + " progress" });
 async function ready() {
   render(<AutopilotView />);
   await waitFor(() => expect(screen.getByRole("button", { name: "Return everything" })).toBeEnabled());
@@ -56,31 +61,31 @@ describe("one-click Autopilot", () => {
     await ready(); vi.useFakeTimers(); await clickReturn();
     expect(screen.getByRole("button", { name: "Invest" })).toBeDisabled();
     await tick(3_000);
-    expect(screen.getByText("Done. 19.98 USDC sent to your wallet.")).toBeVisible();
-    expect(screen.getByRole("link", { name: "View last transaction on ArcScan" })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
+    expect(rail("Return")).toHaveTextContent("Done. 19.98 USDC sent to your wallet.");
+    expect(within(rail("Return")).getByRole("link", { name: /Open transaction/ })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
     expect(requests).toEqual([{ action: "return-all", body: { phase: "now" } }, { action: "status", body: {} }]);
     await tick(9_000); expect(requests).toHaveLength(2);
   });
   it("reports nothing to return for a NO_ACTION decision", async () => {
     handler = () => json({ status: "READY", run: { ...run, state: "NO_ACTION", decision: { ...decision, kind: "NO_ACTION", explanation: "No eligible action." } } });
     await ready(); await clickReturn();
-    expect(screen.getByText("Nothing to return.")).toBeVisible();
+    expect(rail("Return")).toHaveTextContent("Nothing to return.");
     expect(requests).toEqual([{ action: "return-all", body: { phase: "now" } }]);
   });
   it("resumes an UNKNOWN run on page load without starting a new run", async () => {
     snapshot.runs = [{ ...run, state: "UNKNOWN" }]; vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     await act(async () => { render(<AutopilotView />); });
-    expect(screen.getByText(/The transaction is uncertain/)).toBeVisible();
+    expect(rail("Return")).toHaveTextContent(/The transaction is uncertain/);
     await tick(3_000); expect(requests.map(item => item.action)).toEqual(["status"]);
   });
   it("retries only rate limits every 30 seconds and stops after six minutes", async () => {
     handler = () => json({ status: "ERROR", code: "AGENT_RATE_LIMIT", message: "Please wait before starting another run." }, 429);
     await ready(); vi.useFakeTimers(); await clickReturn();
-    expect(screen.getByText(/Retrying in 30s/)).toBeVisible();
+    expect(rail("Return")).toHaveTextContent(/Starts in 30s/);
     await tick(29_000); expect(requests).toHaveLength(1);
     await tick(1_000); expect(requests).toHaveLength(2);
     await tick(330_000); expect(requests).toHaveLength(13);
-    expect(screen.getByRole("alert")).toHaveTextContent("Please wait before starting another run.");
+    expect(rail("Return")).toHaveTextContent("Please wait before starting another run.");
     await tick(60_000); expect(requests).toHaveLength(13);
   });
   it("stops pending retries when the page unmounts", async () => {
@@ -92,8 +97,8 @@ describe("one-click Autopilot", () => {
     const sendCalls = vi.fn(); mocks.signer = { sendCalls };
     handler = () => json({ status: "ERROR", code, message: "Cannot prepare your agent yet." }, 400);
     await ready(); await clickInvest();
-    expect(screen.getByRole("alert")).toHaveTextContent("Cannot prepare your agent yet.");
-    expect(screen.getByRole("alert")).not.toHaveTextContent(code);
+    expect(rail("Invest")).toHaveTextContent("Cannot prepare your agent yet.");
+    expect(rail("Invest")).not.toHaveTextContent(code); expect(screen.queryByRole("alert")).toBeNull();
     expect(sendCalls).not.toHaveBeenCalled(); expect(requests).toHaveLength(1);
   });
   it("signs funding once, waits for success, and starts investing automatically", async () => {
@@ -115,16 +120,16 @@ describe("one-click Autopilot", () => {
   it("does not start a run after wallet cancellation or a reverted receipt", async () => {
     mocks.signer = { sendCalls: vi.fn().mockRejectedValue({ cause: { code: 4001, message: "User rejected" } }) };
     handler = () => json(funding); await ready(); await clickInvest();
-    expect(screen.getByRole("alert")).toHaveTextContent("Cancelled in your wallet. Nothing was sent.");
+    expect(rail("Invest")).toHaveTextContent("Cancelled in your wallet. Nothing was sent.");
     expect(requests.map(item => item.action)).toEqual(["invest"]);
     mocks.signer.sendCalls.mockResolvedValue(hash); mocks.funding = ["REVERTED"]; handler = investing({ status: "READY", run });
-    await clickInvest(); expect(screen.getByRole("alert")).toHaveTextContent("The funding transfer reverted");
+    await clickInvest(); expect(rail("Invest")).toHaveTextContent("The funding transfer reverted");
     expect(requests.map(item => item.action)).toEqual(["invest", "invest", "funding"]);
   });
   it("waits on the server until the transfer arrives, then starts the agent once", async () => {
     mocks.signer = { sendCalls: vi.fn().mockResolvedValue(hash) }; mocks.funding = ["PENDING", "PENDING"]; handler = investing({ status: "READY", run });
     await ready(); vi.useFakeTimers(); await clickInvest();
-    expect(screen.getByRole("link", { name: "View your transfer on ArcScan" })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
+    expect(within(rail("Invest")).getByRole("link", { name: /View transfer/ })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
     expect(requests.map(item => item.action)).toEqual(["invest", "funding"]);
     await tick(2_000); expect(requests.map(item => item.action)).toEqual(["invest", "funding", "funding"]);
     await tick(2_000); expect(requests.map(item => item.action)).toEqual(["invest", "funding", "funding", "funding", "run"]);
@@ -132,7 +137,7 @@ describe("one-click Autopilot", () => {
   it("explains a wallet that could not prepare the transfer without starting anything", async () => {
     mocks.signer = { sendCalls: vi.fn().mockRejectedValue(new WalletPreflightError("WALLET_SESSION_CHANGED", "changed")) }; handler = investing({ status: "READY", run });
     await ready(); await clickInvest();
-    expect(screen.getByRole("alert")).toHaveTextContent("Your wallet switched account or network"); expect(requests.map(item => item.action)).toEqual(["invest"]);
+    expect(rail("Invest")).toHaveTextContent("Your wallet switched account or network"); expect(requests.map(item => item.action)).toEqual(["invest"]);
   });
   it("automatically continues manual funding only after the requested cash arrives", async () => {
     handler = action => action === "invest" ? json(funding) : json({ status: "READY", run });

@@ -143,7 +143,7 @@ test("Autopilot Invest signs with MetaMask inside the server's gas ceiling and n
   await page.getByRole("link", { name: "Autopilot" }).first().click();
   const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
   await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Done." })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Invest progress" })).toContainText("Done.", { timeout: 20_000 });
   const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string }[] }).sent);
   expect(sent).toHaveLength(1); expect(BigInt(sent[0].gas)).toBe(59_206n); expect(BigInt(sent[0].gasPrice)).toBe(50_000_000_000n); expect(sent[0].to.toLowerCase()).toBe("0x3600000000000000000000000000000000000000");
   expect(calls.slice(0, 3)).toEqual(["invest", "funding", "run"]); expect(rpc).toEqual([]);
