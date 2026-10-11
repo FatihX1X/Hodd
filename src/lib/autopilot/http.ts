@@ -128,7 +128,9 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       if(input.phase==="confirm") {await confirm(c,input.reviewId,kind);return Response.json({status:"CONFIRMED",runRequired:kind==="RETURN_ALL"},{headers});}
       const wallet=await loadWallet(c.userId),current=await loadMandate(c.userId);
       if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
-      const mandate=validateMandate(kind==="RETURN_ALL" ? {...current?.mandate,maxMorphoBps:c.workspace.policy.enabledStrategies.MORPHO?Math.min(current?.mandate.maxMorphoBps ?? 0,c.workspace.policy.strategyCapsBps.MORPHO):0,paused:true,enabled:false} : input.phase==="review" ? input.mandate : undefined,c.workspace.policy);
+      // Counted returns can exceed an old budget; the confirmation refuses budget < spent, which must never block a return.
+      const spent=BigInt(current?.spent_minor ?? "0"), budget=current ? BigInt(current.mandate.budgetMinor) : 0n;
+      const mandate=validateMandate(kind==="RETURN_ALL" ? {...current?.mandate,budgetMinor:(spent>budget && spent<=AGENT_MAX_BUDGET_MINOR ? spent : budget).toString(),maxMorphoBps:c.workspace.policy.enabledStrategies.MORPHO?Math.min(current?.mandate.maxMorphoBps ?? 0,c.workspace.policy.strategyCapsBps.MORPHO):0,paused:true,enabled:false} : input.phase==="review" ? input.mandate : undefined,c.workspace.policy);
       if(input.phase==="now") {
         // One click: the only destination is the verified owner, so authorizing and starting happen together.
         await access(request,true);

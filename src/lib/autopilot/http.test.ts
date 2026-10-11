@@ -66,6 +66,11 @@ describe("one-click return all",()=>{
     expect(reviewed()).toMatchObject({p_kind:"RETURN_ALL",p_mandate:{enabled:false,paused:true,budgetMinor:"50000000"}});
     expect(m.start).toHaveBeenCalledWith("user");
   });
+  it("lifts an old budget to the counted spend so a return is never refused",async()=>{
+    m.mandate={...(m.mandate as object),spent_minor:"60000000"};
+    expect((await post("return-all",{phase:"now"})).status).toBe(200);
+    expect(reviewed()).toMatchObject({p_kind:"RETURN_ALL",p_mandate:{budgetMinor:"60000000",maxPerRunMinor:"10000000"}});
+  });
   it("reports an unresolved run without starting another",async()=>{
     m.rpc.mockImplementation(async(name:string)=>name==="hodd_confirm_agent_review"?{data:null,error:{message:"agent run unresolved"}}:{data:null,error:null});
     const response=await post("return-all",{phase:"now"});
