@@ -7,9 +7,10 @@ import { EarnAccessError } from "@/lib/earn/security";
 import { liveControls } from "@/lib/earn/live-controls";
 import { agentAccess } from "./access";
 import { agentCircle } from "./circle";
-import { encodeFunctionData, erc20Abi, getAddress } from "viem";
+import { decodeEventLog, encodeFunctionData, erc20Abi, formatUnits, getAddress } from "viem";
 import { arcClient } from "@/lib/earn/gateway";
-import { boundedArcGasPrice } from "@/lib/earn/gas";
+import { boundedArcGasPrice, bufferedEarnGasLimit } from "@/lib/earn/gas";
+import { nativeWeiToUsdcCeil } from "@/lib/earn/money";
 import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { createAgentWallet, agentIdempotencyKey } from "./wallets";
 import { AGENT_MAX_BUDGET_MINOR, validateMandate, type AgentWallet, type Mandate } from "./models";
@@ -24,6 +25,7 @@ const messages:Record<string,string>={
   AGENT_BUDGET_LIMIT:"Autopilot manages at most 1,000 USDC in total on testnet. Choose a smaller amount.",
   AGENT_OWNER_PROOF_REQUIRED:"Verify ownership of your connected wallet on Overview first. Nothing was sent.",
   AGENT_OWNER_WALLET_CHANGED:"Your agent belongs to another of your wallets. Connect that wallet to use it.",
+  AGENT_FUNDING_UNAVAILABLE:"Arc Testnet could not check your transfer right now. Nothing was sent or changed; try again in a moment.",
 };
 const env=()=>({nodeEnv:process.env.NODE_ENV,vercel:process.env.VERCEL,vercelEnv:process.env.VERCEL_ENV,liveFlag:process.env.HODD_TESTNET_LIVE,localFlag:process.env.HODD_AGENT_EXECUTION_ENABLED});
 async function access(request:Request, execution:boolean,cron=false) {
@@ -43,6 +45,21 @@ async function context() {
   return {...c,sessionId:String(data!.claims.session_id)};
 }
 type Ctx=Awaited<ReturnType<typeof context>>;
+const usdc=(minor:bigint)=>formatUnits(minor>0n?minor:0n,6);
+/** The owner's exact USDC transfer to the agent with a server-estimated gas ceiling; refuses before signing when funds are short. */
+async function fundingTransfer(owner:`0x${string}`,agent:`0x${string}`,amount:bigint) {
+  const call={to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[agent,amount]}),value:"0"};
+  const short=(balance:bigint,fee:bigint)=>new EarnAccessError("AGENT_FUNDS_INSUFFICIENT",`Your wallet has ${usdc(balance)} USDC on Arc Testnet. Invest at most ${usdc(balance-fee)} USDC so the network fee is covered. Nothing was sent.`,400);
+  let balance:bigint, gas:bigint, price:bigint;
+  try { balance=await arcClient.readContract({address:ARC_TESTNET_USDC,abi:erc20Abi,functionName:"balanceOf",args:[owner]}); price=boundedArcGasPrice(await arcClient.getGasPrice()); }
+  catch { throw new Error("AGENT_FUNDING_UNAVAILABLE"); }
+  if(balance<amount)throw short(balance,nativeWeiToUsdcMinor(60_000n*price));
+  try { gas=await arcClient.estimateGas({account:owner,to:ARC_TESTNET_USDC,data:call.data,value:0n}); } catch { throw new Error("AGENT_FUNDING_UNAVAILABLE"); }
+  const gasLimit=bufferedEarnGasLimit(gas), fee=nativeWeiToUsdcMinor(gasLimit*price);
+  if(balance<amount+fee)throw short(balance,fee);
+  return {call,gasBudgetWei:(gasLimit*price).toString(),gasCeiling:{gasLimit:gasLimit.toString(),gasPriceWei:price.toString()},amountMinor:amount.toString()};
+}
+const nativeWeiToUsdcMinor=(wei:bigint)=>BigInt(nativeWeiToUsdcCeil(wei.toString()).minorUnits);
 type Kind="MANDATE"|"RETURN_ALL";
 /** Creates the user's agent wallet once; an existing one must belong to the connected owner. */
 async function ensureWallet(c:Ctx,mode:"TESTNET_LIVE"|"LOCAL_ENABLED"):Promise<AgentWallet> {
@@ -73,7 +90,7 @@ async function confirm(c:Ctx,reviewId:string,kind:Kind) {
   if(error && /run unresolved/i.test(error.message))throw new Error("AGENT_RUN_OPEN");
   if(error || data!==kind)throw new Error("AGENT_REVIEW_CHANGED");
 }
-export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"run"|"status"|"return-all"|"pause"|"recover") {
+export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover") {
   try {
     const read=request.method==="GET";
     // GETs are read-only. Reuse same-origin JSON guards without requiring an Origin on normal navigation reads.
@@ -110,11 +127,21 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       const budget=BigInt(current?.spent_minor ?? "0")+await agentHoldings(wallet.address)+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
       const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
+      // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
+      // and wallet extensions made that fail before the wallet opened). The wallet signs within this exact ceiling.
+      const funding=await fundingTransfer(getAddress(c.wallet.address),getAddress(wallet.address),BigInt(input.amountMinor));
       await confirm(c,await review(c,wallet,current?.revision ?? 0,"MANDATE",mandate),"MANDATE");
-      // A plain USDC transfer to the agent; its gas budget covers a buffered ERC-20 transfer at the bounded Arc price.
-      const gasBudgetWei=(120_000n*boundedArcGasPrice(await arcClient.getGasPrice())).toString();
-      const call={to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[getAddress(wallet.address),BigInt(input.amountMinor)]}),value:"0"};
-      return Response.json({status:"READY",agentAddress:wallet.address,mandate,funding:{call,gasBudgetWei,amountMinor:input.amountMinor}},{headers});
+      return Response.json({status:"READY",agentAddress:wallet.address,mandate,funding},{headers});
+    }
+    if(action==="funding") {
+      // Read-only: did the owner's transfer land with the agent? The page waits on this instead of a browser RPC.
+      const input=z.object({txHash:z.string().regex(/^0x[0-9a-fA-F]{64}$/)}).strict().parse(body);
+      const wallet=await loadWallet(c.userId);
+      if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
+      let receipt;try{receipt=await arcClient.getTransactionReceipt({hash:input.txHash.toLowerCase() as `0x${string}`});}catch{return Response.json({status:"PENDING"},{headers});}
+      if(receipt.status!=="success")return Response.json({status:"REVERTED"},{headers});
+      const arrived=receipt.logs.reduce((sum,log)=>{if(log.address.toLowerCase()!==ARC_TESTNET_USDC.toLowerCase())return sum;try{const e=decodeEventLog({abi:erc20Abi,data:log.data,topics:log.topics});return e.eventName==="Transfer" && e.args.from.toLowerCase()===wallet.owner_address && e.args.to.toLowerCase()===wallet.address ? sum+e.args.value : sum;}catch{return sum;}},0n);
+      return Response.json({status:arrived>0n?"ARRIVED":"UNRELATED",amountMinor:arrived.toString()},{headers});
     }
     if(action==="pause") {
       z.object({}).strict().parse(body);const {error}=await agentDb().rpc("hodd_pause_agent",{p_user:c.userId});if(error)throw new Error("AGENT_PAUSE_UNAVAILABLE");

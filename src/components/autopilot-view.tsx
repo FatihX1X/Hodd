@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPublicClient, formatUnits, http, type Hash } from "viem";
-import { arcTestnet } from "viem/chains";
+import { formatUnits, type Hash } from "viem";
 import { PageBody, PageHeader, SectionCard, SectionHeading, KpiGrid, Kpi, StatusPill, buttonClass, inputClass } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import type { Mandate, Decision } from "@/lib/autopilot/models";
 import { decimalStringToMoney } from "@/lib/earn/money";
-import { getActiveWalletRuntime, isSignerFor, type WalletCall } from "@/lib/wallet/runtime";
+import { getActiveWalletRuntime, isSignerFor, type EarnGasCeiling, type WalletCall } from "@/lib/wallet/runtime";
+import { WalletPreflightError } from "@/lib/wallet/preflight";
 
 interface Run { id: string; state: string; decision: Decision; failure: string | null; created_at: string }
 interface Status {
@@ -18,7 +18,7 @@ interface Status {
   balanceError: string | null; runs: Run[];
   steps: { id: string; run_id: string; stage: string; state: string; tx_hash: string | null; circle_transaction_id: string | null }[];
 }
-interface Funding { agentAddress: string; funding: { call: WalletCall; gasBudgetWei: string; amountMinor: string } }
+interface Funding { agentAddress: string; funding: { call: WalletCall; gasBudgetWei: string; gasCeiling: EarnGasCeiling; amountMinor: string } }
 class ApiError extends Error {
   constructor(message: string, readonly code: string) { super(message); }
 }
@@ -73,6 +73,7 @@ export function AutopilotView() {
   const [manualAddress, setManualAddress] = useState("");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [candidate, setCandidate] = useState("");
+  const [fundingHash, setFundingHash] = useState<string | null>(null);
   const lifecycle = useRef<AbortController | null>(null);
   const acting = useRef(false);
   const load = useCallback(async (signal: AbortSignal) => {
@@ -170,7 +171,7 @@ export function AutopilotView() {
     if (BigInt(amountMinor) <= 0n) throw new Error("Enter an amount greater than zero.");
     const maxMorphoBps = Math.round(Number(share ?? status.policyMorphoCapBps / 100) * 100);
     if (!Number.isFinite(maxMorphoBps) || maxMorphoBps < 0 || maxMorphoBps > status.policyMorphoCapBps) throw new Error("Choose a Morpho share within your policy limit.");
-    setActiveRun(null); setManualAddress(""); setPhase("Preparing agent");
+    setActiveRun(null); setManualAddress(""); setFundingHash(null); setPhase("Preparing agent");
     const before = await load(signal);
     // Balances exist only once a mandate does; a wallet without one starts from zero.
     if (before.balanceError) throw new Error(before.balanceError);
@@ -190,15 +191,31 @@ export function AutopilotView() {
     } else {
       setPhase("Confirm in your wallet");
       let hash: Hash;
-      try { hash = await signer.sendCalls([result.funding.call], result.funding.gasBudgetWei); }
-      catch (error) { if (rejected(error)) throw new Error("Cancelled in your wallet. Nothing was sent."); throw error; }
-      signal.throwIfAborted(); setPhase("Waiting for the transfer");
-      const receipt = await createPublicClient({ chain: arcTestnet, transport: http("https://rpc.testnet.arc.io") }).waitForTransactionReceipt({ hash, timeout: 90_000 });
-      signal.throwIfAborted();
-      if (receipt.status === "reverted") throw new Error("The funding transfer reverted. The agent did not start investing.");
+      // The server already checked the balance and estimated gas: the wallet signs inside that ceiling with no browser RPC.
+      try { hash = await signer.sendCalls([result.funding.call], result.funding.gasBudgetWei, undefined, undefined, result.funding.gasCeiling); }
+      catch (error) {
+        if (rejected(error)) throw new Error("Cancelled in your wallet. Nothing was sent.");
+        if (error instanceof WalletPreflightError) throw new Error(error.code === "WALLET_SESSION_CHANGED" ? "Your wallet switched account or network. Choose your Hodd account on Arc Testnet and press Invest again. Nothing was sent." : "Your wallet could not prepare the transfer. Nothing was sent; press Invest again.");
+        throw error;
+      }
+      signal.throwIfAborted(); setFundingHash(hash); setPhase("Waiting for the transfer");
+      await arrived(hash, signal);
     }
     setManualAddress(""); setMessage(""); setPhase("Agent investing");
     await startRun("run", signal);
+  }
+
+  /** Waits until Hodd's server sees the owner's transfer land with the agent (no browser RPC). */
+  async function arrived(txHash: string, signal: AbortSignal) {
+    const deadline = Date.now() + 3 * 60_000;
+    for (;;) {
+      const check = await post<{ status: "PENDING" | "ARRIVED" | "REVERTED" | "UNRELATED" }>("funding", { txHash }, signal).catch(error => { if (signal.aborted) throw error; return { status: "PENDING" as const }; });
+      if (check.status === "ARRIVED") return;
+      if (check.status === "REVERTED") throw new Error("The funding transfer reverted on Arc Testnet. The agent did not start investing.");
+      if (check.status === "UNRELATED") throw new Error("That transaction did not send USDC to your agent. The agent did not start investing.");
+      if (Date.now() >= deadline) throw new Error("Your transfer has not arrived yet. Check it on ArcScan; nothing else was sent and the agent did not start.");
+      await wait(2_000, signal);
+    }
   }
 
   const disabled = busy || open || !!status?.runs.some(isOpen) || !signedIn || !status?.executionEnabled;
@@ -240,6 +257,7 @@ export function AutopilotView() {
         {countdown !== null && <p className="text-white/60">Retrying in {countdown}s.</p>}
         {run?.state === "UNKNOWN" && <p className="text-[#ffd27f]">The transaction is uncertain. Hodd is checking it; use recovery below if needed.</p>}
         {manualAddress && <><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}>Copy agent address</button></>}
+        {fundingHash && phase && <a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/tx/" + fundingHash} target="_blank" rel="noreferrer">View your transfer on ArcScan</a>}
         {lastTx && <a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/tx/" + lastTx} target="_blank" rel="noreferrer">View last transaction on ArcScan</a>}
       </div></SectionCard>}
       <details className="mt-6 border border-white/15"><summary className="cursor-pointer p-5 text-sm">Settings</summary><div className="space-y-4 p-5 text-sm">

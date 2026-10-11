@@ -119,6 +119,36 @@ test("MetaMask connects through EIP-6963 while Rabby owns window.ethereum (Brave
   expect(asked).toContain("metamask:eth_requestAccounts"); expect(asked.filter((item) => item.startsWith("rabby:"))).toEqual([]);
 });
 
+test("Autopilot Invest signs with MetaMask inside the server's gas ceiling and never calls the Arc RPC from the browser", async ({ page }) => {
+  await liveSession(page); await liveReads(page, "20000000");
+  const hash = "0x" + "c".repeat(64), agent = "0x00000000000000000000000000000000000000ab";
+  await page.addInitScript(({ address, hash }) => {
+    const sent: unknown[] = []; (window as unknown as { sent: unknown[] }).sent = sent;
+    Object.defineProperty(window, "ethereum", { value: { isMetaMask: true, request: async ({ method, params }: { method: string; params?: unknown[] }) => { if (method === "eth_chainId") return "0x4cef52"; if (method === "eth_accounts" || method === "eth_requestAccounts") return [address]; if (method === "eth_sendTransaction") { sent.push(params?.[0]); return hash; } throw new Error(`Unexpected wallet request: ${method}`); }, on: () => undefined, removeListener: () => undefined } });
+  }, { address, hash });
+  let done = false; const calls: string[] = [];
+  const status = () => ({ status: "READY", mode: "TESTNET_LIVE", executionEnabled: true, policyMorphoCapBps: 6000, wallet: { address: agent, owner_address: address, account_type: "EOA" }, mandate: null, spentMinor: "0", returnRequested: false, balances: { cashMinor: done ? "6000000" : "0", positionMinor: done ? "9000000" : "0", redeemableMinor: "0", observedAt: "2026-10-11T12:00:00.000Z" }, balanceError: null, runs: done ? [{ id: "run", state: "COMPLETED", decision: { kind: "INVEST", depositMinor: "9000000", withdrawMinor: "0", transferMinor: "0", explanation: "Invest" }, failure: null, created_at: "2026-10-11T12:00:00.000Z" }] : [], steps: [] });
+  await page.route("**/api/autopilot/**", async (route) => {
+    const action = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    if (route.request().method() === "GET") return route.fulfill({ json: status() });
+    calls.push(action);
+    if (action === "invest") return route.fulfill({ json: { status: "READY", agentAddress: agent, funding: { call: { to: "0x3600000000000000000000000000000000000000", data: "0xa9059cbb", value: "0" }, gasBudgetWei: (59_206n * 50_000_000_000n).toString(), gasCeiling: { gasLimit: "59206", gasPriceWei: "50000000000" }, amountMinor: "15000000" } } });
+    if (action === "funding") { expect(route.request().postDataJSON()).toEqual({ txHash: hash }); return route.fulfill({ json: { status: "ARRIVED", amountMinor: "15000000" } }); }
+    if (action === "run") return route.fulfill({ json: { status: "READY", run: { id: "run", state: "RUNNING", decision: { kind: "INVEST", depositMinor: "9000000", withdrawMinor: "0", transferMinor: "0", explanation: "Invest" }, failure: null, created_at: "2026-10-11T12:00:00.000Z" } } });
+    done = true; return route.fulfill({ json: { status: "READY", run: null } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask", exact: true }).click();
+  await expect(page.getByText("Custody: user")).toBeVisible();
+  // In-app navigation keeps the in-memory signer.
+  await page.getByRole("link", { name: "Autopilot" }).first().click();
+  const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
+  await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Done." })).toBeVisible({ timeout: 20_000 });
+  const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string }[] }).sent);
+  expect(sent).toHaveLength(1); expect(BigInt(sent[0].gas)).toBe(59_206n); expect(BigInt(sent[0].gasPrice)).toBe(50_000_000_000n); expect(sent[0].to.toLowerCase()).toBe("0x3600000000000000000000000000000000000000");
+  expect(calls.slice(0, 3)).toEqual(["invest", "funding", "run"]); expect(rpc).toEqual([]);
+});
+
 test("policy page explains and saves the same live workspace policy", async ({ page }) => {
   await liveSession(page); await page.goto("/policy"); await expect(page.getByText(/place at most 60% in morpho/i)).toBeVisible();
   await page.getByLabel("Safety buffer", { exact: true }).fill("1500"); await page.getByRole("button", { name: /save policy and recalculate/i }).click();
