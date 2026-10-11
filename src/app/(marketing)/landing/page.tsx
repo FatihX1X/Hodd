@@ -4,11 +4,13 @@ import Image from "next/image";
 import clsx from "clsx";
 import { SystemTabs } from "@/components/landing/system-tabs";
 import { CountUp } from "@/components/landing/motion/count-up";
+import { CtaStar } from "@/components/landing/motion/cta-star";
 import { HoddiePreview } from "@/components/landing/motion/hoddie-preview";
 import { HowTimeline } from "@/components/landing/motion/how-timeline";
 import { LiveTreasury } from "@/components/landing/motion/live-treasury";
 import { MagneticLink } from "@/components/landing/motion/magnetic-link";
 import { RevealLines } from "@/components/landing/motion/reveal-lines";
+import { SystemMotion, SystemStar } from "@/components/landing/motion/system-motion";
 import styles from "@/components/landing/landing.module.css";
 import { APP_ORIGIN, siteForHost } from "@/lib/site/hosts";
 
@@ -62,6 +64,11 @@ function Spark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 200 200" width="9" height="9" aria-hidden="true" className={className}><path d="M100 0Q110 90 200 100Q110 110 100 200Q90 110 0 100Q90 90 100 0Z" fill="currentColor" /></svg>
   );
+}
+
+/** The X (formerly Twitter) mark, drawn from its published glyph. */
+function XLogo() {
+  return <svg viewBox="0 0 24 24" width="16" height="16" role="img" aria-label="X" className="shrink-0" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>;
 }
 
 /** The hero's 120px ruled grid, drawn once on load (CSS only, see landing.module.css). */
@@ -169,12 +176,14 @@ export default async function LandingPage() {
 
         {/* System */}
         <section id="system" className="relative overflow-hidden border-b border-[#0b0b0d] bg-[#0b0b0d] text-[#f4f1e8]" style={{ backgroundImage: "radial-gradient(ellipse 60% 50% at 88% 18%,rgba(40,90,255,.38),rgba(40,90,255,0) 70%)" }}>
-          <Image src="/brand/hodd-star.png" alt="" aria-hidden="true" width={640} height={640} className="pointer-events-none absolute -right-[10%] -top-[12%] h-auto w-[min(50vw,720px)] opacity-30" />
-          <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
-            <div className={clsx(label, "text-[#8fb0ff]")}>01 — The system</div>
-            <RevealLines lines={["Three verbs.", "One treasury that plans ahead."]} className="disp mb-[clamp(36px,5vw,64px)] mt-5 max-w-[920px] text-[clamp(2.1rem,5vw,4.5rem)]" />
-            <SystemTabs />
-          </div>
+          <SystemMotion>
+            <SystemStar className="pointer-events-none absolute -right-[10%] -top-[12%] w-[min(50vw,720px)]" />
+            <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
+              <div className={clsx(label, "text-[#8fb0ff]")}>01 — The system</div>
+              <RevealLines lines={["Three verbs.", "One treasury that plans ahead."]} className="disp mb-[clamp(36px,5vw,64px)] mt-5 max-w-[920px] text-[clamp(2.1rem,5vw,4.5rem)]" />
+              <SystemTabs />
+            </div>
+          </SystemMotion>
         </section>
 
         {/* How it works */}
@@ -247,19 +256,8 @@ export default async function LandingPage() {
                   <a className={buttonLight} href={signIn}>Sign in</a>
                 </div>
               </div>
-              <div aria-hidden="true" className="flex flex-[1_1_300px] justify-center gap-7">
-                <div className="flex flex-col items-center gap-3.5">
-                  <div className="flex size-[136px] items-center justify-center rounded-[31px] bg-gradient-to-br from-white to-[#e2e7f3] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.9),0_26px_54px_rgba(0,10,90,0.5)]">
-                    <Image src="/brand/hodd-star-light.png" alt="" width={480} height={480} className="size-[86px]" />
-                  </div>
-                  <span className={label}>Hodd</span>
-                </div>
-                <div className="mt-14 flex flex-col items-center gap-3.5">
-                  <div className="flex size-[136px] items-center justify-center rounded-[31px] bg-gradient-to-br from-[#2e313d] to-[#07080c] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.22),inset_0_12px_22px_rgba(255,255,255,0.07),0_26px_54px_rgba(0,10,90,0.55)]">
-                    <Image src="/brand/hodd-star.png" alt="" width={640} height={640} className="size-[104px]" />
-                  </div>
-                  <span className={label}>Hodd Finance</span>
-                </div>
+              <div className="flex flex-[1_1_300px] justify-center">
+                <CtaStar />
               </div>
             </div>
           </div>
@@ -282,6 +280,13 @@ export default async function LandingPage() {
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Console</div>
                 <div className="flex flex-col"><a className={navLink} href={launch}>Launch app</a><a className={navLink} href={signIn}>Sign in</a></div>
+              </div>
+              <div>
+                <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Contact</div>
+                <div className="flex flex-col">
+                  <a className={navLink} href="mailto:info@hoddfinance.xyz?subject=Hodd%20feedback">Feedback</a>
+                  <a className={clsx(navLink, "gap-3")} href="https://x.com/hoddfinance" target="_blank" rel="noopener noreferrer"><XLogo />@hoddfinance<span className="sr-only"> (opens in a new tab)</span></a>
+                </div>
               </div>
             </nav>
           </div>

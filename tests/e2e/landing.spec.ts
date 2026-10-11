@@ -91,6 +91,24 @@ test("mobile layout keeps every scene inside the viewport", async ({ page }) => 
   }
 });
 
+test("the footer links to X and opens a feedback email", async ({ page }) => {
+  await page.goto("/landing");
+  const footer = page.getByRole("navigation", { name: "Footer" });
+  const x = footer.getByRole("link", { name: /@hoddfinance/ });
+  await expect(x).toHaveAttribute("href", "https://x.com/hoddfinance");
+  await expect(x).toHaveAttribute("target", "_blank");
+  await expect(x).toHaveAttribute("rel", /noopener/);
+  await expect(footer.getByRole("link", { name: "Feedback" })).toHaveAttribute("href", /^mailto:info@hoddfinance\.xyz/);
+});
+
+test("the closing section shows a single star", async ({ page }) => {
+  await page.goto("/landing");
+  const cta = page.locator("#cta");
+  await cta.scrollIntoViewIfNeeded();
+  await expect(cta.locator("img")).toHaveCount(1);
+  await expect(cta.getByText("Hodd Finance", { exact: true })).toHaveCount(0);
+});
+
 test("system tabs describe live features", async ({ page }) => {
   await page.goto("/landing");
   const liquidity = page.getByRole("button", { name: /02\s*liquidity/i });
