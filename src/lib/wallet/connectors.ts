@@ -12,7 +12,7 @@ import { ARC_GAS_STATION_PAYMASTER, walletFeeQuoteSchema } from "./fee-quote";
 import { WalletPreflightError, walletPreflight } from "./preflight";
 
 export interface InjectedProvider {
-  isMetaMask?: boolean; isRabby?: boolean; providers?: InjectedProvider[];
+  isMetaMask?: boolean; isRabby?: boolean; isBraveWallet?: boolean; isCoinbaseWallet?: boolean; isTrust?: boolean; isTrustWallet?: boolean; isOkxWallet?: boolean; isOKExWallet?: boolean; isPhantom?: boolean; providers?: InjectedProvider[];
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
   on?(event: string, listener: (...args: unknown[]) => void): void;
   removeListener?(event: string, listener: (...args: unknown[]) => void): void;
@@ -23,9 +23,42 @@ declare global { interface Window { ethereum?: InjectedProvider } }
 const ARC_CHAIN_HEX = "0x4cef52";
 const connection = (provider: WalletConnection["provider"], address: string, label: string, accountType: WalletConnection["accountType"], walletId?: string): WalletConnection => ({ provider, custody: "USER_CONTROLLED", accountType, walletId, chain: "ARC-TESTNET", chainId: 5_042_002, address: getAddress(address), label, connectedAt: new Date().toISOString() });
 
-function injectedProvider(kind: "METAMASK" | "RABBY") {
+type InjectedKind = "METAMASK" | "RABBY";
+type Eip6963Detail = Readonly<{ info: Readonly<{ uuid: string; name: string; icon: string; rdns: string }>; provider: InjectedProvider }>;
+const EIP6963_RDNS = { METAMASK: "io.metamask", RABBY: "io.rabby" } as const satisfies Record<InjectedKind, string>;
+const EIP6963_WAIT_MS = 300;
+// Rabby and Brave Wallet set isMetaMask too, and may own window.ethereum. MetaMask is never one of these.
+const METAMASK_LOOKALIKES = ["isRabby", "isBraveWallet", "isCoinbaseWallet", "isTrust", "isTrustWallet", "isOkxWallet", "isOKExWallet", "isPhantom"] as const satisfies readonly (keyof InjectedProvider)[];
+
+// EIP-6963 announcements are collected from module load, so one that arrives before the user clicks is not lost.
+const announced = new Map<string, Eip6963Detail>();
+const announcedProvider = (kind: InjectedKind) => [...announced.values()].find((detail) => detail.info.rdns === EIP6963_RDNS[kind])?.provider ?? null;
+if (typeof window !== "undefined") {
+  window.addEventListener("eip6963:announceProvider", (event) => {
+    const detail = (event as CustomEvent<Partial<Eip6963Detail> | null>).detail;
+    if (typeof detail?.info?.uuid === "string" && typeof detail.info.rdns === "string" && typeof detail.provider?.request === "function") announced.set(detail.info.uuid, detail as Eip6963Detail);
+  });
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+}
+
+// Asks every wallet to announce again and waits briefly for slow ones, resolving as soon as the wanted wallet is known.
+const discoverAnnounced = (kind: InjectedKind) => new Promise<InjectedProvider | null>((resolve) => {
+  const settle = () => { clearTimeout(timer); window.removeEventListener("eip6963:announceProvider", onAnnounce); resolve(announcedProvider(kind)); };
+  const onAnnounce = () => { if (announcedProvider(kind)) settle(); };
+  const timer = setTimeout(settle, EIP6963_WAIT_MS);
+  window.addEventListener("eip6963:announceProvider", onAnnounce);
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+});
+
+// Fallback for wallets without EIP-6963: whatever owns window.ethereum (or its legacy providers list).
+function legacyProvider(kind: InjectedKind) {
   const root = window.ethereum; const providers = root?.providers?.length ? root.providers : root ? [root] : [];
-  return providers.find((item) => kind === "RABBY" ? item.isRabby : item.isMetaMask && !item.isRabby) ?? null;
+  return providers.find((item) => kind === "RABBY" ? item.isRabby : item.isMetaMask && !METAMASK_LOOKALIKES.some((flag) => item[flag])) ?? null;
+}
+
+// The one provider every later request (signing, Gateway, chain switches, listeners) goes through for this kind.
+async function injectedProvider(kind: InjectedKind) {
+  return announcedProvider(kind) ?? await discoverAnnounced(kind) ?? legacyProvider(kind);
 }
 
 async function ensureArcTestnet(provider: InjectedProvider) {
@@ -40,8 +73,8 @@ async function ensureArcTestnet(provider: InjectedProvider) {
   if (String(await provider.request({ method: "eth_chainId" })).toLowerCase() !== ARC_CHAIN_HEX) throw new Error("Switch your wallet to Arc Testnet.");
 }
 
-export async function connectInjectedWallet(kind: "METAMASK" | "RABBY"): Promise<{ runtime: ActiveWalletRuntime; provider: InjectedProvider }> {
-  const provider = injectedProvider(kind);
+export async function connectInjectedWallet(kind: InjectedKind): Promise<{ runtime: ActiveWalletRuntime; provider: InjectedProvider }> {
+  const provider = await injectedProvider(kind);
   if (!provider) throw new Error(`${kind === "RABBY" ? "Rabby" : "MetaMask"} was not detected in this browser.`);
   await ensureArcTestnet(provider);
   const accounts = await provider.request({ method: "eth_requestAccounts" });
