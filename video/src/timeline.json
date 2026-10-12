@@ -1,0 +1,25 @@
+{
+  "fps": 30,
+  "bpm": 120,
+  "framesPerBar": 60,
+  "scenes": [
+    { "id": "intro", "bars": 4, "music": "intro" },
+    { "id": "problem", "bars": 4, "music": "build" },
+    { "id": "reveal", "bars": 2, "music": "dropA" },
+    { "id": "overview", "bars": 5, "music": "dropA" },
+    { "id": "engine", "bars": 2, "music": "dropA" },
+    { "id": "obligations", "bars": 4, "music": "dropA" },
+    { "id": "leadtime", "bars": 3, "music": "dropA" },
+    { "id": "strategies", "bars": 4, "music": "dropA" },
+    { "id": "payments", "bars": 3, "music": "dropA" },
+    { "id": "gateway", "bars": 3, "music": "dropA" },
+    { "id": "agentBreak", "bars": 2, "music": "break" },
+    { "id": "autopilot", "bars": 5, "music": "dropB" },
+    { "id": "hoddie", "bars": 5, "music": "dropB" },
+    { "id": "claude", "bars": 2, "music": "dropB" },
+    { "id": "guardrails", "bars": 4, "music": "dropB" },
+    { "id": "record", "bars": 2, "music": "dropB" },
+    { "id": "stack", "bars": 3, "music": "dropB" },
+    { "id": "outro", "bars": 4, "music": "outro" }
+  ]
+}

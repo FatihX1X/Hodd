@@ -1,0 +1,26 @@
+{
+  "name": "hodd-film",
+  "private": true,
+  "description": "Hodd Finance launch film, built with Remotion from real console screens.",
+  "scripts": {
+    "capture": "node scripts/capture-app.mjs",
+    "music": "python3 scripts/compose_music.py",
+    "studio": "remotion studio",
+    "render": "remotion render HoddFilm out/hodd-finance-film.mp4 --browser-executable=${HEADLESS_SHELL:-/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell}",
+    "typecheck": "tsc --noEmit",
+    "stills": "node scripts/stills.mjs"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.528",
+    "@remotion/cli": "4.0.528",
+    "@remotion/renderer": "4.0.528",
+    "@remotion/transitions": "4.0.528",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.528"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "typescript": "5.9.2"
+  }
+}
