@@ -1,3 +1,5 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
+import { strategyObservation } from "@/lib/treasury/live";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { encodeFunctionData, erc20Abi, getAddress } from "viem";
@@ -22,7 +24,7 @@ export async function freshPaymentWorkspace(context: PaymentContext) {
   const now = Date.now();
   if ([snapshot, ...positions].some((item) => now - Date.parse(item.observedAt) > 60_000 || Date.parse(item.observedAt) > now + 5_000) || positions.some((item) => item.liquidityStatus !== "READY")) throw new EarnAccessError("STALE_PAYMENT_INPUTS", "Fresh wallet and vault positions are required before payment review.", 409);
   const balance = addUsdc(positions.map((item) => item.currentBalance)); const redeemable = addUsdc(positions.map((item) => item.redeemable));
-  return { ...context.workspace, liquidUsdc: snapshot.balance, totalTreasury: addUsdc([snapshot.balance, balance]), strategies: [{ id: "live-morpho", name: "Morpho", kind: "MORPHO" as const, balance, redeemable, risk: "MODERATE" as const, liquidity: "VARIABLE" as const, integration: "LIVE" as const, apyBps: null }] };
+  return { ...context.workspace, liquidUsdc: snapshot.balance, totalTreasury: addUsdc([snapshot.balance, balance]), strategies: [{ ...strategyObservation(positions), id: "live-morpho", name: "Morpho", kind: "MORPHO" as const, balance, redeemable, risk: "MODERATE" as const, liquidity: "VARIABLE" as const, integration: "LIVE" as const, apyBps: null }] };
 }
 export const transferCall = (proposal: Pick<PaymentProposal, "recipientAddress" | "amount">) => ({ to: ARC_TESTNET_USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(proposal.recipientAddress), BigInt(proposal.amount.minorUnits)] }), value: "0" });
 export async function readPayment(context: PaymentContext, id: string, recovery = false) {
@@ -44,7 +46,7 @@ export async function createPaymentProposal(context: PaymentContext, obligationI
   const [feeQuote, block] = await Promise.all([quotePaymentFees(context, call), arcClient.getBlockNumber()]);
   const budget = feeQuote?.maxNativeFeeWei ?? "0";
   const feeReserve = feeQuote?.maxWalletDebit ?? addUsdc([]);
-  let policy = assessPayment(workspace, obligation, feeReserve);
+  let policy = assessPayment(workspace, obligation, feeReserve, new Date(), await loadProtectionContext(context.userId, context.scope));
   if (!feeQuote) policy = { status: "BLOCKED", label: "Provider fee quote", reason: "Server-verified deployment, verification and paymaster fee ceilings are not available. No zero-fee assumption is used." };
   // Each payment is proven by its own verified receipt; no per-wallet smoke ritual.
   const executionEnabled = Boolean(feeQuote) && isExecutionAvailable(mode);

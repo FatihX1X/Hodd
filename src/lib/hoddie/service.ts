@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { applyChange, changeSchemas, REQUEST_KINDS, type ChangeKind } from "@/lib/agent/changes";
@@ -19,14 +20,14 @@ const say = (language: "en" | "tr", en: string, tr: string) => language === "tr"
 async function evaluatedChange(context: HoddieContext, kind: ChangeKind, raw: unknown, newId: string) {
   const change = changeSchemas[kind].parse(raw);
   if ("dueDate" in change && change.dueDate) dueDate("EXPLICIT", String(change.dueDate), "UTC");
-  const live = await liveWorkspace(context.workspace);
+  const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId)]);
   if (REQUEST_KINDS.includes(kind) && live.source !== "LIVE") throw new HoddieError("LIVE_DATA_REQUIRED", "Connect a wallet with complete, fresh balances and Morpho positions before preparing a money request.", 409);
   if (kind === "PAYMENT_REQUEST") {
     const id = (change as { obligationId: string }).obligationId;
     const obligation = live.workspace.obligations.find((item) => item.id === id);
     if (!obligation) throw new HoddieError("NOT_FOUND", "Select a current obligation.");
     const fee = await estimateTransferFee(live.workspace, obligation.recipientAddress, obligation.amount);
-    const check = paymentCheckView(live.workspace, obligation, fee);
+    const check = paymentCheckView(live.workspace, obligation, fee, new Date(), protectionContext);
     if (!check.canPayNow) throw new HoddieError("POLICY_BLOCKED", check.policy.reason, 409);
   }
   if (kind === "EARN_REQUEST") {
@@ -37,13 +38,13 @@ async function evaluatedChange(context: HoddieContext, kind: ChangeKind, raw: un
     const amount = request.operation === "REDEEM_ALL" ? position?.redeemable : request.amount ? decimalStringToMoney(request.amount) : undefined;
     if (!amount || BigInt(amount.minorUnits) <= 0n) throw new HoddieError("AMOUNT_REQUIRED", "Enter a positive amount or choose a funded position.");
     if (request.operation !== "DEPOSIT" && (!position || [position.currentBalance, position.redeemable, position.maxWithdrawable, vault.liquidity].some((limit) => BigInt(amount.minorUnits) > BigInt(limit.minorUnits)))) throw new HoddieError("POLICY_BLOCKED", "The requested withdrawal exceeds this vault's fresh position or available liquidity.", 409);
-    const policy = assessEarnOperation(live.workspace, live.portfolio!.positions, request.operation, amount, zero);
+    const policy = assessEarnOperation(live.workspace, live.portfolio!.positions, request.operation, amount, zero, new Date(), protectionContext);
     if (policy.status === "BLOCKED") throw new HoddieError("POLICY_BLOCKED", policy.reason, 409);
   }
   // Keep stored balances as stored; only the impact uses a fresh operational view.
   const applied = applyChange(context.workspace, kind, change, new Date(), () => newId, "Hoddie");
-  const before = assessTreasury(live.workspace);
-  const after = assessTreasury(applyChange(live.workspace, kind, change, new Date(), () => newId, "Hoddie").workspace);
+  const before = assessTreasury(live.workspace, new Date(), protectionContext);
+  const after = assessTreasury(applyChange(live.workspace, kind, change, new Date(), () => newId, "Hoddie").workspace, new Date(), protectionContext);
   return { change, applied, live, impact: [{ label: "Deployable capital", before: usdc(before.deployableCapital), after: usdc(after.deployableCapital) }, { label: "Protected capital", before: usdc(before.protectedCapital), after: usdc(after.protectedCapital) }, { label: "Coverage", before: before.coverageStatus, after: after.coverageStatus }] };
 }
 
@@ -107,22 +108,22 @@ export async function resolveIntent(context: HoddieContext, consent: Consent, in
   }
   if (intent.action === "NAVIGATE") return { ...base, message: say(language, "Open this Hodd area.", "Hodd içinde bu bölümü aç."), navigation: intent.route ?? "/" };
   if (intent.action === "HELP") return { ...base, message: say(language, "Ask for your treasury summary, bills, policy, payment feasibility or an allocation preview. Changes need an Apply change click; payment and Earn need a separate wallet signature.", "Hesap özeti, yükümlülükler, policy, ödeme uygunluğu veya yatırım önizlemesi isteyebilirsin. Değişiklikler Apply change ile, ödeme ve Earn ayrıca wallet imzasıyla onaylanır.") };
-  const live = await liveWorkspace(context.workspace); const workspace = live.workspace;
+  const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId)]); const workspace = live.workspace;
   base.source = live.source; base.observedAt = live.snapshot?.observedAt ?? new Date().toISOString();
   if (intent.action === "OVERVIEW") {
-    const view = overviewView(workspace);
-    base.cards = [card("Treasury overview", { "Total treasury": view.totalTreasury, "Liquid USDC": view.liquidUsdc, "Obligations · 30 days": view.upcomingObligations30d, "Protected capital": view.protectedCapital, "Deployable capital": view.deployableCapital, "Liquidity coverage": view.liquidityCoverage ?? view.coverageStatus, "Coverage status": view.coverageStatus }), ...view.strategies.map((item) => card(item.name, { Balance: item.balance, Redeemable: item.redeemable, Integration: item.integration })), ...(view.nextPayment ? [card("Next payment", { Title: view.nextPayment.title, Amount: view.nextPayment.amount, Due: view.nextPayment.dueDate, Status: view.nextPayment.feasibility?.status, Shortfall: view.nextPayment.feasibility?.shortfall })] : [])];
+    const view = overviewView(workspace, new Date(), protectionContext);
+    base.cards = [card("Treasury overview", { "Total treasury": view.totalTreasury, "Liquid USDC": view.liquidUsdc, "Protected obligations": view.protectedObligations, "Planned obligations · 30 days": view.plannedObligations, "Protection lead days": view.protectionLeadDays, "Protected capital": view.protectedCapital, "Deployable capital": view.deployableCapital, "Liquidity coverage": view.liquidityCoverage ?? view.coverageStatus, "Coverage status": view.coverageStatus }), ...view.strategies.map((item) => card(item.name, { Balance: item.balance, Redeemable: item.redeemable, Integration: item.integration })), ...(view.nextPayment ? [card("Next payment", { Title: view.nextPayment.title, Amount: view.nextPayment.amount, Due: view.nextPayment.dueDate, Status: view.nextPayment.feasibility?.status, Shortfall: view.nextPayment.feasibility?.shortfall })] : [])];
     base.cards.push(card("Protected reserves", { "Safety buffer": view.safetyBuffer, "Pending payments": view.pendingPayments }), ...view.violations.map((item) => card(item.code, { Status: item.severity, Reason: item.message })));
   }
   if (intent.action === "OBLIGATIONS") {
     const items = workspace.obligations.map((item) => item.status === "UPCOMING" && Date.parse(item.dueAt) < Date.now() ? { ...item, status: "OVERDUE" as const } : item).filter((item) => !intent.status || item.status === intent.status).filter((item) => !date || item.dueAt.slice(0, 10) <= date);
-    base.cards = items.slice(0, 20).map((item) => card(item.title, obligationView(workspace, item)));
+    base.cards = items.slice(0, 20).map((item) => card(item.title, obligationView(workspace, item, new Date(), protectionContext)));
     if (items.length === 1) base.selectionRef = issueReview(context, consent, "REFERENCE", { obligationId: items[0].id }).handle;
     if (!items.length) base.message = say(language, "No obligations match this filter.", "Bu filtreye uyan yükümlülük yok.");
   }
   if (intent.action === "POLICY") {
-    base.cards = [card("Treasury policy", policyView(workspace)), card("How protection works", {
-      "Protected capital": "Active obligations within 30 days + safety buffer + pending transactions",
+    base.cards = [card("Treasury policy", policyView(workspace, protectionContext)), card("How protection works", {
+      "Protected capital": `Bills due within ${policyView(workspace, protectionContext).effectiveProtectionLeadDays} days, overdue or unsafe to fund from Morpho + safety buffer + pending transactions; plan 30 days ahead`,
       "Deployable capital": "max(total treasury − protected capital, 0)",
       "Liquidity coverage": "Safely available liquid + redeemable assets / protected obligations; no obligations is a separate status",
       "Strategy limits": "Caps and availability limit previews. Unallocated capital stays liquid; nothing moves automatically.",
@@ -130,7 +131,7 @@ export async function resolveIntent(context: HoddieContext, consent: Consent, in
   }
   if (intent.action === "ALLOCATION") {
     if (live.source === "PARTIAL") throw new HoddieError("LIVE_DATA_REQUIRED", "Some positions are unavailable. An allocation preview cannot use incomplete balances.", 409);
-    const view = allocationView(workspace); base.cards = [card("Allocation preview", { Status: view.status, "Deployable capital": view.deployableCapital, "Stays liquid": view.stayingLiquid }), ...view.lines.map((item) => card(item.strategy, { Requested: item.requested, Approved: item.approved, Reason: item.reason }))];
+    const view = allocationView(workspace, new Date(), protectionContext); base.cards = [card("Allocation preview", { Status: view.status, "Deployable capital": view.deployableCapital, "Stays liquid": view.stayingLiquid }), ...view.lines.map((item) => card(item.strategy, { Requested: item.requested, Approved: item.approved, Reason: item.reason }))];
   }
   if (intent.action === "ACTIVITY") base.cards = workspace.activities.slice(0, 20).map((item) => card(item.action, { Summary: item.summary, Actor: item.actor, At: item.occurredAt, Policy: item.policy.status, Approval: item.approval, Execution: item.execution, "Transaction hash · audit reference": item.transactionHash ?? "None", "Record type": "LOCAL AUDIT · canonical receipts are in payment history / existing execution results" }));
   if (intent.action === "PAYMENTS") {
@@ -142,7 +143,7 @@ export async function resolveIntent(context: HoddieContext, consent: Consent, in
   if (intent.action === "CHECK_PAYMENT") {
     if (live.source === "PARTIAL") throw new HoddieError("LIVE_DATA_REQUIRED", "Payment feasibility requires complete fresh balances and positions.", 409);
     const items = workspace.obligations.filter((item) => selected ? item.id === selected : ["UPCOMING", "OVERDUE"].includes(item.status) && item.dueAt.slice(0, 10) <= date!);
-    base.cards = await Promise.all(items.slice(0, 20).map(async (item) => { const fee = await estimateTransferFee(workspace, item.recipientAddress, item.amount); const view = paymentCheckView(workspace, item, fee); return card(item.title, { Policy: view.policy.status, Reason: view.policy.reason, "Estimated fee · preview only": view.estimatedFee, "Required liquid": view.requiredLiquid, "Current liquid": view.liquidUsdc, Funding: view.funding.message }); }));
+    base.cards = await Promise.all(items.slice(0, 20).map(async (item) => { const fee = await estimateTransferFee(workspace, item.recipientAddress, item.amount); const view = paymentCheckView(workspace, item, fee, new Date(), protectionContext); return card(item.title, { Policy: view.policy.status, Reason: view.policy.reason, "Estimated fee · preview only": view.estimatedFee, "Required liquid": view.requiredLiquid, "Current liquid": view.liquidUsdc, Funding: view.funding.message }); }));
     if (selected) base.selectionRef = issueReview(context, consent, "REFERENCE", { obligationId: selected }).handle;
   }
   base.message += ` ${live.note}`;

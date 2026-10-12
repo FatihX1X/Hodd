@@ -60,7 +60,7 @@ describe("charts", () => {
   it("renders weekly outflows with a total in its description and a tooltip only on hover", () => {
     const weeks = weeklyOutflows(initialWorkspace.obligations, at);
     const { container } = render(<WeeklyOutflowChart weeks={weeks} />);
-    expect(screen.getByRole("img", { name: /protected outflows by week for the next 13 weeks: 4,500.00 usdc in total/i })).toBeVisible();
+    expect(screen.getByRole("img", { name: /scheduled outflows by week for the next 13 weeks: 4,500.00 usdc in total/i })).toBeVisible();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     const busiest = weeks.findIndex((week) => week.total === Math.max(...weeks.map((item) => item.total)));
     fireEvent.pointerEnter(container.querySelectorAll(".flex.h-full")[busiest]);
@@ -117,10 +117,29 @@ describe("obligations detail in a live test workspace", () => {
 });
 
 describe("policy page", () => {
+  it("saves custom lead days and restores automatic mode", async () => {
+    const user = userEvent.setup(); renderWorkspace(<PolicyView />);
+    const control = await screen.findByLabelText("Protection lead time"); await waitFor(() => expect(control).toBeEnabled());
+    expect(control).toHaveValue("AUTOMATIC"); expect(screen.getByText("3 days while Autopilot runs, 7 days otherwise")).toBeVisible();
+    await user.selectOptions(control, "CUSTOM"); const days = screen.getByLabelText("Protection lead days");
+    await user.clear(days); await user.type(days, "10"); await user.click(screen.getByRole("button", { name: /save policy and recalculate/i }));
+    await waitFor(() => expect(screen.getByText(/Bills due within 10 days/)).toBeVisible());
+    expect(JSON.parse(window.localStorage.getItem("hodd.stage5.workspace.v4:test-user")!).policy.protectionLeadDays).toBe(10);
+    await user.selectOptions(control, "AUTOMATIC"); await user.click(screen.getByRole("button", { name: /save policy and recalculate/i }));
+    await waitFor(() => expect(screen.getByText(/Bills due within 7 days/)).toBeVisible());
+    expect(JSON.parse(window.localStorage.getItem("hodd.stage5.workspace.v4:test-user")!).policy.protectionLeadDays).toBeNull();
+  });
+  it.each(["2", "31", "3.5"])("rejects invalid lead %s", async (value) => {
+    const user = userEvent.setup(); renderWorkspace(<PolicyView />);
+    const control = await screen.findByLabelText("Protection lead time"); await waitFor(() => expect(control).toBeEnabled());
+    await user.selectOptions(control, "CUSTOM"); const days = screen.getByLabelText("Protection lead days"); await user.clear(days); await user.type(days, value);
+    fireEvent.submit(screen.getByRole("button", { name: /save policy and recalculate/i }).closest("form")!);
+    expect(screen.getByRole("alert")).toHaveTextContent("integer from 3 to 30 days");
+  });
   it("states the policy in plain language and saves new values", async () => {
     const user = userEvent.setup();
     renderWorkspace(<PolicyView />);
-    expect(await screen.findByText(/protect obligations due in the next 30 days plus a 1.00 usdc safety buffer/i)).toBeVisible();
+    expect(await screen.findByText(/Bills due within 7 days.*1.00 usdc safety buffer/i)).toBeVisible();
     expect(screen.getByText(/place at most 60% in morpho/i)).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText("Safety buffer")).toBeEnabled());
     await user.clear(screen.getByLabelText("Safety buffer")); await user.type(screen.getByLabelText("Safety buffer"), "1500");

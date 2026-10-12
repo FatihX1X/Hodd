@@ -73,7 +73,7 @@ describe("can I pay it?", () => {
   it("suggests a Morpho withdrawal when liquid USDC is short but redeemable funds cover it", () => {
     const workspace = fresh();
     const morpho = workspace.strategies.find((item) => item.kind === "MORPHO")!;
-    morpho.integration = "LIVE"; morpho.redeemable = { currency: "USDC", decimals: 6, minorUnits: "1000000000000" };
+    morpho.integration = "LIVE"; morpho.observedAt = now.toISOString(); morpho.liquidityStatus = "READY"; morpho.redeemable = { currency: "USDC", decimals: 6, minorUnits: "1000000000000" };
     workspace.liquidUsdc = { currency: "USDC", decimals: 6, minorUnits: "1000000" };
     const check = paymentCheckView(workspace, workspace.obligations[1], fee, now);
     expect(check.canPayNow).toBe(false);

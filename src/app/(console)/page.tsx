@@ -32,9 +32,9 @@ function HeroFigure({ money }: { money: Money }) {
 }
 
 export default function PortfolioPage() {
-  const { workspace, operationalWorkspace, assessment, walletState, earnState, hydrated, mode } = useTreasuryWorkspace();
+  const { workspace, operationalWorkspace, assessment, walletState, earnState, hydrated, mode, autopilotActive } = useTreasuryWorkspace();
   if (!assessment || !operationalWorkspace) return <>
-    <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Treasury Engine</p><p className="mt-2 text-lg text-[#ff9a92]">Awaiting verified balance</p><div className="mt-2"><StatusPill label="PAUSED" tone="danger" /></div></div>} />
+    <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="Plan 30 days ahead and protect near-term bills, with automatic protection when Morpho funding is unsafe." aside={<div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Treasury Engine</p><p className="mt-2 text-lg text-[#ff9a92]">Awaiting verified balance</p><div className="mt-2"><StatusPill label="PAUSED" tone="danger" /></div></div>} />
     <TreasuryNotice>Connect your own Arc Testnet wallet to see live USDC balances. Financial calculations wait for a verified balance.</TreasuryNotice>
     <PageBody><OnboardingChecklist /><div id="treasury-wallet"><WalletPanel /></div><AgentRequests /><UnifiedBalancePanel /><div role="status" className="mt-6 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-5 text-sm text-[#ff9a92]">Financial metrics and allocation previews are unavailable while the authoritative treasury balance cannot be verified.</div></PageBody>
   </>;
@@ -42,7 +42,7 @@ export default function PortfolioPage() {
   const evaluatedAt = new Date(assessment.evaluatedAt);
   const next = assessment.nextPayment;
   const feasibility = assessment.nextPaymentFeasibility;
-  const alsoDue = getProtectedObligations(operationalWorkspace, evaluatedAt).filter((item) => item.id !== next?.id).slice(0, 4);
+  const alsoDue = getProtectedObligations(operationalWorkspace, evaluatedAt, { autopilotActive }).filter((item) => item.id !== next?.id).slice(0, 4);
   const runway = runwayProjection(operationalWorkspace, evaluatedAt);
   const allocation = allocationByLiquidity(operationalWorkspace.strategies);
   const belowZero = runway.points.find((point) => point.day === runway.firstBelowZeroDay);
@@ -60,7 +60,7 @@ export default function PortfolioPage() {
   });
 
   return <>
-    <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="A deterministic treasury view that protects the next 30 days of obligations before capital becomes deployable." aside={<div className="space-y-3"><div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Liquidity coverage</p><p className="mono mt-2 text-3xl text-[#9ec5f4]">{assessment.liquidityCoverageBps === null ? "No obligations" : formatPercentFromBps(assessment.liquidityCoverageBps)}</p><div className="mt-2"><StatusPill label={assessment.coverageStatus.replace("_", " ")} tone={assessment.coverageStatus === "SAFE" ? "success" : assessment.coverageStatus === "AT_RISK" ? "danger" : "warning"} /></div></div><PolicyPanel /></div>} />
+    <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="Plan 30 days ahead and protect near-term bills, with automatic protection when Morpho funding is unsafe." aside={<div className="space-y-3"><div className="min-w-56 border border-white/15 bg-white/[0.04] p-4"><p className="mono text-[9px] uppercase tracking-[0.16em] text-white/45">Liquidity coverage</p><p className="mono mt-2 text-3xl text-[#9ec5f4]">{assessment.liquidityCoverageBps === null ? "No obligations" : formatPercentFromBps(assessment.liquidityCoverageBps)}</p><div className="mt-2"><StatusPill label={assessment.coverageStatus.replace("_", " ")} tone={assessment.coverageStatus === "SAFE" ? "success" : assessment.coverageStatus === "AT_RISK" ? "danger" : "warning"} /></div></div><PolicyPanel /></div>} />
     <TreasuryNotice>{hydrated ? "Live Arc Testnet balances from your own wallet. Your wallet signs every transaction." : "Loading your treasury workspace…"}</TreasuryNotice>
     <PageBody>
       <OnboardingChecklist />
@@ -98,21 +98,23 @@ export default function PortfolioPage() {
                 <div><dt className={labelClass}>Funding sources</dt><dd className="mono mt-2 text-xs">{feasibility.steps.map((step) => step.source.replaceAll("_", " ")).join(" + ") || "None available"}</dd></div>
               </dl>
               <Link href="/obligations" className={`${buttonClass.ghost} mt-6`}>Review obligations <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
-            </> : <p className="mt-5 text-sm text-white/55">No protected obligations in the 30-day horizon.</p>}
+            </> : <p className="mt-5 text-sm text-white/55">No bills currently require protection.</p>}
           </div>
         </section>
       </div>
 
       <KpiGrid label="Treasury overview" className="mt-6">
-        <Kpi label="Upcoming obligations" value={<MoneyValue money={assessment.upcomingObligations} compact />} detail="Active or overdue within 30 days" />
+        <Kpi label="Protected obligations" value={<MoneyValue money={assessment.upcomingObligations} compact />} detail={`Within ${assessment.protectionLeadDays} days or unsafe to fund from Morpho`} />
         <Kpi label="Protected capital" value={<MoneyValue money={assessment.protectedCapital} compact />} detail="Obligations + buffer + pending" />
         <Kpi label="Deployable capital" value={<MoneyValue money={assessment.deployableCapital} compact />} detail="Deterministic, never below zero" accent />
         <Kpi label="Safely available liquidity" value={<MoneyValue money={assessment.safelyAvailableLiquidity} compact />} detail="Liquid USDC + redeemable positions" />
       </KpiGrid>
 
+      <p className="mt-3 text-xs text-white/55">Planned obligations within {workspace.policy.planningHorizonDays} days: {formatMoney(assessment.plannedObligations)}. Protection lead time: {assessment.protectionLeadDays} days; bills unsafe to fund from Morpho are kept liquid automatically.</p>
+
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.6fr_1fr]">
         <SectionCard>
-          <SectionHeading index="01.1" title="Runway" description={`Treasury balance after each protected obligation falls due, over ${runway.horizonDays} days`} action={
+          <SectionHeading index="01.1" title="Runway" description={`Treasury balance after each scheduled obligation falls due, over ${runway.horizonDays} days`} action={
             runway.firstBelowZeroDay !== null ? <StatusPill label="Below zero" tone="danger" /> : runway.firstBelowBufferDay !== null ? <StatusPill label="Below buffer" tone="warning" /> : <StatusPill label="Above buffer" tone="success" />
           } />
           <div className="p-5 md:p-6">
@@ -132,7 +134,7 @@ export default function PortfolioPage() {
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <SectionCard>
           <SectionHeading index="01.3" title="Also due" description="Protected obligations after the next payment" />
-          {alsoDue.length === 0 ? <p className="p-5 text-sm text-white/55">Nothing else is due inside the horizon.</p> : (
+          {alsoDue.length === 0 ? <p className="p-5 text-sm text-white/55">No other bills currently require protection.</p> : (
             <ul className="divide-y divide-white/10">{alsoDue.map((item) => (
               <li key={item.id} className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-5 py-4 sm:grid-cols-[88px_1fr_auto_auto]">
                 <span className={labelClass}>{formatDate(item.dueAt, monthDay)}</span>

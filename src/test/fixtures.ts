@@ -3,7 +3,7 @@ import { treasuryWorkspaceSchema, type Money } from "@/lib/treasury/models";
 export const usdc = (minorUnits: string): Money => ({ currency: "USDC", minorUnits, decimals: 6 });
 export const initialWorkspace = treasuryWorkspaceSchema.parse({
   schemaVersion: 4, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: "2026-09-27T09:30:00.000Z", totalTreasury: usdc("10000000000"), liquidUsdc: usdc("10000000000"), pendingTransactions: usdc("0"),
-  policy: { safetyBuffer: usdc("1000000000"), minimumLiquidityCoverageBps: 10000, obligationHorizonDays: 30,
+  policy: { safetyBuffer: usdc("1000000000"), minimumLiquidityCoverageBps: 10000, planningHorizonDays: 30, protectionLeadDays: null,
     strategyCapsBps: { LIQUID: 10000, MORPHO: 6000, USYC: 0, BTC_RESERVE: 0 }, enabledStrategies: { LIQUID: true, MORPHO: true, USYC: false, BTC_RESERVE: false },
     liquidityWaterfall: ["LIQUID_USDC", "MORPHO", "USYC", "BTC_CREDIT", "BTC_SALE"] },
   targetAllocationsBps: { LIQUID: 2000, MORPHO: 5000, USYC: 2000, BTC_RESERVE: 1000 },

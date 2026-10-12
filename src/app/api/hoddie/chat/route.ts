@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import { randomUUID } from "node:crypto";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { requestSchema, resultSchema, HoddieError, type HoddieMessage, type HoddieResult } from "@/lib/hoddie/models";
@@ -19,8 +20,8 @@ function reply(result: HoddieResult) {
 }
 async function basic(context: Awaited<ReturnType<typeof hoddieContext>>, question: string) {
   const now = new Date();
-  const live = await liveWorkspace(context.workspace);
-  return deterministicResult({ question, workspace: live.workspace, assessment: live.source === "PARTIAL" ? null : assessTreasury(live.workspace, now), evaluatedAt: now }, live.source);
+  const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId)]);
+  return deterministicResult({ question, workspace: live.workspace, assessment: live.source === "PARTIAL" ? null : assessTreasury(live.workspace, now, protectionContext), evaluatedAt: now, protectionContext }, live.source);
 }
 export async function POST(request: Request) {
   try {

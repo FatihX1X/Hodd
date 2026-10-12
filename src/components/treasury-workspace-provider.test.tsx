@@ -27,6 +27,32 @@ beforeEach(() => { mocks.owner = "alice"; mocks.load.mockReset().mockResolvedVal
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("LIVE provider", () => {
+  it("uses active Autopilot for every assessment and restores manual protection on pause, return, errors and sign-out", async () => {
+    const at = new Date(); const observedAt = at.toISOString();
+    const workspace = { ...createLiveStarterWorkspace(at), treasuryMode: "ARC_TESTNET_WALLET" as const, walletConnection: wallet };
+    workspace.obligations = [{ ...sampleWorkspace.obligations[0], id: "day-five", amount: usdc("2000000"), dueAt: new Date(at.getTime() + 5 * 86400000).toISOString() }];
+    mocks.load.mockResolvedValue(workspace);
+    let status = { mandate: { enabled: true, paused: false }, returnRequested: false }; let fail = false;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/autopilot/status") { if (fail) throw new Error("Unavailable"); return { ok: true, json: async () => status }; }
+      const data = url.includes("/api/arc/") ? { status: "READY", snapshot: { address: wallet.address, chain: "ARC-TESTNET", chainId: 5042002, balance: usdc("10000000"), blockNumber: "42", observedAt } } : { status: "READY", integration: { discovery: "READY", positionAccess: "READY", execution: "READ_ONLY", configuredWalletAddress: wallet.address, message: "Fixture" }, positions: [{ walletAddress: wallet.address, vaultAddress: wallet.address, vaultName: "Morpho", currentBalance: usdc("5000000"), redeemable: usdc("5000000"), maxWithdrawable: usdc("5000000"), liquidityStatus: "READY", shares: "5000000", apyBps: 0, pnl: { status: "UNAVAILABLE", reason: "Fixture" }, observedAt }], vaults: [], observedAt };
+      return { ok: true, json: async () => data };
+    }); vi.stubGlobal("fetch", fetcher); await mount();
+    await waitFor(() => expect(current.assessment?.protectionLeadDays).toBe(3));
+    expect(current.assessment?.upcomingObligations.minorUnits).toBe("0"); expect(current.assessment?.plannedObligations.minorUnits).toBe("2000000");
+    expect(current.operationalWorkspace?.strategies.find((item) => item.kind === "MORPHO")).toMatchObject({ observedAt, liquidityStatus: "READY" });
+    for (const change of [{ mandate: { enabled: true, paused: true }, returnRequested: false }, { mandate: { enabled: true, paused: false }, returnRequested: true }]) {
+      status = change; await act(async () => { window.dispatchEvent(new Event("hodd:autopilot-status")); });
+      await waitFor(() => expect(current.assessment?.protectionLeadDays).toBe(7)); expect(current.assessment?.upcomingObligations.minorUnits).toBe("2000000");
+    }
+    status = { mandate: { enabled: true, paused: false }, returnRequested: false };
+    await act(async () => { window.dispatchEvent(new Event("hodd:autopilot-status")); }); await waitFor(() => expect(current.autopilotActive).toBe(true));
+    await act(async () => { current.updatePolicy({ safetyBuffer: usdc("3000000"), minimumLiquidityCoverageBps: 10000, strategyCapsBps: workspace.policy.strategyCapsBps, protectionLeadDays: null }); });
+    expect(current.assessment?.protectedCapital.minorUnits).toBe("3000000"); expect(current.allocationPlan?.deployableCapital.minorUnits).toBe("12000000");
+    fail = true; await act(async () => { window.dispatchEvent(new Event("hodd:autopilot-status")); }); await waitFor(() => expect(current.autopilotActive).toBe(false));
+    expect(current.assessment?.protectionLeadDays).toBe(7);
+    await act(async () => { mocks.listener?.("SIGNED_OUT", null); }); await waitFor(() => expect(current.signedIn).toBe(false)); expect(current.autopilotActive).toBe(false);
+  });
   it("ignores obsolete URL and per-tab mode preferences", async () => {
     window.history.replaceState(null, "", "/?demo=1");
     window.sessionStorage.setItem("hodd:workspace-mode", "DEMO");

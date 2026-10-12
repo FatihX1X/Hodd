@@ -1,16 +1,16 @@
 import { answerQuestion, questionLanguage, type HoddieContext } from "./answers";
 import type { HoddieResult } from "./models";
-import { assessTreasury } from "@/lib/treasury/engine";
+import { assessTreasury, type ProtectionContext } from "@/lib/treasury/engine";
 import type { TreasuryAssessment, TreasuryWorkspace } from "@/lib/treasury/models";
 
 /** Disconnected live accounts never inherit persisted balances. */
-export function answerContext(question: string, workspace: TreasuryWorkspace, operational: TreasuryWorkspace | null, assessment: TreasuryAssessment | null, evaluatedAt = new Date()): HoddieContext {
+export function answerContext(question: string, workspace: TreasuryWorkspace, operational: TreasuryWorkspace | null, assessment: TreasuryAssessment | null, evaluatedAt = new Date(), protectionContext: ProtectionContext = { autopilotActive: false }): HoddieContext {
   if (!workspace.walletConnection) {
     const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
     const empty = { ...workspace, totalTreasury: zero, liquidUsdc: zero, pendingTransactions: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: strategy.kind === "USYC" || strategy.kind === "BTC_RESERVE" ? "UNAVAILABLE" as const : "UNAVAILABLE" as const })) };
-    return { question, workspace: empty, assessment: assessTreasury(empty, evaluatedAt), evaluatedAt };
+    return { question, workspace: empty, assessment: assessTreasury(empty, evaluatedAt, protectionContext), evaluatedAt, protectionContext };
   }
-  return { question, workspace: operational ?? workspace, assessment: operational && assessment ? assessTreasury(operational, evaluatedAt) : null, evaluatedAt };
+  return { question, workspace: operational ?? workspace, assessment: operational && assessment ? assessTreasury(operational, evaluatedAt, protectionContext) : null, evaluatedAt, protectionContext };
 }
 
 export function deterministicResult(context: HoddieContext, source: HoddieResult["source"]): HoddieResult {

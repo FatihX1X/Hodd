@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createViemAdapter } from "@circle-fin/adapter-viem-v2/next";
@@ -60,7 +61,7 @@ export async function prepareServerQuote(context: EarnContext, intent: EarnOpera
   });
   const fees = addUsdc([...raw.fees.map(asset), ...gasFees.flatMap((item) => item.amount ? [item.amount] : [])]);
   const warnings = [...live.vault.earnKitWarnings, ...live.vault.warnings.map((item) => `${item.level}: ${item.type}`), ...("earnKitWarnings" in raw ? raw.earnKitWarnings ?? [] : [])];
-  let policy = assessEarnOperation(live.workspace, live.positions, intent.operation, amount, fees);
+  let policy = assessEarnOperation(live.workspace, live.positions, intent.operation, amount, fees, new Date(), await loadProtectionContext(context.userId, context.scope));
   const maxWithdrawable = "maxWithdrawable" in raw ? asset(raw.maxWithdrawable) : null;
   if (intent.operation !== "DEPOSIT" && BigInt(amount.minorUnits) > BigInt(minUsdc(live.position.redeemable, maxWithdrawable ?? live.position.redeemable).minorUnits)) policy = { status: "BLOCKED", label: "Server liquidity policy", reason: "The amount exceeds fresh position, vault liquidity or quote limits." };
   if (!gasFees.length || gasFees.some((item) => item.amount === null)) policy = { status: "BLOCKED", label: "Fee reserve unavailable", reason: "A complete gas reserve could not be verified. No executable quote was created." };

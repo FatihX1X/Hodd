@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { z } from "zod";
 import { encodeFunctionData, erc20Abi, getAddress } from "viem";
@@ -68,14 +69,14 @@ async function prepare(auth: AuthInfo | undefined, workspaceScope: "TREASURY" | 
   const now = new Date();
   let applied;
   try { applied = applyChange(context.workspace, kind, change, now); } catch (error) { rejectChange(error); }
-  const live = await liveWorkspace(context.workspace);
-  const before = assessTreasury(live.workspace, now);
+  const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
+  const before = assessTreasury(live.workspace, now, protectionContext);
   const afterWorkspace = applyChange(live.workspace, kind, change, now).workspace;
-  const after = assessTreasury(afterWorkspace, now);
+  const after = assessTreasury(afterWorkspace, now, protectionContext);
   const extra: Record<string, unknown> = {};
   if (kind === "PAYMENT_REQUEST") {
     const obligation = live.workspace.obligations.find((item) => item.id === (change as { obligationId: string }).obligationId)!;
-    extra.paymentCheck = paymentCheckView(live.workspace, obligation, await estimateTransferFee(live.workspace, obligation.recipientAddress, obligation.amount), now);
+    extra.paymentCheck = paymentCheckView(live.workspace, obligation, await estimateTransferFee(live.workspace, obligation.recipientAddress, obligation.amount), now, protectionContext);
   }
   const { handle } = issueHandle({ uid: context.userId, cid: context.clientId, scope: workspaceScope, kind, rev: context.revision, change }, Date.now(), await confirmationKey(context.client));
   return {
@@ -128,45 +129,47 @@ export function registerHoddTools(server: McpServer) {
     return { userId: identity.userId, connection: identity.clientId, workspaces: scopes, today: new Date().toISOString().slice(0, 10) };
   }));
 
-  server.registerTool("hodd_get_overview", { title: "Treasury overview", description: "Live treasury: total, liquid USDC, Morpho positions, upcoming 30-day obligations, protected and deployable capital, coverage and the next payment's feasibility.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
+  server.registerTool("hodd_get_overview", { title: "Treasury overview", description: "Live treasury: total, liquid USDC, Morpho positions, 30-day planning, protected obligations and effective protection lead time, protected and deployable capital, coverage and the next payment's feasibility.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
     const context = await agentContext(auth, workspaceScope);
-    const live = await liveWorkspace(context.workspace);
-    return { dataSource: live.source, note: live.note, today: new Date().toISOString().slice(0, 10), wallet: context.workspace.walletConnection ? { provider: context.workspace.walletConnection.provider, address: context.workspace.walletConnection.address } : null, ...overviewView(live.workspace) };
+    const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
+    return { dataSource: live.source, note: live.note, today: new Date().toISOString().slice(0, 10), wallet: context.workspace.walletConnection ? { provider: context.workspace.walletConnection.provider, address: context.workspace.walletConnection.address } : null, ...overviewView(live.workspace, new Date(), protectionContext) };
   }));
 
   server.registerTool("hodd_list_obligations", { title: "List obligations", description: "Bills and obligations (payroll, rent, vendors, subscriptions, tax). Filter by status and due-date range.", inputSchema: z.object({ scope, status: z.array(z.enum(["UPCOMING", "DRAFT", "PAID", "OVERDUE"])).optional(), dueFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), dueTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; status?: string[]; dueFrom?: string; dueTo?: string }, auth) => {
     const context = await agentContext(auth, args.scope);
+    const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
     const items = context.workspace.obligations
       .filter((item) => !args.status?.length || args.status.includes(item.status))
       .filter((item) => (!args.dueFrom || item.dueAt.slice(0, 10) >= args.dueFrom) && (!args.dueTo || item.dueAt.slice(0, 10) <= args.dueTo))
       .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
-    return { today: new Date().toISOString().slice(0, 10), count: items.length, obligations: items.map((item) => obligationView(context.workspace, item)) };
+    return { today: new Date().toISOString().slice(0, 10), count: items.length, obligations: items.map((item) => obligationView(live.workspace, item, new Date(), protectionContext)) };
   }));
 
   server.registerTool("hodd_get_obligation", { title: "Get obligation", description: "One obligation by id.", inputSchema: z.object({ scope, obligationId: z.string().min(1) }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; obligationId: string }, auth) => {
     const context = await agentContext(auth, args.scope);
     const item = context.workspace.obligations.find((value) => value.id === args.obligationId);
     if (!item) throw new AgentError("NOT_FOUND", "No obligation with that id. Use hodd_list_obligations.");
-    return obligationView(context.workspace, item);
+    const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
+    return obligationView(live.workspace, item, new Date(), protectionContext);
   }));
 
   server.registerTool("hodd_check_payment", { title: "Can I pay it?", description: "Checks with live balances and Hodd's payment policy whether an obligation (by id), or every active obligation due on or before a date, can be paid now without breaking the safety buffer or earlier bills. Includes an estimated network fee and a funding plan (how much to withdraw from Morpho first). Use for questions like 'Can I pay tomorrow's bill?'.", inputSchema: z.object({ scope, obligationId: z.string().optional(), dueOnOrBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("YYYY-MM-DD; checks all upcoming/overdue obligations due by then") }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; obligationId?: string; dueOnOrBefore?: string }, auth) => {
     if (!args.obligationId && !args.dueOnOrBefore) throw new AgentError("INVALID_INPUT", "Give an obligationId or a dueOnOrBefore date.");
     const context = await agentContext(auth, args.scope);
-    const live = await liveWorkspace(context.workspace);
+    const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
     const targets = live.workspace.obligations
       .filter((item) => args.obligationId ? item.id === args.obligationId : ["UPCOMING", "OVERDUE"].includes(item.status) && item.dueAt.slice(0, 10) <= args.dueOnOrBefore!)
       .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
     if (!targets.length) return { dataSource: live.source, note: live.note, today: new Date().toISOString().slice(0, 10), checks: [], message: args.obligationId ? "No obligation with that id." : "No upcoming or overdue obligations are due by that date." };
     const checks = [];
-    for (const item of targets) checks.push(paymentCheckView(live.workspace, item, await estimateTransferFee(live.workspace, item.recipientAddress, item.amount)));
+    for (const item of targets) checks.push(paymentCheckView(live.workspace, item, await estimateTransferFee(live.workspace, item.recipientAddress, item.amount), new Date(), protectionContext));
     return { dataSource: live.source, note: live.note, today: new Date().toISOString().slice(0, 10), allPayableNow: checks.every((check) => check.canPayNow), checks, reminder: "Each check assumes the other listed bills are still unpaid but protected. Paying happens only in Hodd with your wallet signature." };
   }));
 
   server.registerTool("hodd_get_allocation_preview", { title: "Allocation preview", description: "How deployable capital would be split across strategies under the current targets and caps. Preview only.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
     const context = await agentContext(auth, workspaceScope);
-    const live = await liveWorkspace(context.workspace);
-    return { dataSource: live.source, dataNote: live.note, ...allocationView(live.workspace) };
+    const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
+    return { dataSource: live.source, dataNote: live.note, ...allocationView(live.workspace, new Date(), protectionContext) };
   }));
 
   server.registerTool("hodd_list_vaults_and_positions", { title: "Morpho vaults and positions", description: "Verified Morpho vaults (APY, liquidity) and this wallet's positions with redeemable amounts.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
@@ -177,7 +180,7 @@ export function registerHoddTools(server: McpServer) {
     return { dataSource: live.source, note: live.note, vaults: portfolio.vaults.map((vault) => ({ address: vault.address, name: vault.name, apy: vault.apyBps === null ? null : `${(vault.apyBps / 100).toFixed(2)}%`, liquidity: usdc(vault.liquidity), status: vault.status })), positions: portfolio.positions.map((position) => ({ vaultAddress: position.vaultAddress, vaultName: position.vaultName, balance: usdc(position.currentBalance), redeemable: usdc(position.redeemable), shares: position.shares, status: position.liquidityStatus })) };
   }));
 
-  server.registerTool("hodd_get_policy", { title: "Treasury policy", description: "Safety buffer, minimum liquidity coverage, strategy caps, enabled strategies and target allocations.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => policyView((await agentContext(auth, workspaceScope)).workspace)));
+  server.registerTool("hodd_get_policy", { title: "Treasury policy", description: "Safety buffer, minimum liquidity coverage, strategy caps, enabled strategies and target allocations.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => { const context = await agentContext(auth, workspaceScope); return policyView(context.workspace, await loadProtectionContext(context.userId, context.scope)); }));
 
   server.registerTool("hodd_list_activity", { title: "Activity log", description: "Recent treasury activity: who did what (you, the system, or Claude), with approval and policy results.", inputSchema: z.object({ scope, limit: z.number().int().min(1).max(100).default(20), actor: z.enum(["HUMAN", "AGENT", "SYSTEM"]).optional() }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; limit: number; actor?: string }, auth) => {
     const context = await agentContext(auth, args.scope);

@@ -10,7 +10,7 @@ import { answerContext, deterministicResult } from "@/lib/hoddie/deterministic";
 
 type ProviderInfo = { id: ProviderId; label: string; model: string; ready: boolean; note: string };
 function useHoddieState() {
-  const { workspace, workspaceScope, refreshWorkspace, operationalWorkspace, assessment, mode, readOnly, earnState, walletState } = useTreasuryWorkspace();
+  const { workspace, workspaceScope, refreshWorkspace, operationalWorkspace, assessment, mode, readOnly, earnState, walletState, autopilotActive } = useTreasuryWorkspace();
   const provider = "AUTO" as const;
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [allowed, setAllowed] = useState(false); const [signedIn, setSignedIn] = useState(false);
@@ -67,7 +67,7 @@ function useHoddieState() {
   const localAnswer = (message: string) => {
     const current = !signedIn ? { ...workspace, walletConnection: null } : workspace;
     const complete = !current.walletConnection || earnState?.status === "READY" && earnState.portfolio.integration.positionAccess === "READY";
-    const result = deterministicResult(answerContext(message, current, complete ? operationalWorkspace : null, complete ? assessment : null), !current.walletConnection ? "NOT_CONNECTED" : complete && operationalWorkspace ? "LIVE" : "PARTIAL");
+    const result = deterministicResult(answerContext(message, current, complete ? operationalWorkspace : null, complete ? assessment : null, new Date(), { autopilotActive }), !current.walletConnection ? "NOT_CONNECTED" : complete && operationalWorkspace ? "LIVE" : "PARTIAL");
     if (current.walletConnection && walletState?.status === "READY") result.observedAt = walletState.snapshot.observedAt;
     return result;
   };

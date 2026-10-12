@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { walletApiResponseSchema } from "@/lib/arc/schemas";
 import { earnPortfolioApiSchema, type EarnExecutionResult, type EarnPortfolioResponse } from "@/lib/earn/models";
+import { autopilotIsActive } from "@/lib/autopilot/protection";
 import { assessTreasury, previewAllocation } from "@/lib/treasury/engine";
 import { createLiveStarterWorkspace } from "@/lib/treasury/starter";
 import { canDeleteObligation, hasSampleData, removeSampleData } from "@/lib/treasury/sample-cleanup";
@@ -22,6 +23,7 @@ export type EarnReadState = Readonly<{ status: "IDLE" | "LOADING" }> | Readonly<
 type WorkspaceContextValue = {
   mode: "LIVE";
   signedIn: boolean;
+  autopilotActive: boolean;
   readOnly: boolean;
   deleteObligation(id: string): Promise<void>;
   workspaceScope: WorkspaceScope;
@@ -45,7 +47,7 @@ type WorkspaceContextValue = {
   recordEarnActivity(action: string, summary: string, reason: string, result?: EarnExecutionResult, state?: Pick<ActivityEntry, "approval" | "execution">): void;
   createObligation(input: ObligationInput): void;
   updateObligation(id: string, input: ObligationInput): void;
-  updatePolicy(policy: Pick<TreasuryPolicy, "safetyBuffer" | "minimumLiquidityCoverageBps" | "strategyCapsBps">): void;
+  updatePolicy(policy: Pick<TreasuryPolicy, "safetyBuffer" | "minimumLiquidityCoverageBps" | "strategyCapsBps" | "protectionLeadDays">): void;
   updateTargets(targets: Record<StrategyKind, number>): void;
   resetWorkspace(): void;
 };
@@ -87,6 +89,8 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   const [hydrated, setHydrated] = useState(false);
   const [storageIssue, setStorageIssue] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | undefined>();
+  const [autopilotStatus, setAutopilotStatus] = useState<{ userId: string; active: boolean } | null>(null);
+  const autopilotActive = workspaceScope === "TREASURY" && Boolean(userId && autopilotStatus?.userId === userId && autopilotStatus.active);
   const [cloudIssue, setCloudIssue] = useState<string | null>(null);
   const [cloudReadable, setCloudReadable] = useState(false);
   const [paymentLedgerRevision, setPaymentLedgerRevision] = useState(0);
@@ -117,7 +121,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" });
       const starter = createLiveStarterWorkspace();
       setWorkspace(starter); setStorageIssue(null); setCloudReadable(false);
-      setUserId(owner); setCloudIssue(null);
+      setUserId(owner); setAutopilotStatus(null); setCloudIssue(null);
       if (!owner) { setEvaluatedAt(starter.updatedAt); setHydrated(true); return; }
       const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${owner ?? "guest"}:smoke` : owner);
       const result = repository.load();
@@ -205,6 +209,29 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     return () => { active = false; window.removeEventListener("focus", onFocus); window.clearInterval(interval); };
   }, [hydrated, userId, cloudReadable, workspaceScope, adoptCloud]);
 
+  // GET status reads the mandate only; it never advances an agent run.
+  useEffect(() => {
+    if (!userId || !hydrated || workspaceScope !== "TREASURY") return;
+    let active = true;
+    let controller: AbortController | null = null;
+    const load = async () => {
+      controller?.abort();
+      const request = new AbortController(); controller = request;
+      let running = false;
+      try {
+        const response = await fetch("/api/autopilot/status", { cache: "no-store", signal: request.signal });
+        if (response.ok) running = autopilotIsActive(await response.json());
+      } catch { /* Errors keep the manual protection default. */ }
+      if (active && !request.signal.aborted) { setAutopilotStatus({ userId, active: running }); setEvaluatedAt(new Date().toISOString()); }
+    };
+    void load();
+    const interval = window.setInterval(load, 30_000);
+    const onRefresh = () => { void load(); };
+    window.addEventListener("focus", onRefresh);
+    window.addEventListener("hodd:autopilot-status", onRefresh);
+    return () => { active = false; controller?.abort(); window.clearInterval(interval); window.removeEventListener("focus", onRefresh); window.removeEventListener("hodd:autopilot-status", onRefresh); };
+  }, [userId, hydrated, workspaceScope]);
+
   const walletAddress = workspace.treasuryMode === "ARC_TESTNET_WALLET" ? workspace.walletConnection?.address : undefined;
   useEffect(() => {
     if (!hydrated || !walletAddress) return;
@@ -260,7 +287,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     if (readOnly || storageIssue) return;
     try {
       const input = operationalInput(next, walletState, earnState);
-      const evaluation = input ? assessTreasury(input, new Date(next.updatedAt)) : null;
+      const evaluation = input ? assessTreasury(input, new Date(next.updatedAt), { autopilotActive }) : null;
       const blocked = evaluation?.violations.some((item) => item.severity === "BLOCKED") ?? false;
       const evaluated: TreasuryWorkspace = { ...next, activities: [{
         id: crypto.randomUUID(), occurredAt: next.updatedAt, actor: "SYSTEM", action: evaluation ? "Treasury Engine evaluated" : "Treasury Engine paused",
@@ -272,7 +299,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       persist(evaluated);
       setWorkspace(evaluated); setEvaluatedAt(evaluated.updatedAt);
     } catch { setStorageIssue("The browser could not persist this workspace. Reset it before making more changes."); }
-  }, [readOnly, earnState, storageIssue, walletState, persist, setWorkspace, setEvaluatedAt]);
+  }, [readOnly, earnState, storageIssue, walletState, persist, setWorkspace, setEvaluatedAt, autopilotActive]);
 
   const connectWallet = (candidate: WalletConnection) => {
     if (readOnly) return;
@@ -311,13 +338,13 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     const now = new Date().toISOString();
     commit({ ...workspace, updatedAt: now, obligations: workspace.obligations.map((item) => item.id === id ? { ...item, ...input, id, revision: (item.revision ?? 1) + 1 } : item), activities: [makeActivity("Obligation updated", `${input.title} was updated.`, "The saved obligation changed and the Treasury Engine recalculated the workspace when verified funds were available.", now), ...workspace.activities] });
   };
-  const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Safety buffer, coverage floor or allocation limits changed.", "The treasury policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
+  const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Protection lead time, safety buffer, coverage floor or allocation limits changed.", "The treasury policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
   const updateTargets = (targets: Record<StrategyKind, number>) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, targetAllocationsBps: targets, activities: [makeActivity("Allocation targets updated", "Investment targets were updated for preview.", "Targets affect deterministic previews only and cannot move funds.", now), ...workspace.activities] }); };
   const resetWorkspace = () => { if (readOnly) return; clearActiveWalletRuntime(); const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId); const base = repository.reset(); const reset = workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : { ...base, updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
 
   const operationalWorkspace = useMemo(() => operationalInput(workspace, walletState, earnState), [earnState, workspace, walletState]);
-  const assessment = useMemo(() => operationalWorkspace ? assessTreasury(operationalWorkspace, new Date(evaluatedAt)) : null, [operationalWorkspace, evaluatedAt]);
-  const allocationPlan = useMemo(() => operationalWorkspace && assessment ? previewAllocation(operationalWorkspace, assessment) : null, [operationalWorkspace, assessment]);
+  const assessment = useMemo(() => operationalWorkspace ? assessTreasury(operationalWorkspace, new Date(evaluatedAt), { autopilotActive }) : null, [operationalWorkspace, evaluatedAt, autopilotActive]);
+  const allocationPlan = useMemo(() => operationalWorkspace && assessment ? previewAllocation(operationalWorkspace, assessment, { autopilotActive }) : null, [operationalWorkspace, assessment, autopilotActive]);
   const syncForEarn = async () => {
     if (!userId || !cloudReadable || storageIssue) throw new Error("Sign in and resolve workspace sync before reviewing an Earn quote.");
     await syncWorkspaceToCloud(workspace, userId, workspaceScope);
@@ -355,7 +382,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     await saveRemoval({ ...workspace, updatedAt: now, obligations: workspace.obligations.filter((item) => item.id !== id), activities: [makeActivity("Obligation deleted", `${obligation.title} was removed.`, "A bill without payment history was deleted by its owner.", now), ...workspace.activities] });
   };
   const refreshWorkspace = async () => { if (!userId || !cloudReadable) throw new Error("Sign in and sync the main workspace first."); await adoptCloud(null); refreshWallet(); refreshEarn(); };
-  const value = { mode: "LIVE" as const, signedIn: Boolean(userId), readOnly, deleteObligation, workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, refreshWorkspace, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
+  const value = { mode: "LIVE" as const, signedIn: Boolean(userId), autopilotActive, readOnly, deleteObligation, workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, refreshWorkspace, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
   return <WorkspaceContext.Provider value={value}>{userId && showSmoke && <div role="note" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.14] bg-[#101319] text-[#f4f1e8] px-5 py-3 text-xs"><p>{workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST WORKSPACE · separate ledger, 1 USDC initial buffer, max 1 USDC deposit. Connect a different test wallet; your main treasury is unchanged." : "Main treasury workspace · isolated smoke tests do not change its obligations or policy."}</p><button disabled={!hydrated} onClick={() => { clearActiveWalletRuntime(); setWorkspaceScope(workspaceScope === "TREASURY" ? "SMOKE_TEST" : "TREASURY"); }} className="shrink-0 border border-white/20 px-3 py-2">{workspaceScope === "SMOKE_TEST" ? "Return to treasury" : "Open isolated smoke workspace"}</button></div>}{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#101319] text-[#f4f1e8] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-white/[0.14] px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 

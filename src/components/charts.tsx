@@ -31,7 +31,7 @@ function Tooltip({ left, children }: { left: string; children: React.ReactNode }
   return <div role="status" className="pointer-events-none absolute top-0 z-10 min-w-40 border border-white/25 bg-[#1a1d26] px-3 py-2.5" style={{ left, transform: "translateX(-50%)" }}>{children}</div>;
 }
 
-/** Treasury balance after each protected obligation, over the policy horizon. */
+/** Treasury balance after each scheduled obligation, over the policy horizon. */
 export function RunwayChart({ series }: { series: RunwaySeries }) {
   const [view, setView] = useState<"Chart" | "Table">("Chart");
   const [hover, setHover] = useState<number | null>(null);
@@ -47,7 +47,7 @@ export function RunwayChart({ series }: { series: RunwaySeries }) {
   const xTicks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => Math.round(fraction * (points.length - 1)));
   const active = hover === null ? null : points[hover];
   const end = points[points.length - 1];
-  const summary = `Projected treasury balance over ${series.horizonDays} days: ${fixed(series.start)} today, ${fixed(end.value)} after protected obligations.`;
+  const summary = `Projected treasury balance over ${series.horizonDays} days: ${fixed(series.start)} today, ${fixed(end.value)} after scheduled obligations.`;
 
   return (
     <div>
@@ -92,14 +92,14 @@ export function RunwayChart({ series }: { series: RunwaySeries }) {
   );
 }
 
-/** Protected outflows by week. Columns are capped at 24px with a 4px rounded top and a square base. */
+/** Scheduled outflows by week. Columns are capped at 24px with a 4px rounded top and a square base. */
 export function WeeklyOutflowChart({ weeks }: { weeks: readonly WeekBucket[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(...weeks.map((week) => week.total), 0);
   const hi = niceMax(max || 1);
   const total = weeks.reduce((sum, week) => sum + week.total, 0);
   return (
-    <div className="relative h-[280px]" role="img" aria-label={`Protected outflows by week for the next ${weeks.length} weeks: ${fixed(total)} USDC in total.`}>
+    <div className="relative h-[280px]" role="img" aria-label={`Scheduled outflows by week for the next ${weeks.length} weeks: ${fixed(total)} USDC in total.`}>
       <div className="absolute inset-y-0 left-[64px] right-2 top-7 bottom-8">
         <div className="absolute inset-x-0 top-0 h-px" style={{ background: GRID }} />
         <div className="absolute inset-x-0 top-1/2 h-px" style={{ background: GRID }} />

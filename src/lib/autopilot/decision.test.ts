@@ -22,6 +22,16 @@ describe("deterministic agent decisions",()=>{
  it("does not infer funding from the mandate and refuses stale positions",()=>{const i=inputs();i.cashMinor="0";expect(decideAutopilot(i).kind).toBe("NO_ACTION");i.cashMinor="50000000";i.agentPosition.observedAt=new Date(now.getTime()-60001).toISOString();expect(decideAutopilot(i).kind).toBe("NO_ACTION");});
  it("withdraws and returns while paused even after Morpho is disabled",()=>{const i=inputs();i.mandate.paused=true;i.workspace.policy.enabledStrategies.MORPHO=false;i.returnAll=true;setPosition(i,2_000_000n);expect(decideAutopilot(i)).toMatchObject({kind:"RETURN_ALL",withdrawMinor:"2000000"});setPosition(i,0n);expect(decideAutopilot(i).transferMinor).toBe("49900000");});
  it("uses the horizon, active overdue obligations and minimum coverage",()=>{const i=inputs();i.workspace.obligations=[{id:"bill",title:"Bill",category:"RENT",amount:money(6_000_000n),dueAt:"2026-10-09T00:00:00Z",recipient:null,priority:"HIGH",status:"OVERDUE",description:""}];i.workspace.policy.minimumLiquidityCoverageBps=20000;expect(decideAutopilot(i).transferMinor).toBe("2000000");i.workspace.obligations[0].status="PAID";expect(decideAutopilot(i).kind).toBe("INVEST");});
+ it("plans a day-5 bill under an active mandate, invests with fresh Morpho funding and protects it when stale",()=>{
+   const i=inputs(); const owner={...i.agentPosition,currentBalance:{...money(12_000_000n),currency:"USDC" as const,decimals:6 as const},redeemable:{...money(12_000_000n),currency:"USDC" as const,decimals:6 as const}};
+   i.ownerPositions=[owner]; i.workspace.totalTreasury=money(22_000_000n);
+   i.workspace.strategies=[{id:"owner-morpho",name:"Morpho",kind:"MORPHO",balance:owner.currentBalance,redeemable:owner.redeemable,observedAt:owner.observedAt,liquidityStatus:owner.liquidityStatus,integration:"LIVE",apyBps:null,risk:"MODERATE",liquidity:"VARIABLE"}];
+   i.workspace.obligations=[{id:"bill",title:"Day five",category:"RENT",amount:money(11_000_000n),dueAt:new Date(now.getTime()+5*86400000).toISOString(),recipient:null,priority:"HIGH",status:"UPCOMING",description:""}];
+   expect(decideAutopilot(i)).toMatchObject({kind:"INVEST",protectedMinor:"0"});
+   i.workspace.policy.protectionLeadDays=10; expect(decideAutopilot(i)).toMatchObject({kind:"LIQUIDITY_TOP_UP",protectedMinor:"11000000"}); i.workspace.policy.protectionLeadDays=null;
+   i.workspace.strategies[0].observedAt=new Date(now.getTime()-900001).toISOString(); i.ownerPositions[0].observedAt=i.workspace.strategies[0].observedAt;
+   expect(decideAutopilot(i)).toMatchObject({kind:"NO_ACTION",protectedMinor:"11000000",depositMinor:"0"});
+ });
  it("preserves exact rounding for one-unit budgets",()=>{const i=inputs();i.mandate={...i.mandate,budgetMinor:"1",reserveMinor:"0",maxPerRunMinor:"1"};i.cashMinor="1";i.feeReserveMinor="1";expect(decideAutopilot(i).kind).toBe("NO_ACTION");});
 });
 describe("mandate validation",()=>{

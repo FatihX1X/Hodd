@@ -85,6 +85,7 @@ export function AutopilotView() {
     if (!response.ok) throw new Error(data.message ?? "Autopilot status is unavailable.");
     signal.throwIfAborted();
     setStatus(data);
+    window.dispatchEvent(new Event("hodd:autopilot-status"));
     return data;
   }, []);
 

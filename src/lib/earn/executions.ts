@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { erc20Abi, getAddress } from "viem";
@@ -91,7 +92,7 @@ export async function startEarnExecution(context: EarnContext, mode: ExecutionMo
   const live = await freshEarnInputs(context, quote.vaultAddress);
   const liveWarnings = [...live.vault.earnKitWarnings, ...live.vault.warnings.map((item) => `${item.level}: ${item.type}`)];
   if (liveWarnings.some((warning) => !quote.warnings.includes(warning))) throw new EarnAccessError("WARNINGS_CHANGED", "New vault warnings require a new quote and explicit acknowledgement.", 409);
-  const policy = assessEarnOperation(live.workspace, live.positions, quote.operation, quote.amount, quote.fees);
+  const policy = assessEarnOperation(live.workspace, live.positions, quote.operation, quote.amount, quote.fees, new Date(), await loadProtectionContext(context.userId, context.scope));
   if (policy.status === "BLOCKED" || (quote.operation !== "DEPOSIT" && BigInt(quote.amount.minorUnits) > BigInt(live.position.redeemable.minorUnits))) throw new EarnAccessError("POLICY_BLOCKED", "Fresh treasury policy or liquidity no longer permits this quote.", 409);
   const startedBlock = await arcClient.getBlockNumber();
   const { error: startError } = await db().rpc("hodd_start_earn_execution", { p_user: context.userId, p_scope: context.scope, p_quote: quoteId, p_binding: context.binding, p_policy_digest: context.policyDigest, p_ack: acknowledged, p_wallet: context.wallet, p_started_block: startedBlock.toString() });
@@ -320,7 +321,7 @@ async function prepareNext(context: EarnContext, row: Row): Promise<Row | null> 
 async function assertFreshPolicy(context: EarnContext, row: Row) {
   const live = await freshEarnInputs(context, row.quote.vaultAddress);
   const fees = nativeWeiToUsdcCeil((BigInt(row.quote.fees.minorUnits) * 10n ** 12n - BigInt(row.gas_spent_wei)).toString());
-  const policy = assessEarnOperation(live.workspace, live.positions, row.quote.operation, row.quote.amount, fees);
+  const policy = assessEarnOperation(live.workspace, live.positions, row.quote.operation, row.quote.amount, fees, new Date(), await loadProtectionContext(context.userId, context.scope));
   if (policy.status === "BLOCKED" || BigInt(fees.minorUnits) > BigInt(live.workspace.liquidUsdc.minorUnits) || (row.quote.operation !== "DEPOSIT" && BigInt(row.quote.amount.minorUnits) > BigInt(live.position.redeemable.minorUnits))) throw new Error("FRESH_POLICY_BLOCKED");
 }
 

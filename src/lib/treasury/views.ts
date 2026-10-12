@@ -3,7 +3,7 @@
  * Treasury Engine uses; nothing is stored, nothing is invented and no amount computed here
  * authorizes or limits a transaction (the engine and the server remain authoritative).
  */
-import { getProtectedObligations } from "./engine";
+import { effectiveProtectionLeadDays, getPlanningObligations, type ProtectionContext, type ProtectionReason } from "./engine";
 import { formatMoney, formatPercentFromBps } from "./format";
 import type { Money, Obligation, StrategyKind, StrategyPosition, TreasuryAssessment, TreasuryPolicy, TreasuryWorkspace } from "./models";
 
@@ -18,10 +18,10 @@ const utcDay = (date: Date) => Date.UTC(date.getUTCFullYear(), date.getUTCMonth(
 export type RunwayPoint = Readonly<{ day: number; at: number; value: number; due: readonly { id: string; title: string; amount: number }[] }>;
 export type RunwaySeries = Readonly<{ points: readonly RunwayPoint[]; start: number; buffer: number; horizonDays: number; firstBelowBufferDay: number | null; firstBelowZeroDay: number | null }>;
 
-/** Treasury balance after each protected obligation falls due, day by day, over the policy horizon. */
-export function runwayProjection(workspace: TreasuryWorkspace, evaluatedAt: Date, horizonDays: number = workspace.policy.obligationHorizonDays): RunwaySeries {
+/** Treasury balance after each scheduled obligation falls due, day by day, over the policy horizon. */
+export function runwayProjection(workspace: TreasuryWorkspace, evaluatedAt: Date, horizonDays: number = workspace.policy.planningHorizonDays): RunwaySeries {
   const origin = utcDay(evaluatedAt);
-  const obligations = getProtectedObligations(workspace, evaluatedAt);
+  const obligations = getPlanningObligations(workspace, evaluatedAt);
   const start = usdcNumber(workspace.totalTreasury);
   const buffer = usdcNumber(workspace.policy.safetyBuffer);
   let value = start;
@@ -76,9 +76,9 @@ export function capUsage(workspace: TreasuryWorkspace, strategy: StrategyPositio
   return { capBps, capAmount, balance, share: total === 0 ? 0 : balance / total, ratio: capAmount > 0 ? Math.min(balance / capAmount, 1.5) : null };
 }
 
-export function policySentences(policy: TreasuryPolicy): string[] {
+export function policySentences(policy: TreasuryPolicy, context: ProtectionContext = { autopilotActive: false }): string[] {
   const lines = [
-    `Protect obligations due in the next ${policy.obligationHorizonDays} days plus a ${formatMoney(policy.safetyBuffer)} safety buffer before any capital is deployed.`,
+    `Bills due within ${effectiveProtectionLeadDays(policy, context)} days, overdue bills and any bill Hodd cannot safely fund from Morpho are kept liquid, plus a ${formatMoney(policy.safetyBuffer)} safety buffer. Bills up to ${policy.planningHorizonDays} days ahead are planned.`,
     `Keep safely redeemable liquidity at or above ${formatPercentFromBps(policy.minimumLiquidityCoverageBps)} of those obligations.`,
   ];
   for (const kind of ["MORPHO", "USYC", "BTC_RESERVE"] as const) {
@@ -93,11 +93,15 @@ export type PolicyCheck = Readonly<{ status: "PASS" | "ATTENTION"; title: string
 export function policyChecks(workspace: TreasuryWorkspace, assessment: TreasuryAssessment): PolicyCheck[] {
   const checks: PolicyCheck[] = [];
   const floor = formatPercentFromBps(workspace.policy.minimumLiquidityCoverageBps);
-  if (assessment.liquidityCoverageBps === null) checks.push({ status: "PASS", title: "Coverage", text: "No protected obligations fall inside the horizon, so coverage is not constrained." });
+  if (assessment.liquidityCoverageBps === null) checks.push({ status: "PASS", title: "Coverage", text: "No obligations currently require protection, so coverage is not constrained." });
   else if (assessment.liquidityCoverageBps >= workspace.policy.minimumLiquidityCoverageBps) checks.push({ status: "PASS", title: "Coverage", text: `Liquidity covers obligations at ${formatPercentFromBps(assessment.liquidityCoverageBps)}, above the ${floor} floor.` });
   else checks.push({ status: "ATTENTION", title: "Coverage", text: `Liquidity covers obligations at ${formatPercentFromBps(assessment.liquidityCoverageBps)}, below the ${floor} floor.` });
   const protectedCovered = BigInt(assessment.safelyAvailableLiquidity.minorUnits) >= BigInt(assessment.protectedCapital.minorUnits);
   checks.push(protectedCovered ? { status: "PASS", title: "Protected capital", text: `Safely available liquidity (${formatMoney(assessment.safelyAvailableLiquidity)}) covers protected capital.` } : { status: "ATTENTION", title: "Protected capital", text: `Safely available liquidity (${formatMoney(assessment.safelyAvailableLiquidity)}) does not cover protected capital (${formatMoney(assessment.protectedCapital)}).` });
   for (const violation of assessment.violations) checks.push({ status: "ATTENTION", title: violation.code.replaceAll("_", " "), text: violation.message });
   return checks;
+}
+
+export function protectionReasonLabel(reason: ProtectionReason, leadDays: number): string {
+  return { LEAD_TIME: `Due within ${leadDays} days`, OVERDUE: "Overdue", STALE_DATA: "Vault data is stale", LOW_VAULT_LIQUIDITY: "Vault liquidity too low" }[reason];
 }

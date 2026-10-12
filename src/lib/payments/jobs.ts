@@ -1,3 +1,4 @@
+import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { getAddress } from "viem";
@@ -42,7 +43,7 @@ async function validateClaimedPolicy(context: PaymentContext, proposal: PaymentP
   if (pending < 0n) throw new Error("PAYMENT_RESERVATION_INVALID");
   const available = { ...live, pendingTransactions: { ...live.pendingTransactions, minorUnits: pending.toString() }, paymentReservations: live.paymentReservations?.filter((item) => item.proposalId !== proposal.id) };
   const obligation = available.obligations.find((item) => item.id === proposal.obligationId);
-  if (!obligation || obligation.revision !== proposal.obligationRevision || assessPayment(available, obligation, proposal.feeReserve).status !== "PASS") throw new Error("FRESH_PAYMENT_POLICY_BLOCKED");
+  if (!obligation || obligation.revision !== proposal.obligationRevision || assessPayment(available, obligation, proposal.feeReserve, new Date(), await loadProtectionContext(context.userId, context.scope)).status !== "PASS") throw new Error("FRESH_PAYMENT_POLICY_BLOCKED");
   await validateFreshFees(context, proposal);
 }
 
@@ -103,7 +104,7 @@ export async function startPayment(context: PaymentContext, mode: ExecutionMode,
   if (!record.proposal.executionEnabled) throw new EarnAccessError("EXECUTION_NOT_ENABLED", record.proposal.executionReason, 409);
   if (row.policy_digest !== context.policyDigest || record.state !== "REVIEW_REQUIRED" || Date.parse(record.proposal.expiresAt) <= Date.now()) throw new EarnAccessError("PROPOSAL_NOT_AVAILABLE", "Request a fresh payment proposal.", 409);
   const live = await freshPaymentWorkspace(context); const obligation = live.obligations.find((item) => item.id === record.proposal.obligationId);
-  if (!obligation || assessPayment(live, obligation, record.proposal.feeReserve).status !== "PASS") throw new EarnAccessError("POLICY_BLOCKED", "Fresh policy does not permit this payment.", 409);
+  if (!obligation || assessPayment(live, obligation, record.proposal.feeReserve, new Date(), await loadProtectionContext(context.userId, context.scope)).status !== "PASS") throw new EarnAccessError("POLICY_BLOCKED", "Fresh policy does not permit this payment.", 409);
   try { await validateFreshFees(context, record.proposal); }
   catch { throw new EarnAccessError("FEE_QUOTE_EXCEEDED", "Network fees changed beyond the approved quote. Review a fresh payment proposal; nothing was sent.", 409); }
   const { error } = await admin().rpc("hodd_claim_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_binding: context.binding });

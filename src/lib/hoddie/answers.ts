@@ -4,10 +4,10 @@
  * or authorizes anything. The chat UI depends only on `HoddieReply`, so another source of
  * replies (for example a server route) can be plugged in without touching the interface.
  */
-import { assessPayment, getProtectedObligations } from "@/lib/treasury/engine";
+import { assessPayment, getProtectedObligations, protectionPlan, type ProtectionContext } from "@/lib/treasury/engine";
 import { formatDate, formatMoney, formatPercentFromBps } from "@/lib/treasury/format";
 import type { Obligation, TreasuryAssessment, TreasuryWorkspace } from "@/lib/treasury/models";
-import { policyChecks, policySentences, runwayProjection, strategyLabels, usdcNumber } from "@/lib/treasury/views";
+import { policyChecks, policySentences, protectionReasonLabel, runwayProjection, strategyLabels, usdcNumber } from "@/lib/treasury/views";
 
 export type HoddieTone = "success" | "warning" | "danger" | "info" | "neutral";
 export type HoddieReply = Readonly<{
@@ -17,7 +17,7 @@ export type HoddieReply = Readonly<{
   sources: readonly { label: string; href: "/" | "/obligations" | "/invest" | "/policy" | "/activity" }[];
   followUps: readonly string[];
 }>;
-export type HoddieContext = Readonly<{ question: string; workspace: TreasuryWorkspace; assessment: TreasuryAssessment | null; evaluatedAt: Date }>;
+export type HoddieContext = Readonly<{ question: string; workspace: TreasuryWorkspace; assessment: TreasuryAssessment | null; evaluatedAt: Date; protectionContext?: ProtectionContext }>;
 
 export const starterPrompts = [
   "Can I pay the next bill?",
@@ -50,12 +50,12 @@ function findObligation(question: string, obligations: readonly Obligation[]) {
 
 function paymentAnswer(ctx: HoddieContext, obligation: Obligation | undefined): HoddieReply {
   const { workspace, evaluatedAt } = ctx;
-  const target = obligation ?? getProtectedObligations(workspace, evaluatedAt)[0];
-  if (!target) return { paragraphs: ["Nothing is due inside the 30-day horizon, so there is no payment to check."], sources: [src.obligations], followUps: ["What is due in the next 30 days?"] };
-  const plan = assessPayment(workspace, target.id, evaluatedAt);
+  const target = obligation ?? getProtectedObligations(workspace, evaluatedAt, ctx.protectionContext)[0];
+  if (!target) return { paragraphs: ["No bill currently requires protection, so there is no protected payment to check."], sources: [src.obligations], followUps: ["What is due in the next 30 days?"] };
+  const plan = assessPayment(workspace, target.id, evaluatedAt, ctx.protectionContext);
   const head = `${target.title} · ${formatMoney(target.amount)} · due ${shortDate(target.dueAt)}`;
   if (!plan) {
-    const reason = target.status === "PAID" ? "It is already marked paid." : target.status === "DRAFT" ? "It is a draft, so it is not part of the protected total yet." : "It is outside the 30-day horizon or already reserved for an approved payment.";
+    const reason = target.status === "PAID" ? "It is already marked paid." : target.status === "DRAFT" ? "It is a draft, so it is not part of the protected total yet." : "It is planned for later funding, outside the 30-day planning horizon or already reserved for an approved payment.";
     return { paragraphs: [`${head}. ${reason}`], status: { label: target.status, tone: "neutral" }, sources: [src.obligations], followUps: ["What is due in the next 30 days?"] };
   }
   const safe = plan.status === "SAFE";
@@ -74,14 +74,17 @@ function paymentAnswer(ctx: HoddieContext, obligation: Obligation | undefined): 
 }
 
 function dueAnswer(ctx: HoddieContext): HoddieReply {
-  const upcoming = getProtectedObligations(ctx.workspace, ctx.evaluatedAt);
-  if (upcoming.length === 0) return { paragraphs: ["Nothing is due inside the 30-day horizon."], sources: [src.obligations], followUps: ["How long does my cash last?"] };
-  const total = ctx.assessment ? formatMoney(ctx.assessment.upcomingObligations) : null;
+  const plan = protectionPlan(ctx.workspace, ctx.evaluatedAt, ctx.protectionContext);
+  const upcoming = [...plan.protected.map((item) => item.obligation), ...plan.planned].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt) || a.id.localeCompare(b.id));
+  if (upcoming.length === 0) return { paragraphs: ["Nothing is due inside the 30-day planning horizon."], sources: [src.obligations], followUps: ["How long does my cash last?"] };
+  const leadDays = ctx.assessment!.protectionLeadDays;
   return {
-    paragraphs: [`${upcoming.length} ${upcoming.length === 1 ? "obligation is" : "obligations are"} protected over the next ${ctx.workspace.policy.obligationHorizonDays} days${total ? `, ${total} in total` : ""}.`],
-    facts: upcoming.slice(0, 5).map((item) => ({ label: `${shortDate(item.dueAt)} · ${item.title}`, value: formatMoney(item.amount) })),
-    sources: [src.obligations],
-    followUps: ["Can I pay the next bill?", "Is anything overdue?"],
+    paragraphs: [`Bills due within ${leadDays} days, overdue bills and bills Hodd cannot safely fund from Morpho are kept liquid. ${plan.protected.length} are protected (${formatMoney(ctx.assessment!.upcomingObligations)}); ${plan.planned.length} are planned for later funding (${formatMoney(ctx.assessment!.plannedObligations)}) within ${ctx.workspace.policy.planningHorizonDays} days.`],
+    facts: upcoming.slice(0, 5).map((item) => {
+      const entry = plan.protected.find((entry) => entry.obligation.id === item.id);
+      return { label: `${shortDate(item.dueAt)} · ${item.title}`, value: `${formatMoney(item.amount)} · ${entry ? protectionReasonLabel(entry.reason, leadDays) : "Planned"}` };
+    }),
+    sources: [src.obligations], followUps: ["Can I pay the next bill?", "Is anything overdue?"],
   };
 }
 
@@ -153,7 +156,7 @@ function deployAnswer(ctx: HoddieContext): HoddieReply {
 }
 
 function policyAnswer(ctx: HoddieContext): HoddieReply {
-  const sentences = policySentences(ctx.workspace.policy);
+  const sentences = policySentences(ctx.workspace.policy, ctx.protectionContext);
   const checks = ctx.assessment ? policyChecks(ctx.workspace, ctx.assessment) : [];
   const attention = checks.filter((check) => check.status === "ATTENTION");
   return {
@@ -256,7 +259,7 @@ export function answerQuestion(ctx: HoddieContext): HoddieReply {
   if (!assessment) paragraphs = ["Bağlı Arc Testnet bakiyesi doğrulanana kadar hazine hesapları duraklatıldı. Eski verilerle yanıt veremem."];
   else if (!canAnswerInstantly(ctx.question)) paragraphs = ["Bu yanıt salt okunur. Değişiklik için oturum açıp yorumlama izni verin ve ayrı inceleme düğmesini kullanın. Para hareketi ayrıca güncel teklif ve cüzdan imzası gerektirir. Sohbete yazılan onay işlem başlatmaz."];
   else if (reply.sources[0]?.href === "/policy") paragraphs = [
-    `${formatMoney(workspace.policy.safetyBuffer)} güvenlik tamponu korunur. Önümüzdeki ${workspace.policy.obligationHorizonDays} günün yükümlülükleri ayrılır. Asgari likidite karşılama oranı ${formatPercentFromBps(workspace.policy.minimumLiquidityCoverageBps)}.`,
+    `${formatMoney(workspace.policy.safetyBuffer)} güvenlik tamponu korunur. ${assessment.protectionLeadDays} gün içinde vadesi gelen, gecikmiş veya Morpho’dan güvenle karşılanamayan faturalar likit tutulur. ${workspace.policy.planningHorizonDays} gün ilerisi planlanır. Asgari likidite karşılama oranı ${formatPercentFromBps(workspace.policy.minimumLiquidityCoverageBps)}.`,
     `Morpho sınırı ${formatPercentFromBps(workspace.policy.strategyCapsBps.MORPHO)}; strateji ${workspace.policy.enabledStrategies.MORPHO ? "etkin" : "devre dışı"}.`,
     reply.status?.tone === "danger" ? "Bazı politika kontrolleri dikkat gerektiriyor." : "Mevcut politika kontrolleri uygun.",
   ];
@@ -272,12 +275,12 @@ export function answerQuestion(ctx: HoddieContext): HoddieReply {
   } else if (reply.sources[0]?.href === "/obligations") {
     if (/can I pay|afford/.test(normalized)) paragraphs = [reply.status?.tone === "success" ? "Evet. Önceki yükümlülükler ve güvenlik tamponu ayrıldıktan sonra ödeme karşılanıyor. Bu hesap son işlem ücretini içermez; ödeme için güncel teklif gerekir." : "Ödeme uygunluğu aşağıdaki hazine verilerine bağlıdır. Eksik tutarı ve vade bilgilerini inceleyin; ödeme için güncel teklif gerekir."];
     else if (/overdue/.test(normalized)) paragraphs = [reply.status?.tone === "danger" ? "Vadesi geçmiş ve ödenmemiş yükümlülükler aşağıda." : "Gecikmiş yükümlülük yok."];
-    else paragraphs = [`Önümüzdeki ${workspace.policy.obligationHorizonDays} gün için korunan yükümlülükler: ${formatMoney(assessment.upcomingObligations)}.`, "Güncel vade ve tutarlar aşağıda."];
+    else paragraphs = [`${assessment.protectionLeadDays} gün içinde vadesi gelen, gecikmiş veya Morpho’dan güvenle karşılanamayan faturalar korunur: ${formatMoney(assessment.upcomingObligations)}. ${workspace.policy.planningHorizonDays} günlük plan içindeki diğer faturalar: ${formatMoney(assessment.plannedObligations)}.`, "Güncel vade ve tutarlar aşağıda."];
   } else if (reply.facts?.some((fact) => fact.label === "Total treasury")) paragraphs = [`Hazinenizde ${formatMoney(workspace.totalTreasury)} var. Bunun ${formatMoney(workspace.liquidUsdc)} tutarı likit USDC.`];
   else paragraphs = ["Merhaba, ben Hoddie. Faturalar, nakit ömrü, yatırılabilir sermaye ve hazine politikası hakkında sorabilirsiniz."];
   return {
     ...reply, paragraphs,
-    facts: reply.facts?.map((fact) => ({ label: trLabels[fact.label] ?? fact.label.replace(/^After (\d+) days$/, "$1 gün sonra"), value: fact.value === "Disabled" ? "Devre dışı" : fact.value })),
+    facts: reply.facts?.map((fact) => ({ label: trLabels[fact.label] ?? fact.label.replace(/^After (\d+) days$/, "$1 gün sonra"), value: fact.value === "Disabled" ? "Devre dışı" : fact.value.replace(/Due within (\d+) days/g, "$1 gün içinde vade").replace("Vault data is stale", "Kasa verisi güncel değil").replace("Vault liquidity too low", "Kasa likiditesi yetersiz").replace("Overdue", "Gecikmiş").replace("Planned", "Planlandı") })),
     status: reply.status ? { ...reply.status, label: trLabels[reply.status.label] ?? reply.status.label } : undefined,
     sources: reply.sources.map((source) => ({ ...source, label: trLabels[source.label] ?? source.label })),
     followUps: ["Sonraki faturayı ödeyebilir miyim?", "Hesabımı özetle", "Politikam ne diyor?"],

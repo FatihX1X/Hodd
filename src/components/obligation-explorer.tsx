@@ -11,12 +11,12 @@ import { EmptyState } from "./page-states";
 import { WeeklyOutflowChart } from "./charts";
 import { FilterGroup, Kpi, KpiGrid, MoneyValue, PageBody, SectionCard, SectionHeading, StatusPill, buttonClass, labelClass } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
-import { assessPayment } from "@/lib/treasury/engine";
+import { assessPayment, protectionPlan } from "@/lib/treasury/engine";
 import { formatDate } from "@/lib/treasury/format";
 import { moneyToInput, parseMoneyInput } from "@/lib/treasury/money";
 import type { Obligation, ObligationInput } from "@/lib/treasury/models";
 import { canDeleteObligation } from "@/lib/treasury/sample-cleanup";
-import { weeklyOutflows } from "@/lib/treasury/views";
+import { protectionReasonLabel, weeklyOutflows } from "@/lib/treasury/views";
 
 type Filter = "ALL" | Obligation["status"];
 const filters = ["ALL", "UPCOMING", "DRAFT", "OVERDUE", "PAID"] as const;
@@ -30,7 +30,7 @@ const emptyForm = (): FormState => ({ title: "", category: "VENDOR", amount: "",
 const toForm = (item: Obligation): FormState => ({ title: item.title, category: item.category, amount: moneyToInput(item.amount), dueDate: item.dueAt.slice(0, 10), recipient: item.recipient ?? "", recipientAddress: item.recipientAddress ?? "", priority: item.priority, status: item.status === "DRAFT" ? "DRAFT" : "UPCOMING", description: item.description });
 
 export function ObligationExplorer() {
-  const { workspace, operationalWorkspace, assessment, createObligation, updateObligation, deleteObligation, storageIssue, readOnly, mode } = useTreasuryWorkspace();
+  const { workspace, operationalWorkspace, assessment, createObligation, updateObligation, deleteObligation, storageIssue, readOnly, mode, autopilotActive } = useTreasuryWorkspace();
   const [filter, setFilter] = useState<Filter>("ALL"); const [selectedId, setSelectedId] = useState<string | null>(null); const [open, setOpen] = useState(false); const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState("");
@@ -54,7 +54,12 @@ export function ObligationExplorer() {
   };
   const evaluatedAt = assessment ? new Date(assessment.evaluatedAt) : new Date();
   const selected = visible.find((item) => item.id === selectedId) ?? visible.find((item) => item.id === assessment?.nextPayment?.id) ?? visible[0] ?? null;
-  const plan = selected && operationalWorkspace && assessment ? assessPayment(operationalWorkspace, selected.id, evaluatedAt) : null;
+  const plan = selected && operationalWorkspace && assessment ? assessPayment(operationalWorkspace, selected.id, evaluatedAt, { autopilotActive }) : null;
+  const protection = operationalWorkspace && assessment ? protectionPlan(operationalWorkspace, evaluatedAt, { autopilotActive }) : null;
+  const protectionLabel = (id: string) => {
+    const entry = protection?.protected.find((entry) => entry.obligation.id === id);
+    return entry ? protectionReasonLabel(entry.reason, assessment!.protectionLeadDays) : protection?.planned.some((item) => item.id === id) ? "Planned" : null;
+  };
   const weeks = weeklyOutflows(workspace.obligations, evaluatedAt);
 
   return <PageBody>
@@ -69,8 +74,9 @@ export function ObligationExplorer() {
     </SectionCard>
 
     {assessment
-      ? <KpiGrid label="Obligation totals" columns={3} className="mt-6">
-          <Kpi label="Protected obligations" value={<MoneyValue money={assessment.upcomingObligations} className="text-2xl" />} detail="Active within the fixed 30-day horizon" />
+      ? <KpiGrid label="Obligation totals" columns={4} className="mt-6">
+          <Kpi label="Protected obligations" value={<MoneyValue money={assessment.upcomingObligations} className="text-2xl" />} detail={`Within ${assessment.protectionLeadDays} days or unsafe to fund from Morpho`} />
+          <Kpi label="Planned obligations" value={<MoneyValue money={assessment.plannedObligations} className="text-2xl" />} detail="Later funding from Morpho within 30 days" />
           <Kpi label="Protected capital" value={<MoneyValue money={assessment.protectedCapital} className="text-2xl" />} detail="Obligations + safety buffer + pending" />
           <Kpi label="Deployable capital" value={<MoneyValue money={assessment.deployableCapital} className="text-2xl" />} detail="Recalculated after every saved change" accent />
         </KpiGrid>
@@ -93,7 +99,7 @@ export function ObligationExplorer() {
                   <td className="px-5 py-3"><h2 className="text-sm font-semibold"><button type="button" onClick={() => setSelectedId(item.id)} aria-pressed={item.id === selected.id} className="min-h-11 text-left">{item.title}</button></h2><p className="text-xs text-white/50">{item.category} · {item.recipient ?? "No recipient"}</p></td>
                   <td className="px-5 py-3"><MoneyValue money={item.amount} className="whitespace-nowrap text-sm font-semibold" /></td>
                   <td className="px-5 py-3"><StatusPill label={item.priority} tone={priorityTone(item.priority)} /></td>
-                  <td className="px-5 py-3"><StatusPill label={item.status} tone={statusTone(item.status)} /></td>
+                  <td className="px-5 py-3"><StatusPill label={item.status} tone={statusTone(item.status)} />{protectionLabel(item.id) && <span className="mt-2 block"><StatusPill label={protectionLabel(item.id)!} tone="neutral" /></span>}</td>
                   <td className="px-5 py-3"><button onClick={() => openEdit(item)} disabled={readOnly || !canDeleteObligation(workspace, item) || Boolean(storageIssue)} aria-label={`Edit ${item.title}`} className="grid size-10 place-items-center border border-white/[0.14] hover:bg-white/5 disabled:opacity-30"><Pencil aria-hidden="true" className="size-4" /></button>{canDeleteObligation(workspace, item) && <button disabled={readOnly || Boolean(storageIssue)} onClick={() => { setDeleteError(""); setDeletingId(item.id); }} aria-label={`Delete ${item.title}`} className="mt-2 grid size-10 place-items-center border border-white/20 text-[#ff9a92] disabled:opacity-30"><Trash2 aria-hidden="true" className="size-4" /></button>}</td>
                 </tr>
               ))}</tbody>
@@ -103,7 +109,7 @@ export function ObligationExplorer() {
           <aside aria-label="Payment plan" className="border-t border-white/[0.14] p-5 xl:border-l xl:border-t-0">
             <p className={labelClass}>{selected.category}</p>
             <p className="disp mt-2 text-[17px]">Plan for {selected.title}</p>
-            <div className="mt-3 flex flex-wrap gap-4"><StatusPill label={selected.status} tone={statusTone(selected.status)} /><StatusPill label={selected.priority} tone={priorityTone(selected.priority)} /></div>
+            <div className="mt-3 flex flex-wrap gap-4"><StatusPill label={selected.status} tone={statusTone(selected.status)} /><StatusPill label={selected.priority} tone={priorityTone(selected.priority)} />{protectionLabel(selected.id) && <StatusPill label={protectionLabel(selected.id)!} tone="neutral" />}</div>
             <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 border-t border-white/10 pt-5">
               <div><dt className={labelClass}>Due</dt><dd className="mono mt-2 text-sm">{formatDate(selected.dueAt)}</dd></div>
               <div><dt className={labelClass}>Amount</dt><dd><MoneyValue money={selected.amount} className="mt-2 block text-sm" /></dd></div>
@@ -120,7 +126,7 @@ export function ObligationExplorer() {
                   <div><dt className={labelClass}>Shortfall</dt><dd><MoneyValue money={plan.shortfall} className="mt-2 block text-sm" /></dd></div>
                 </dl>
                 {plan.steps.length > 0 && <ol aria-label="Funding sources" className="mt-4 space-y-2">{plan.steps.map((step) => <li key={step.source} className="flex items-center justify-between gap-3 border border-white/10 px-3 py-2"><span className={labelClass}>{sourceLabel(step.source)}</span><MoneyValue money={step.amount} className="text-xs" /></li>)}</ol>}
-              </> : <p className="mt-3 text-xs leading-5 text-white/55">{assessment ? "Only upcoming and overdue obligations inside the 30-day horizon are funded from the treasury. This record is not part of the protected total." : "The funding plan is paused until the linked Arc Testnet balance is verified."}</p>}
+              </> : <p className="mt-3 text-xs leading-5 text-white/55">{assessment ? "Planned bills up to 30 days ahead can be funded later from safely withdrawable Morpho liquidity. This record is not part of the protected total." : "The funding plan is paused until the linked Arc Testnet balance is verified."}</p>}
             </div>
           </aside>
         </div>

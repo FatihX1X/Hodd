@@ -33,7 +33,9 @@ describe("Hoddie answers", () => {
 
   it("lists what is due with a total", () => {
     const reply = ask("What is due in the next 30 days?");
-    expect(reply.paragraphs[0]).toMatch(/2 obligations are protected.*4,500.00 USDC in total/);
+    expect(reply.paragraphs[0]).toMatch(/2 are protected \(4,500.00 USDC\)/);
+    expect(reply.paragraphs[0]).toContain("within 7 days");
+    expect(reply.paragraphs[0]).toContain("within 30 days");
     expect(reply.facts?.map((fact) => fact.label.split(" · ")[1])).toEqual(["October payroll", "AWS infrastructure"]);
   });
 

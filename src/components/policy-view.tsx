@@ -7,7 +7,7 @@ import { formatPercentFromBps } from "@/lib/treasury/format";
 import { policyChecks, policySentences, strategyLabels } from "@/lib/treasury/views";
 
 export function PolicyView() {
-  const { workspace, assessment } = useTreasuryWorkspace();
+  const { workspace, assessment, autopilotActive } = useTreasuryWorkspace();
   const checks = assessment ? policyChecks(workspace, assessment) : [];
   return (
     <>
@@ -18,7 +18,7 @@ export function PolicyView() {
           <div className="space-y-6">
             <SectionCard>
               <SectionHeading index="04.1" title="In plain language" description="What the Treasury Engine enforces, in order" />
-              <ol className="divide-y divide-white/10">{policySentences(workspace.policy).map((sentence, index) => (
+              <ol className="divide-y divide-white/10">{policySentences(workspace.policy, { autopilotActive }).map((sentence, index) => (
                 <li key={sentence} className="grid grid-cols-[32px_1fr] gap-3 px-5 py-4"><span className="mono text-[11px] text-white/45">{String(index + 1).padStart(2, "0")}</span><span className="text-sm leading-6">{sentence}</span></li>
               ))}</ol>
             </SectionCard>
