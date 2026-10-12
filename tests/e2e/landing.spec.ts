@@ -158,3 +158,20 @@ test("the app host serves the console and stays out of search indexes", async ({
   const marketingRobots = await request.get("/robots.txt", { headers: { host: "hoddfinance.xyz" } });
   expect(await marketingRobots.text()).toMatch(/Allow:\s*\//);
 });
+
+test("the hero intro plays once per tab, never for reduced motion, and leaves the mark as the lockup", async ({ page, browser }) => {
+  await page.goto("/landing");
+  const hero = page.locator("#top");
+  await expect(hero).toHaveAttribute("data-intro", "play");
+  await expect(page.getByRole("heading", { level: 1, name: /your capital,\s*ahead of time\./i })).toBeVisible();
+  // The star glides in on the shared clock; at rest it sits where the lockup's own star was.
+  await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.timeline instanceof DocumentTimeline && !(a instanceof CSSAnimation)).length)).toBeGreaterThan(5);
+  await page.reload();
+  await expect(hero).not.toHaveAttribute("data-intro", /.+/);
+  const reduced = await browser.newPage({ reducedMotion: "reduce" });
+  await reduced.goto("/landing");
+  await expect(reduced.locator("#top")).not.toHaveAttribute("data-intro", /.+/);
+  await reduced.waitForTimeout(1500);
+  expect(await reduced.evaluate(() => document.getAnimations().filter((a) => a.timeline instanceof DocumentTimeline && a.playState === "running" && (a.effect as KeyframeEffect | null)?.target?.closest("#top img, #top [aria-hidden]")).length)).toBe(0);
+  await reduced.close();
+});

@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import { Fragment } from "react";
 import { headers } from "next/headers";
 import Image from "next/image";
 import clsx from "clsx";
 import { SystemTabs } from "@/components/landing/system-tabs";
 import { CountUp } from "@/components/landing/motion/count-up";
 import { CtaStar } from "@/components/landing/motion/cta-star";
+import { HeroMark } from "@/components/landing/motion/hero-mark";
 import { HoddiePreview } from "@/components/landing/motion/hoddie-preview";
 import { HowTimeline } from "@/components/landing/motion/how-timeline";
 import { LiveTreasury } from "@/components/landing/motion/live-treasury";
@@ -71,6 +73,20 @@ function XLogo() {
   return <svg viewBox="0 0 24 24" width="16" height="16" role="img" aria-label="X" className="shrink-0" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>;
 }
 
+/** The hero headline, line by line and word by word (each word rises from its own mask on a first visit). */
+const headline = [["Your", "capital,"], ["ahead", "of", "time."]];
+
+/**
+ * Marks the first visit in this tab before the hero paints, so the intro plays once and a returning reader (or one who
+ * prefers reduced motion, or has no storage) sees the finished hero at once. Runs while the HTML is parsed.
+ */
+const introScript = `(function(){try{var h=document.getElementById("top");if(!h||matchMedia("(prefers-reduced-motion: reduce)").matches||sessionStorage.getItem("hodd:hero-intro"))return;sessionStorage.setItem("hodd:hero-intro","1");h.setAttribute("data-intro","play")}catch(e){}})()`;
+
+/** A parse-time script; on the client React only sees an inert text/plain copy (Next.js "preventing flash" guide). */
+function InlineScript({ html }: { html: string }) {
+  return <script type={typeof window === "undefined" ? "text/javascript" : "text/plain"} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 /** The hero's 120px ruled grid, drawn once on load (CSS only, see landing.module.css). */
 function GridLines() {
   return (
@@ -121,7 +137,8 @@ export default async function LandingPage() {
 
       <main>
         {/* Hero */}
-        <section id="top" className="relative overflow-hidden border-b border-[#0b0b0d]">
+        <section id="top" className={clsx(styles.hero, "relative overflow-hidden border-b border-[#0b0b0d]")} suppressHydrationWarning>
+          <InlineScript html={introScript} />
           <GridLines />
           <div className={clsx(wrap, "relative")}>
             <div className="flex items-start justify-between gap-6 pt-8">
@@ -131,7 +148,7 @@ export default async function LandingPage() {
             </div>
 
             <div className="pb-[clamp(20px,2.5vw,36px)] pt-[clamp(24px,4vw,56px)]">
-              <Image src="/brand/hodd-lockup-light.png" alt="Hodd Finance" width={1912} height={608} loading="eager" fetchPriority="high" sizes="(min-width: 1360px) 1240px, 100vw" className="-ml-[2%] block h-auto w-full max-w-[1240px]" />
+              <HeroMark />
             </div>
 
             <div className="flex items-end justify-between gap-6 pb-11">
@@ -141,7 +158,20 @@ export default async function LandingPage() {
             </div>
 
             <div className="flex flex-wrap items-end gap-x-[72px] gap-y-9 border-t border-[#0b0b0d] pb-[68px] pt-[52px]">
-              <h1 className="disp m-0 flex-[1_1_520px] text-[clamp(2.1rem,5.2vw,4.75rem)]"><span className={styles.lineMask}><span className={styles.lineIn} style={{ animationDelay: "120ms" }}>Your capital,</span></span>{" "}<span className={styles.lineMask}><span className={styles.lineIn} style={{ animationDelay: "240ms" }}>ahead of time.</span></span></h1>
+              <h1 className="disp m-0 flex-[1_1_520px] text-[clamp(2.1rem,5.2vw,4.75rem)]">
+                {headline.map((line, row) => (
+                  <Fragment key={row}>
+                    {row > 0 && " "}
+                    <span className="block">
+                      {line.map((word, column) => {
+                        const index = headline.slice(0, row).flat().length + column;
+                        // 0.1 s start, 50 ms apart, 0.7 s each: the last word settles at 1 s.
+                        return <Fragment key={word}>{column > 0 && " "}<span className={styles.wordMask}><span className={styles.wordIn} style={{ "--delay": `${100 + index * 50}ms` } as React.CSSProperties}>{word}</span></span></Fragment>;
+                      })}
+                    </span>
+                  </Fragment>
+                ))}
+              </h1>
               <div className="max-w-[520px] flex-[1_1_360px]">
                 <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Manage your own wallet on Arc Testnet. Read live USDC balances and Morpho vault positions, track your bills, and review every transaction before signing.</p>
                 <div className="flex flex-wrap gap-3.5">

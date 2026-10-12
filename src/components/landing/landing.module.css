@@ -63,11 +63,45 @@
 @keyframes drawY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes drawX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-/* Hero headline, line by line. Pure CSS so it runs before hydration and never hides text from slow devices for long. */
-.lineMask { display: block; overflow: hidden; padding-bottom: 0.1em; margin-bottom: -0.1em; }
-.lineIn { display: block; animation: lineIn 1s cubic-bezier(0.19, 1, 0.22, 1) both; }
-@keyframes lineIn { from { transform: translateY(110%); } to { transform: translateY(0); } }
+/* Hero headline, word by word: each word rises from its own mask (first visit only, see data-intro). Pure CSS, so the
+   headline never waits for hydration or for the star. */
+.wordMask { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.1em; margin-bottom: -0.1em; }
+.wordIn { display: inline-block; }
+.hero[data-intro="play"] .wordIn { animation: wordIn 700ms cubic-bezier(0.2, 0.75, 0.15, 1) both; animation-delay: var(--delay, 100ms); }
+@keyframes wordIn { from { transform: translateY(105%); } to { transform: translateY(0); } }
+
+/* Hero mark. Geometry is measured on hodd-lockup-light.png (1912×608): the star's centre is (1677, 283) and
+   hodd-star-light.png matches it at 1.0332×. The stage is a square centred on the star, as wide as that image. */
+.markWordmark { clip-path: polygon(0 0, 81.6% 0, 81.6% 31.6%, 79.55% 31.6%, 79.55% 100%, 0 100%); }
+/* Opaque, in the D’s rendered colour (95% black over #ece8dd), so nothing of the clipped star shows through. */
+.markPatch { position: absolute; left: 76.83%; top: 44.57%; width: 2.72%; height: 3.62%; background: #0b0b0a; pointer-events: none; }
+.markStage { position: absolute; left: 74.741%; top: 5.765%; width: 25.936%; aspect-ratio: 1; pointer-events: none; }
+.markHalo { position: absolute; inset: -14%; border-radius: 50%; background: radial-gradient(circle, rgba(10, 82, 232, 0.3) 0%, rgba(127, 166, 255, 0.16) 36%, rgba(127, 166, 255, 0) 66%); opacity: 0.55; }
+.markRays { position: absolute; inset: 0; opacity: 0; }
+.markRays > span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.markRays > span:first-child { width: 124%; height: 3px; background: linear-gradient(90deg, rgba(10, 82, 232, 0), rgba(10, 82, 232, 0.85) 38%, #fff 50%, rgba(10, 82, 232, 0.85) 62%, rgba(10, 82, 232, 0)); }
+.markRays > span:last-child { width: 3px; height: 124%; background: linear-gradient(180deg, rgba(10, 82, 232, 0), rgba(10, 82, 232, 0.85) 38%, #fff 50%, rgba(10, 82, 232, 0.85) 62%, rgba(10, 82, 232, 0)); }
+.markDial { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.markDial line { stroke: rgba(11, 11, 13, 0.32); stroke-width: 0.35; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.markDial line.notchMain { stroke: rgba(11, 11, 13, 0.55); stroke-width: 0.55; }
+.markCore { position: absolute; left: 43%; top: 43%; width: 14%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, #fff 0%, rgba(255, 255, 255, 0.95) 20%, rgba(127, 166, 255, 0.65) 45%, rgba(127, 166, 255, 0) 70%); mix-blend-mode: screen; opacity: 0; }
+.markFlyer, .markLayer, .markSpin { position: absolute; inset: 0; }
+.markSpin { transition: transform 0.75s cubic-bezier(0.32, 1.42, 0.48, 1); }
+.markTrail { position: absolute; left: 50%; top: 50%; width: 120%; height: 3px; transform-origin: 0 50%; transform: rotate(-49deg); border-radius: 2px; opacity: 0; background: linear-gradient(90deg, rgba(255, 255, 255, 0.95), rgba(10, 82, 232, 0.6) 12%, rgba(10, 82, 232, 0.2) 45%, rgba(10, 82, 232, 0)); }
+/* The star image sits 0.63% left and 1.78% up of the stage so its arms' centre is the stage centre (the turn pivot). */
+.markStar, .markShine { position: absolute; left: -0.629%; top: -1.775%; width: 100%; height: 100%; }
+.markStar { user-select: none; -webkit-user-drag: none; }
+.markShine { overflow: hidden; -webkit-mask: url(/brand/hodd-star-light.png) center / 100% 100% no-repeat; mask: url(/brand/hodd-star-light.png) center / 100% 100% no-repeat; }
+.markShine > span { position: absolute; inset: 0; transform: translateX(-60%); background: linear-gradient(118deg, rgba(255, 255, 255, 0) 40%, rgba(255, 255, 255, 0.95) 50%, rgba(255, 255, 255, 0) 60%); }
+/* First visit: hold the star and its landing marks until the intro runs; reveal anyway if scripts never do. */
+.hero[data-intro="play"] .markFlyer { opacity: 0; animation: markReveal 0s linear 3.5s forwards; }
+.hero[data-intro="play"] .markHalo { opacity: 0; animation: haloReveal 0s linear 3.5s forwards; }
+.hero[data-intro="play"] .markDial line { stroke-dashoffset: 1; animation: notchReveal 0s linear 3.5s forwards; }
+@keyframes markReveal { to { opacity: 1; } }
+@keyframes haloReveal { to { opacity: 0.55; } }
+@keyframes notchReveal { to { stroke-dashoffset: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ticker, .gridV, .gridH, .lineIn { animation: none; }
+  .ticker, .gridV, .gridH, .wordIn { animation: none; }
+  .markSpin { transition: none; }
 }
