@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { autopilotIsActive } from "@/lib/autopilot/protection";
 import userEvent from "@testing-library/user-event";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +35,8 @@ describe("LIVE provider", () => {
     mocks.load.mockResolvedValue(workspace);
     let status = { mandate: { enabled: true, paused: false }, returnRequested: false }; let fail = false;
     const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/autopilot/status") { if (fail) throw new Error("Unavailable"); return { ok: true, json: async () => status }; }
+      // The server reduces the mandate to { active } (same rule as autopilotIsActive).
+      if (url === "/api/autopilot/active") { if (fail) throw new Error("Unavailable"); return { ok: true, json: async () => ({ active: autopilotIsActive(status) }) }; }
       const data = url.includes("/api/arc/") ? { status: "READY", snapshot: { address: wallet.address, chain: "ARC-TESTNET", chainId: 5042002, balance: usdc("10000000"), blockNumber: "42", observedAt } } : { status: "READY", integration: { discovery: "READY", positionAccess: "READY", execution: "READ_ONLY", configuredWalletAddress: wallet.address, message: "Fixture" }, positions: [{ walletAddress: wallet.address, vaultAddress: wallet.address, vaultName: "Morpho", currentBalance: usdc("5000000"), redeemable: usdc("5000000"), maxWithdrawable: usdc("5000000"), liquidityStatus: "READY", shares: "5000000", apyBps: 0, pnl: { status: "UNAVAILABLE", reason: "Fixture" }, observedAt }], vaults: [], observedAt };
       return { ok: true, json: async () => data };
     }); vi.stubGlobal("fetch", fetcher); await mount();

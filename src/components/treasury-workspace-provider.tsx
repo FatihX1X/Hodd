@@ -3,7 +3,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { walletApiResponseSchema } from "@/lib/arc/schemas";
 import { earnPortfolioApiSchema, type EarnExecutionResult, type EarnPortfolioResponse } from "@/lib/earn/models";
-import { autopilotIsActive } from "@/lib/autopilot/protection";
 import { assessTreasury, previewAllocation } from "@/lib/treasury/engine";
 import { createLiveStarterWorkspace } from "@/lib/treasury/starter";
 import { canDeleteObligation, hasSampleData, removeSampleData } from "@/lib/treasury/sample-cleanup";
@@ -219,8 +218,8 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       const request = new AbortController(); controller = request;
       let running = false;
       try {
-        const response = await fetch("/api/autopilot/status", { cache: "no-store", signal: request.signal });
-        if (response.ok) running = autopilotIsActive(await response.json());
+        const response = await fetch("/api/autopilot/active", { cache: "no-store", signal: request.signal });
+        if (response.ok) running = (await response.json() as { active?: unknown }).active === true;
       } catch { /* Errors keep the manual protection default. */ }
       if (active && !request.signal.aborted) { setAutopilotStatus({ userId, active: running }); setEvaluatedAt(new Date().toISOString()); }
     };
