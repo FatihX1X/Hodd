@@ -33,3 +33,8 @@ next-env.d.ts
 
 /.pnpm-store/
 /.autopilot-smoke/
+
+# Foundry (contracts/)
+/contracts/out/
+/contracts/cache/
+/contracts/broadcast/
