@@ -130,13 +130,32 @@ export const Hoddie: React.FC = () => {
           <Chip at={244} dot={C.green}>Applied only on your click</Chip>
         </div>
       </div>
-      <div style={{ position: "absolute", left: 820, top: 120 }}>
+      <div style={{ position: "absolute", left: 820, top: 90 }}>
         <div style={{ position: "absolute", opacity: 1 - a }}><Float at={2} x={0} y={0} from="right" drift={3}><Reveal name="el-hoddie-1" width={1000} at={14} full={1220} first={430} hard={C.blue} /></Float></div>
         <div style={{ position: "absolute", opacity: a * (1 - b) }}><Reveal name="el-hoddie-3" width={1000} at={100} full={1220} first={430} hard={C.blue} /></div>
         <div style={{ position: "absolute", opacity: b * (1 - c) }}><Reveal name="el-hoddie-4" width={1000} at={170} full={1260} first={430} hard={C.blue} /></div>
-        <div style={{ position: "absolute", opacity: c }}><Shot name="el-hoddie-5" width={1000} crop={{ h: 1400 }} hard={C.blue} /></div>
+        <div style={{ position: "absolute", opacity: c }}><Shot name="el-hoddie-5" width={1000} crop={{ h: 1360 }} hard={C.blue} /></div>
       </div>
+      <Quote at={30} out={92} question="Can I pay this week’s bills?" answer="Yes. October payroll is covered after earlier obligations and the safety buffer are set aside." tone={C.green} tag="Safe" />
+      <Quote at={116} out={162} question="Hesabımı özetle" answer="Hazinenizde 30,420.50 USDC var. Bunun 18,420.50 USDC tutarı likit USDC." tone={C.amber} tag="Türkçe" />
+      <Quote at={190} question="Add a 500 USDC software bill due tomorrow" answer="Deployable 18,720.50 → 18,220.50 USDC · Protected 11,700 → 12,200 USDC" tone={C.blueSoft} tag="Your approval required" />
     </Backdrop>
+  );
+};
+
+/** The answer, set large under the real capture so it reads at a glance. */
+const Quote: React.FC<{ at: number; out?: number; question: string; answer: string; tone: string; tag: string }> = ({ at, out, question, answer, tone, tag }) => {
+  const frame = useCurrentFrame();
+  const s = pop(frame, at, 170, 16);
+  const leave = out === undefined ? 0 : tween(frame, out, out + 10, 0, 1, EASE_IN);
+  return (
+    <div style={{ position: "absolute", left: 870, top: 740, width: 940, padding: "26px 32px", background: C.paperStrong, color: C.ink, boxShadow: `10px 10px 0 ${C.blue}`, opacity: Math.min(1, s * 1.5) * (1 - leave), transform: `translateY(${(1 - s) * 50 + leave * 30}px)` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", ...mono, fontSize: 17, color: C.muted }}>
+        <span>“{question}”</span>
+        <span style={{ color: C.ink, display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 10, height: 10, background: tone === C.blueSoft ? C.blue : tone === C.amber ? "#d39a1c" : "#2fa865" }} />{tag}</span>
+      </div>
+      <div style={{ ...body, fontSize: 34, lineHeight: 1.3, marginTop: 14, fontWeight: 500 }}>{answer}</div>
+    </div>
   );
 };
 
