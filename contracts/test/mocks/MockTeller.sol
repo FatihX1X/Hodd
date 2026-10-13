@@ -188,6 +188,11 @@ contract MockTeller {
         return (block.timestamp / 1 days) * 1 days;
     }
 
+    /// @dev USDC value of `shares` at the latest price (what the real Teller's `convertToAssets` does).
+    function convertToAssets(uint256 shares) external view returns (uint256) {
+        return (shares * price) / SCALE;
+    }
+
     function mintPrice() public view returns (uint256) {
         return useNextPrice ? nextPrice : price;
     }
