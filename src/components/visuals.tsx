@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import clsx from "clsx";
 import { Info, LockKeyhole } from "lucide-react";
 import { LazyMotion, domAnimation, useReducedMotion } from "motion/react";
@@ -116,14 +116,29 @@ export function Reservoir({ parts, total, protectedMoney, deployable }: { parts:
  * reasoning stays one click away (nothing is removed).
  */
 export function InfoTip({ label = "More about this", children, className }: { label?: string; children: React.ReactNode; className?: string }) {
-  const [open, setOpen] = useState(false);
+  const [place, setPlace] = useState<{ left: number; top: number; width: number } | null>(null);
   const id = useId();
+  const open = place !== null;
+  // Fixed to the viewport and clamped inside it, so a note never overflows the screen edge or a scroll container.
+  const toggle = (button: HTMLElement) => {
+    if (open) return setPlace(null);
+    const box = button.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+    const width = Math.min(288, vw - 32);
+    setPlace({ width, top: box.bottom + 4, left: Math.min(Math.max(16, box.left + box.width / 2 - width / 2), vw - 16 - width) });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setPlace(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("scroll", close, true); window.addEventListener("resize", close); window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); window.removeEventListener("keydown", onKey); };
+  }, [open]);
   return (
     <span className={clsx("relative inline-flex align-middle", className)}>
-      <button type="button" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen((value) => !value)} onBlur={(event) => { if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) setOpen(false); }} className="grid size-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.06] hover:text-white">
+      <button type="button" aria-label={label} aria-expanded={open} aria-controls={id} onClick={(event) => toggle(event.currentTarget)} onBlur={(event) => { if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) setPlace(null); }} className="grid size-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.06] hover:text-white">
         <Info aria-hidden="true" className="size-3.5" />
       </button>
-      <span id={id} role="note" hidden={!open} className="absolute left-1/2 top-full z-30 mt-1 w-72 -translate-x-1/2 border border-white/20 bg-[#1a1d26] p-3 text-left text-[12px] font-normal normal-case leading-5 tracking-normal text-white/75 shadow-[0_12px_32px_rgba(0,0,0,0.45)]">{children}</span>
+      <span id={id} role="note" hidden={!open} style={place ? { position: "fixed", left: place.left, top: place.top, width: place.width } : undefined} className="z-50 border border-white/20 bg-[#1a1d26] p-3 text-left text-[12px] font-normal normal-case leading-5 tracking-normal text-white/75 shadow-[0_12px_32px_rgba(0,0,0,0.45)]">{children}</span>
     </span>
   );
 }
