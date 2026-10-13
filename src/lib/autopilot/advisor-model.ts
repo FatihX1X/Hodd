@@ -2,6 +2,7 @@ import "server-only";
 import { generateText, Output } from "ai";
 import { createGroq } from "@ai-sdk/groq";
 import { ADVISOR_INSTRUCTIONS, adviceSchema, type AdvisorModelCall } from "./advisor";
+import { autopilotSecret } from "./secrets";
 
 /** Groq's open-weight reasoning model with strict structured outputs. Override with AUTOPILOT_GROQ_MODEL. */
 export const GROQ_ADVISOR_MODEL = "openai/gpt-oss-120b";
@@ -12,16 +13,18 @@ export function groqAdvisorModel() {
   return value;
 }
 
-/** The advisor runs only with a server-side Groq key (never sent to the browser). */
-export function advisorConfigured() {
-  return Boolean(process.env.GROQ_API_KEY?.trim());
+/** The advisor runs only with a server-side Groq key (env or Supabase Vault; never sent to the browser). */
+export async function advisorConfigured() {
+  return Boolean(await autopilotSecret("groq_api_key"));
 }
 
 /** One bounded call: no retries, 20 s, strict JSON schema. Errors are thrown bare and handled by adviseDecision. */
 export const groqAdvisor: AdvisorModelCall = async (prompt, signal) => {
   const model = groqAdvisorModel();
+  const apiKey = await autopilotSecret("groq_api_key");
+  if (!apiKey) throw new Error("AGENT_ADVISOR_NOT_CONFIGURED");
   const result = await generateText({
-    model: createGroq({ apiKey: process.env.GROQ_API_KEY! })(model),
+    model: createGroq({ apiKey })(model),
     system: ADVISOR_INSTRUCTIONS,
     prompt,
     output: Output.object({ schema: adviceSchema }),

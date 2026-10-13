@@ -29,7 +29,7 @@ const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = 
  */
 async function advise(i: Awaited<ReturnType<typeof agentInputs>>, engine: Decision, now = new Date()): Promise<Decision> {
   const m=i.stored.mandate;
-  if(i.stored.return_requested || !m.advisorEnabled || !m.enabled || m.paused || !advisorConfigured())return engine;
+  if(i.stored.return_requested || !m.advisorEnabled || !m.enabled || m.paused || !(await advisorConfigured()))return engine;
   const controls=await liveControls(); if(!controls?.get("AGENT_ADVISOR"))return engine;
   const observed=Date.parse(i.agentPosition.observedAt);
   const fresh=i.agentPosition.liquidityStatus==="READY" && now.getTime()-observed<=60_000 && observed<=now.getTime()+5_000;

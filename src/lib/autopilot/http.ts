@@ -19,6 +19,7 @@ import { agentHoldings, agentInputs } from "./inputs";
 import { advanceAgentRun, startAgentRun } from "./runner";
 import { scheduledTrigger, type RunTrigger } from "./triggers";
 import { advisorConfigured, groqAdvisorModel } from "./advisor-model";
+import { autopilotSecret } from "./secrets";
 import { treasuryPolicySchema, treasuryWorkspaceSchema } from "@/lib/treasury/models";
 const headers={"Cache-Control":"no-store"};
 const messages:Record<string,string>={
@@ -109,8 +110,8 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       let balances=null, balanceError=null;
       if(wallet && stored)try{const i=await agentInputs(c.userId);balances={cashMinor:i.cash.balance.minorUnits,positionMinor:i.agentPosition.currentBalance.minorUnits,redeemableMinor:i.agentPosition.redeemable.minorUnits,observedAt:i.cash.observedAt};}catch{balanceError="Fresh balances are unavailable. Execution stays closed until they can be read.";}
       const policy=c.workspace.policy;
-      const controls=await liveControls();
-      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,advisor:{available:advisorConfigured() && controls?.get("AGENT_ADVISOR")===true,model:advisorConfigured()?groqAdvisorModel():null},wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
+      const [controls,configured]=await Promise.all([liveControls(),advisorConfigured()]);
+      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,advisor:{available:configured && controls?.get("AGENT_ADVISOR")===true,model:configured?groqAdvisorModel():null},wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
     }
     const body=await request.json();
     if(action==="wallet") {
@@ -210,7 +211,7 @@ function bearerMatches(request:Request,secret:string|undefined) {
  */
 export async function agentCron(request:Request) {
   try {
-    if(!bearerMatches(request,process.env.CRON_SECRET) && !bearerMatches(request,process.env.AUTOPILOT_SCHEDULER_SECRET))return Response.json({status:"ERROR"},{status:401,headers});
+    if(!bearerMatches(request,process.env.CRON_SECRET) && !bearerMatches(request,(await autopilotSecret("autopilot_scheduler_secret")) ?? undefined))return Response.json({status:"ERROR"},{status:401,headers});
     await access(request,true,true);
     const {data,error}=await agentDb().from("agent_mandates").select("user_id,mandate").eq("mandate->>enabled","true").eq("mandate->>paused","false").order("updated_at",{ascending:true}).limit(50);if(error)throw new Error();
     const results:{trigger:RunTrigger;id?:string;state:string}[]=[];const now=new Date();
