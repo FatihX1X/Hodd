@@ -11,7 +11,8 @@ describe("live starter", () => {
     expect(workspace).toMatchObject({ treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: now, obligations: [], decisions: [], totalTreasury: { minorUnits: "0" }, liquidUsdc: { minorUnits: "0" }, pendingTransactions: { minorUnits: "0" }, targetAllocationsBps: { LIQUID: 5000, MORPHO: 5000, USYC: 0, BTC_RESERVE: 0 } });
     expect(workspace.policy).toMatchObject({ safetyBuffer: { minorUnits: "1000000" }, minimumLiquidityCoverageBps: 10000, strategyCapsBps: { MORPHO: 6000, USYC: 0, BTC_RESERVE: 0 }, enabledStrategies: { MORPHO: true, USYC: false, BTC_RESERVE: false } });
     expect(workspace.strategies.every((item) => item.balance.minorUnits === "0" && item.redeemable.minorUnits === "0" && item.apyBps === null && item.integration !== "DEMO")).toBe(true);
-    expect(workspace.strategies.filter((item) => ["USYC", "BTC_RESERVE"].includes(item.kind)).every((item) => item.name.includes("Not available on Arc Testnet"))).toBe(true);
+    expect(workspace.strategies.find((item) => item.kind === "BTC_RESERVE")?.name).toContain("Not available on Arc Testnet");
+    expect(workspace.strategies.find((item) => item.kind === "USYC")).toMatchObject({ name: "USYC · via Hodd's pool", integration: "UNAVAILABLE" });
     expect(workspace.activities.map((item) => item.action)).toEqual(["Workspace created"]);
     const assessment = assessTreasury(workspace, new Date(now));
     expect(previewAllocation(workspace, assessment).violations.some((item) => item.code === "STRATEGY_DISABLED")).toBe(false);

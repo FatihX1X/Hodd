@@ -14,11 +14,14 @@ import { cloudWorkspaceRevision, isRevisionConflict, knownWorkspaceRevision, loa
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { createSmokeWorkspace, type WorkspaceScope } from "@/lib/treasury/smoke-workspace";
 import { mergePaymentLedger } from "@/lib/payments/workspace";
-import { applyEarnPortfolio, applyWalletSnapshot, makeActivity } from "@/lib/treasury/live";
+import { applyEarnPortfolio, applyUsycPosition, applyWalletSnapshot, makeActivity } from "@/lib/treasury/live";
+import { usycStatusResponseSchema, type UsycStatusResponse } from "@/lib/usyc/models";
 
 type Assessment = ReturnType<typeof assessTreasury>;
 type AllocationPlan = ReturnType<typeof previewAllocation>;
-export type EarnReadState = Readonly<{ status: "IDLE" | "LOADING" }> | Readonly<{ status: "READY"; portfolio: EarnPortfolioResponse }> | Readonly<{ status: "ERROR"; message: string; stalePortfolio?: EarnPortfolioResponse }>;
+/** The signed-in wallet's USYC position from GET /api/usyc. Only READY data reaches the treasury engine. */
+export type UsycReadState = Readonly<{ status: "IDLE" | "LOADING" }> | Readonly<{ status: "READY"; data: UsycStatusResponse }> | Readonly<{ status: "ERROR"; message: string }>;
+export type EarnReadState =Readonly<{ status: "IDLE" | "LOADING" }> | Readonly<{ status: "READY"; portfolio: EarnPortfolioResponse }> | Readonly<{ status: "ERROR"; message: string; stalePortfolio?: EarnPortfolioResponse }>;
 type WorkspaceContextValue = {
   mode: "LIVE";
   signedIn: boolean;
@@ -32,12 +35,14 @@ type WorkspaceContextValue = {
   allocationPlan: AllocationPlan | null;
   walletState: WalletReadState;
   earnState: EarnReadState;
+  usycState: UsycReadState;
   hydrated: boolean;
   storageIssue: string | null;
   connectWallet(connection: WalletConnection): void;
   disconnectWallet(): void;
   refreshWallet(): void;
   refreshEarn(): void;
+  refreshUsyc(): void;
   syncForEarn(): Promise<void>;
   refreshPaymentLedger(): Promise<void>;
   refreshWorkspace(): Promise<void>;
@@ -54,15 +59,18 @@ type WorkspaceContextValue = {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 // Pure helpers live in src/lib/treasury/live.ts so the server-side Claude connector can reuse them.
-export { applyEarnPortfolio, applyWalletSnapshot };
+export { applyEarnPortfolio, applyUsycPosition, applyWalletSnapshot };
 
-export function operationalInput(workspace: TreasuryWorkspace, walletState: WalletReadState, earnState?: EarnReadState): TreasuryWorkspace | null {
+export function operationalInput(workspace: TreasuryWorkspace, walletState: WalletReadState, earnState?: EarnReadState, usycState?: UsycReadState): TreasuryWorkspace | null {
   if (!workspace.walletConnection || workspace.treasuryMode !== "ARC_TESTNET_WALLET") return null;
   if (walletState.status !== "READY" || walletState.snapshot.address.toLowerCase() !== workspace.walletConnection.address.toLowerCase()) return null;
   // Stored strategy balances are never an authoritative source in LIVE mode.
   const zero = { currency: "USDC" as const, minorUnits: "0", decimals: 6 };
   const withWallet = applyWalletSnapshot({ ...workspace, strategies: workspace.strategies.map((strategy) => strategy.kind === "LIQUID" ? strategy : { ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" }) }, walletState.snapshot);
-  return earnState?.status === "READY" ? applyEarnPortfolio(withWallet, { ...earnState.portfolio, positions: earnState.portfolio.positions.filter((position) => position.walletAddress.toLowerCase() === workspace.walletConnection?.address.toLowerCase()) }) : withWallet;
+  const withEarn = earnState?.status === "READY" ? applyEarnPortfolio(withWallet, { ...earnState.portfolio, positions: earnState.portfolio.positions.filter((position) => position.walletAddress.toLowerCase() === workspace.walletConnection?.address.toLowerCase()) }) : withWallet;
+  // The wallet's share of Hodd's USYC pool: only a fresh read for exactly this wallet counts.
+  const usyc = usycState?.status === "READY" ? usycState.data.position : null;
+  return usyc && usyc.wallet.toLowerCase() === workspace.walletConnection.address.toLowerCase() ? applyUsycPosition(withEarn, usyc) : withEarn;
 }
 
 // Per-tab memory: a reload must not silently drop a smoke test back into the
@@ -83,8 +91,10 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   const [evaluatedAt, setEvaluatedAt] = useState(workspace.updatedAt);
   const [walletState, setWalletState] = useState<WalletReadState>({ status: "IDLE" });
   const [earnState, setEarnState] = useState<EarnReadState>({ status: "IDLE" });
+  const [usycState, setUsycState] = useState<UsycReadState>({ status: "IDLE" });
   const [refreshSequence, setRefreshSequence] = useState(0);
   const [earnRefreshSequence, setEarnRefreshSequence] = useState(0);
+  const [usycRefreshSequence, setUsycRefreshSequence] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [storageIssue, setStorageIssue] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | undefined>();
@@ -117,7 +127,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       const requestGeneration = ++generation;
       identityGeneration.current++;
       clearActiveWalletRuntime();
-      setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" });
+      setHydrated(false); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setUsycState({ status: "IDLE" });
       const starter = createLiveStarterWorkspace();
       setWorkspace(starter); setStorageIssue(null); setCloudReadable(false);
       setUserId(owner); setAutopilotStatus(null); setCloudIssue(null);
@@ -282,10 +292,33 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     return () => { active = false; controller.abort(); window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
   }, [earnRefreshSequence, hydrated, walletAddress]);
 
+  // The wallet's share of Hodd's USYC pool (value, what can move now, Circle's side) from the signed-in session; read-only.
+  useEffect(() => {
+    if (!hydrated || !walletAddress || !userId) return;
+    let active = true; let controller: AbortController | null = null;
+    const load = async () => {
+      controller?.abort(); const request = new AbortController(); controller = request;
+      setUsycState((current) => current.status === "READY" ? current : { status: "LOADING" });
+      try {
+        const response = await fetch("/api/usyc", { cache: "no-store", signal: request.signal });
+        const body: unknown = await response.json();
+        if (!active || request.signal.aborted) return;
+        const parsed = usycStatusResponseSchema.safeParse(body);
+        if (response.ok && parsed.success) setUsycState({ status: "READY", data: parsed.data });
+        else setUsycState({ status: "ERROR", message: typeof (body as { message?: unknown })?.message === "string" ? (body as { message: string }).message : "USYC data is temporarily unavailable." });
+      } catch (error) {
+        if (!active || (error instanceof DOMException && error.name === "AbortError")) return;
+        setUsycState({ status: "ERROR", message: "USYC data is temporarily unavailable." });
+      }
+    };
+    void load(); const interval = window.setInterval(load, 60_000); const onFocus = () => { void load(); }; window.addEventListener("focus", onFocus);
+    return () => { active = false; controller?.abort(); window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
+  }, [usycRefreshSequence, hydrated, walletAddress, userId]);
+
   const commit = useCallback((next: TreasuryWorkspace) => {
     if (readOnly || storageIssue) return;
     try {
-      const input = operationalInput(next, walletState, earnState);
+      const input = operationalInput(next, walletState, earnState, usycState);
       const evaluation = input ? assessTreasury(input, new Date(next.updatedAt), { autopilotActive }) : null;
       const blocked = evaluation?.violations.some((item) => item.severity === "BLOCKED") ?? false;
       const evaluated: TreasuryWorkspace = { ...next, activities: [{
@@ -298,18 +331,19 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
       persist(evaluated);
       setWorkspace(evaluated); setEvaluatedAt(evaluated.updatedAt);
     } catch { setStorageIssue("The browser could not persist this workspace. Reset it before making more changes."); }
-  }, [readOnly, earnState, storageIssue, walletState, persist, setWorkspace, setEvaluatedAt, autopilotActive]);
+  }, [readOnly, earnState, usycState, storageIssue, walletState, persist, setWorkspace, setEvaluatedAt, autopilotActive]);
 
   const connectWallet = (candidate: WalletConnection) => {
     if (readOnly) return;
     const parsed = walletConnectionSchema.safeParse(candidate);
     if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid wallet connection");
-    const now = new Date().toISOString(); setWalletState({ status: "LOADING" }); setEarnState({ status: "IDLE" });
+    const now = new Date().toISOString(); setWalletState({ status: "LOADING" }); setEarnState({ status: "IDLE" }); setUsycState({ status: "IDLE" });
     commit({ ...workspace, treasuryMode: "ARC_TESTNET_WALLET", walletConnection: parsed.data, updatedAt: now, activities: [makeActivity("User-controlled wallet connected", `${parsed.data.label} is now the single authoritative Arc Testnet treasury wallet.`, "Hodd stores only public wallet metadata. Signing remains on the selected user-controlled wallet surface.", now), ...workspace.activities] });
   };
-  const disconnectWallet = () => { if (readOnly) return; const now = new Date().toISOString(); clearActiveWalletRuntime(); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); commit({ ...workspace, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: now, activities: [makeActivity("Wallet disconnected", "Wallet disconnected. Live financial calculations are paused.", "Disconnecting removes the public connection metadata from Hodd and never alters the user-owned wallet.", now), ...workspace.activities] }); };
+  const disconnectWallet = () => { if (readOnly) return; const now = new Date().toISOString(); clearActiveWalletRuntime(); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setUsycState({ status: "IDLE" }); commit({ ...workspace, treasuryMode: "LOCAL_DEMO", walletConnection: null, updatedAt: now, activities: [makeActivity("Wallet disconnected", "Wallet disconnected. Live financial calculations are paused.", "Disconnecting removes the public connection metadata from Hodd and never alters the user-owned wallet.", now), ...workspace.activities] }); };
   const refreshWallet = () => { if (!readOnly) setRefreshSequence((value) => value + 1); };
   const refreshEarn = () => { if (!readOnly) setEarnRefreshSequence((value) => value + 1); };
+  const refreshUsyc = () => { if (!readOnly) setUsycRefreshSequence((value) => value + 1); };
   const recordEarnActivity = (action: string, summary: string, reason: string, result?: EarnExecutionResult, state?: Pick<ActivityEntry, "approval" | "execution">) => {
     if (readOnly) return;
     const now = new Date().toISOString();
@@ -339,9 +373,9 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
   };
   const updatePolicy: WorkspaceContextValue["updatePolicy"] = (policy) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, policy: { ...workspace.policy, ...policy }, activities: [makeActivity("Treasury policy updated", "Protection lead time, safety buffer, coverage floor or allocation limits changed.", "The treasury policy was edited and will be evaluated against the authoritative treasury source.", now), ...workspace.activities] }); };
   const updateTargets = (targets: Record<StrategyKind, number>) => { const now = new Date().toISOString(); commit({ ...workspace, updatedAt: now, targetAllocationsBps: targets, activities: [makeActivity("Allocation targets updated", "Investment targets were updated for preview.", "Targets affect deterministic previews only and cannot move funds.", now), ...workspace.activities] }); };
-  const resetWorkspace = () => { if (readOnly) return; clearActiveWalletRuntime(); const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId); const base = repository.reset(); const reset = workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : { ...base, updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
+  const resetWorkspace = () => { if (readOnly) return; clearActiveWalletRuntime(); const repository = new LocalTreasuryRepository(window.localStorage, workspaceScope === "SMOKE_TEST" ? `${userId ?? "guest"}:smoke` : userId); const base = repository.reset(); const reset = workspaceScope === "SMOKE_TEST" ? createSmokeWorkspace() : { ...base, updatedAt: new Date().toISOString() }; persist(reset); setWorkspace(reset); setWalletState({ status: "IDLE" }); setEarnState({ status: "IDLE" }); setUsycState({ status: "IDLE" }); setStorageIssue(null); setEvaluatedAt(reset.updatedAt); setHydrated(true); };
 
-  const operationalWorkspace = useMemo(() => operationalInput(workspace, walletState, earnState), [earnState, workspace, walletState]);
+  const operationalWorkspace = useMemo(() => operationalInput(workspace, walletState, earnState, usycState), [earnState, usycState, workspace, walletState]);
   const assessment = useMemo(() => operationalWorkspace ? assessTreasury(operationalWorkspace, new Date(evaluatedAt), { autopilotActive }) : null, [operationalWorkspace, evaluatedAt, autopilotActive]);
   const allocationPlan = useMemo(() => operationalWorkspace && assessment ? previewAllocation(operationalWorkspace, assessment, { autopilotActive }) : null, [operationalWorkspace, assessment, autopilotActive]);
   const syncForEarn = async () => {
@@ -355,7 +389,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     if (generation !== identityGeneration.current) throw new Error("Workspace session changed.");
     setWorkspace((current) => mergePaymentLedger(current, cloud));
     setPaymentLedgerRevision((current) => current + 1);
-    setEvaluatedAt(new Date().toISOString()); refreshWallet(); refreshEarn();
+    setEvaluatedAt(new Date().toISOString()); refreshWallet(); refreshEarn(); refreshUsyc();
   };
   const saveRemoval = async (next: TreasuryWorkspace) => {
     if (readOnly || storageIssue) return;
@@ -380,8 +414,8 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     const now = new Date().toISOString();
     await saveRemoval({ ...workspace, updatedAt: now, obligations: workspace.obligations.filter((item) => item.id !== id), activities: [makeActivity("Obligation deleted", `${obligation.title} was removed.`, "A bill without payment history was deleted by its owner.", now), ...workspace.activities] });
   };
-  const refreshWorkspace = async () => { if (!userId || !cloudReadable) throw new Error("Sign in and sync the main workspace first."); await adoptCloud(null); refreshWallet(); refreshEarn(); };
-  const value = { mode: "LIVE" as const, signedIn: Boolean(userId), autopilotActive, readOnly, deleteObligation, workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, syncForEarn, refreshPaymentLedger, refreshWorkspace, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
+  const refreshWorkspace = async () => { if (!userId || !cloudReadable) throw new Error("Sign in and sync the main workspace first."); await adoptCloud(null); refreshWallet(); refreshEarn(); refreshUsyc(); };
+  const value = { mode: "LIVE" as const, signedIn: Boolean(userId), autopilotActive, readOnly, deleteObligation, workspaceScope, workspace, operationalWorkspace, assessment, allocationPlan, walletState, earnState, usycState, hydrated, storageIssue, connectWallet, disconnectWallet, refreshWallet, refreshEarn, refreshUsyc, syncForEarn, refreshPaymentLedger, refreshWorkspace, paymentLedgerRevision, recordEarnActivity, recordEarnEvent, createObligation, updateObligation, updatePolicy, updateTargets, resetWorkspace };
   return <WorkspaceContext.Provider value={value}>{userId && showSmoke && <div role="note" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.14] bg-[#101319] text-[#f4f1e8] px-5 py-3 text-xs"><p>{workspaceScope === "SMOKE_TEST" ? "SMOKE-TEST WORKSPACE · separate ledger, 1 USDC initial buffer, max 1 USDC deposit. Connect a different test wallet; your main treasury is unchanged." : "Main treasury workspace · isolated smoke tests do not change its obligations or policy."}</p><button disabled={!hydrated} onClick={() => { clearActiveWalletRuntime(); setWorkspaceScope(workspaceScope === "TREASURY" ? "SMOKE_TEST" : "TREASURY"); }} className="shrink-0 border border-white/20 px-3 py-2">{workspaceScope === "SMOKE_TEST" ? "Return to treasury" : "Open isolated smoke workspace"}</button></div>}{cloudIssue && <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#101319] text-[#f4f1e8] px-5 py-3 text-xs">{cloudIssue}<button onClick={() => window.location.reload()} className="border border-white/[0.14] px-3 py-2">Reload and retry sync</button></div>}{children}</WorkspaceContext.Provider>;
 }
 

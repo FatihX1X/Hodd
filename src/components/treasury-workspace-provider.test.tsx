@@ -8,6 +8,8 @@ import { sampleWorkspace, usdc } from "@/test/fixtures";
 import { createLiveStarterWorkspace } from "@/lib/treasury/starter";
 import type { TreasuryWorkspace, WalletConnection } from "@/lib/treasury/models";
 import { InvestmentWorkspace } from "./investment-workspace";
+import { liquiditySources } from "@/lib/treasury/engine";
+import type { UsycPosition } from "@/lib/usyc/models";
 
 const mocks = vi.hoisted(() => ({ owner: "alice" as string | undefined, load: vi.fn(), save: vi.fn(), listener: undefined as undefined | ((event: string, session: { user: { id: string } } | null) => void) }));
 vi.mock("@/lib/supabase/client", () => ({ createSupabaseBrowserClient: () => ({ auth: { onAuthStateChange: (callback: typeof mocks.listener) => { mocks.listener = callback; queueMicrotask(() => callback?.("INITIAL_SESSION", mocks.owner ? { user: { id: mocks.owner } } : null)); return { data: { subscription: { unsubscribe: () => undefined } } }; } } }) }));
@@ -96,6 +98,25 @@ describe("LIVE provider", () => {
     expect(operationalInput(sampleWorkspace, { status: "IDLE" })).toBeNull();
   });
 
+  it("counts the wallet's USYC pool share in the treasury, and as liquidity only while Circle permits the pool", () => {
+    const workspace: TreasuryWorkspace = { ...createLiveStarterWorkspace(), treasuryMode: "ARC_TESTNET_WALLET", walletConnection: wallet };
+    const observedAt = new Date().toISOString();
+    const walletState = { status: "READY" as const, snapshot: { address: wallet.address, chain: "ARC-TESTNET" as const, chainId: 5042002 as const, balance: { currency: "USDC" as const, decimals: 6 as const, minorUnits: "20000000" }, blockNumber: "42", observedAt } };
+    const position: UsycPosition = { wallet: wallet.address, pool: "0x4F1E3B1c0A9D8E7f6a5B4C3D2E1f0A9b8C7d6E5f", circle: "OK", depositsPaused: false, maxDepositUsdc: "1000000000", shares: "8000000000000", usycMinor: "7999999", valueUsdc: "9117958", maxWithdrawShares: "3000000000000", maxWithdrawUsdc: "3419234", priceUsdcPerUsyc: "1139744957475496722", subscribePriceUsdcPerUsyc: "1139744957475496722", afterHoursPricing: false, observedAt };
+    const usycState = (patch: Partial<UsycPosition> = {}) => ({ status: "READY" as const, data: { status: "READY" as const, position: { ...position, ...patch }, executionEnabled: true, executionNote: null, walletCanSign: true } });
+    const live = operationalInput(workspace, walletState, undefined, usycState())!;
+    expect(live.totalTreasury).toEqual(usdc("29117958"));
+    expect(live.strategies.find((item) => item.kind === "USYC")).toMatchObject({ name: "USYC · via Hodd's pool", integration: "LIVE", liquidityStatus: "READY", balance: usdc("9117958"), redeemable: usdc("3419234") });
+    expect(liquiditySources(live, new Date(observedAt)).find((item) => item.source === "USYC")?.available).toEqual(usdc("3419234"));
+    // Held but not withdrawable while Circle has not enabled (or paused) the pool.
+    const waiting = operationalInput(workspace, walletState, undefined, usycState({ circle: "NOT_PERMITTED" }))!;
+    expect(waiting.totalTreasury).toEqual(usdc("29117958"));
+    expect(liquiditySources(waiting, new Date(observedAt)).find((item) => item.source === "USYC")?.available).toEqual(usdc("0"));
+    // Another wallet's position, or no pool yet, never counts.
+    expect(operationalInput(workspace, walletState, undefined, usycState({ wallet: "0x00000000000000000000000000000000000000aa" }))!.totalTreasury).toEqual(usdc("20000000"));
+    expect(operationalInput(workspace, walletState, undefined, { status: "READY", data: { ...usycState().data, position: null } })!.totalTreasury).toEqual(usdc("20000000"));
+  });
+
 
 
   it("keeps rejected deletions and surfaces a friendly payment-history error", async () => {
@@ -129,7 +150,8 @@ describe("LIVE provider", () => {
     await waitFor(() => expect(current.operationalWorkspace?.totalTreasury).toEqual(usdc("20000000")));
     expect(screen.getByLabelText("USYC target")).toBeDisabled(); expect(screen.getByLabelText("USYC target")).toHaveValue("0");
     expect(screen.getByLabelText("BTC Reserve target")).toBeDisabled();
-    expect(screen.getAllByText("Not on Arc Testnet")).toHaveLength(2);
+    expect(screen.getAllByText("Not on Arc Testnet")).toHaveLength(1);
+    expect(screen.getByText("You choose in the pool card")).toBeInTheDocument();
     expect(screen.getAllByText("LIVE").length).toBeGreaterThan(0);
     await waitFor(() => expect(current.operationalWorkspace?.strategies.find((item) => item.kind === "MORPHO")?.apyBps).toBe(725));
     expect(screen.getAllByText("7.25%").length).toBeGreaterThan(0);
