@@ -109,10 +109,10 @@ describe("obligations detail in a live test workspace", () => {
   it("filters the calendar with the status toggle", async () => {
     const user = userEvent.setup();
     renderWorkspace(<ObligationExplorer />);
-    await user.click(await screen.findByRole("button", { name: "DRAFT" }));
+    await user.click(await screen.findByRole("button", { name: "Draft" }));
     expect(screen.getByRole("button", { name: "Invoice #104" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "October payroll" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "DRAFT" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Draft" })).toHaveAttribute("aria-pressed", "true");
   });
 });
 

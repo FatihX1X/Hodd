@@ -1,16 +1,22 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, BadgeCheck, CheckCircle2, ExternalLink, FileText, Hourglass, ReceiptText, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { paymentEventSchema, paymentRecordSchema, paymentResponseSchema, type PaymentEvent, type PaymentRecord } from "@/lib/payments/models";
 import { formatMoney } from "@/lib/treasury/format";
-import { Pagination, SectionCard, SectionHeading } from "./primitives";
+import { StatusChip } from "./ledger-visuals";
+import { Pagination, SectionCard, SectionHeading, inputClass } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
+import { InfoTip, moneyColor } from "./visuals";
 
 const PAGE_SIZE = 15;
+const muted = "rgba(244,241,232,0.55)";
+const recordMeta = (state: PaymentRecord["state"]): { icon: LucideIcon; color: string } => state === "CONFIRMED" ? { icon: CheckCircle2, color: moneyColor.safe } : state === "FAILED" ? { icon: XCircle, color: moneyColor.danger } : state === "CANCELLED" || state === "EXPIRED" ? { icon: AlertTriangle, color: muted } : state === "REVIEW_REQUIRED" ? { icon: ShieldCheck, color: moneyColor.deployable } : { icon: Hourglass, color: moneyColor.protected };
 /** Paging happens at the foot of a long list: bring the list's top back into view if it has scrolled away. */
 const showTop = (element: HTMLElement | null) => { if (element && element.getBoundingClientRect().top < 0) element.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); };
 
-export function PaymentHistory({ index = "03.4" }: { index?: string }) {
+export function PaymentHistory() {
   const { workspaceScope, workspace, paymentLedgerRevision, refreshPaymentLedger } = useTreasuryWorkspace();
   const [records, setRecords] = useState<PaymentRecord[]>([]); const [error, setError] = useState(""); const [refresh, setRefresh] = useState(0);
   const [candidateHashes, setCandidateHashes] = useState<Record<string, string>>({});
@@ -59,12 +65,28 @@ export function PaymentHistory({ index = "03.4" }: { index?: string }) {
       setRefresh((value) => value + 1);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Receipt unverified; do not retry payment."); }
   };
-  return <SectionCard className="mt-6"><SectionHeading index={index} title="Server payment ledger" description="Owner-scoped records · only confirmed canonical USDC receipts establish payment" /><div ref={recordsRef} className="scroll-mt-20 space-y-3 p-5">
-    {!records.length && <p className="text-xs text-white/65">No verified payment history loaded. Sign in to read your payment ledger.</p>}
-    {records.slice((currentRecordPage - 1) * PAGE_SIZE, currentRecordPage * PAGE_SIZE).map((record) => <article key={record.id} className="space-y-2 border-b border-white/10 pb-3 text-xs"><p className="font-semibold">{record.state.replaceAll("_", " ")} · {formatMoney(record.proposal.amount)} · {record.proposal.recipientLabel ?? "Recipient"}</p><p className="break-all">Proposal {record.id}</p>{record.userOperationHash && <p className="break-all">UserOperation hash · not a transaction receipt: {record.userOperationHash}</p>}{record.txHash && <a className="block break-all underline" href={`https://testnet.arcscan.app/tx/${record.txHash}`} target="_blank" rel="noreferrer">{record.state === "CONFIRMED" ? "Verified onchain receipt" : record.state === "FAILED" ? "Verified reverted execution · obligation remains unpaid" : "Submitted hash · not verified"}: {record.txHash}</a>}{["SUBMITTED", "UNKNOWN"].includes(record.state) && <button onClick={() => void recheck(record)} className="min-h-10 border border-white/20 px-3">Recheck existing payment (no retry)</button>}</article>)}
+  return <SectionCard className="mt-6"><SectionHeading icon={<ReceiptText className="size-4" />} title="Server payment ledger" action={<InfoTip label="About the payment ledger" className="-my-1">Owner-scoped records. Only confirmed canonical USDC receipts establish payment.</InfoTip>} /><div ref={recordsRef} className="scroll-mt-20 space-y-3 p-5">
+    {!records.length && <p className="flex items-start gap-2 text-xs text-white/65"><FileText aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />No verified payment history loaded. Sign in to read your payment ledger.</p>}
+    {records.slice((currentRecordPage - 1) * PAGE_SIZE, currentRecordPage * PAGE_SIZE).map((record) => {
+      const meta = recordMeta(record.state); const Icon = meta.icon;
+      return <article key={record.id} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-b border-white/10 pb-4 text-xs">
+        <span aria-hidden="true" className="grid size-10 place-items-center rounded-full border" style={{ borderColor: meta.color, color: meta.color }}><Icon className="size-4" /></span>
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"><p className="text-sm font-semibold"><span>{record.proposal.recipientLabel ?? "Recipient"}</span></p><p className="mono text-sm tabular-nums">{formatMoney(record.proposal.amount)}</p></div>
+          <StatusChip icon={Icon} label={record.state.replaceAll("_", " ")} color={meta.color} />
+          <p className="mono break-all text-[11px] text-white/45">Proposal {record.id}</p>
+          {record.userOperationHash && <p className="break-all"><span className="inline-flex items-center gap-1 text-white/55">UserOperation hash<InfoTip label="About the UserOperation hash" className="-my-1">Not a transaction receipt.</InfoTip></span> <span className="mono">{record.userOperationHash}</span></p>}
+          {record.txHash && <a className="flex items-start gap-2 break-all underline" href={`https://testnet.arcscan.app/tx/${record.txHash}`} target="_blank" rel="noreferrer"><ExternalLink aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>{record.state === "CONFIRMED" ? "Verified onchain receipt" : record.state === "FAILED" ? "Verified reverted execution, obligation remains unpaid" : "Submitted hash, not verified"}: {record.txHash}</span></a>}
+          {["SUBMITTED", "UNKNOWN"].includes(record.state) && <button onClick={() => void recheck(record)} className="inline-flex min-h-11 items-center gap-2 border border-white/20 px-3 hover:bg-white/[0.06]"><RefreshCw aria-hidden="true" className="size-3.5" />Recheck existing payment (no retry)</button>}
+        </div>
+      </article>;
+    })}
     <Pagination page={currentRecordPage} pageCount={recordPages} onChange={(next) => { setRecordPage(next); showTop(recordsRef.current); }} label="Server payment ledger pages" total={records.length} pageSize={PAGE_SIZE} />
-    {records.filter((record) => record.state === "UNKNOWN" && !record.txHash).map((record) => <label key={`recover-${record.id}`} className="block text-xs">Existing transaction hash for proposal {record.id}<input aria-label={`Existing transaction hash ${record.id}`} value={candidateHashes[record.id] ?? ""} onChange={(event) => setCandidateHashes((current) => ({ ...current, [record.id]: event.target.value }))} placeholder="0x… (from your wallet or explorer)" className="mt-2 w-full border border-white/20 p-3" /><span className="mt-2 block">Recheck above only verifies this existing hash. It cannot submit another transaction.</span></label>)}
-    {events.length > 0 && <><ol ref={eventsRef} aria-label="Server payment audit timeline" className="scroll-mt-20 space-y-2">{events.slice((currentEventPage - 1) * PAGE_SIZE, currentEventPage * PAGE_SIZE).map((event) => <li key={event.id} className="break-all border border-white/[0.14] p-3 text-xs">{event.kind.replaceAll("_", " ")} · {event.stage.replaceAll("_", " ")} · {new Date(event.occurred_at).toLocaleString()}<span className="mt-1 block">Proposal {event.proposal_id}</span></li>)}</ol>
+    {records.filter((record) => record.state === "UNKNOWN" && !record.txHash).map((record) => <div key={`recover-${record.id}`} className="text-xs"><label className="block"><span className="flex items-center gap-1">Existing transaction hash for proposal {record.id}</span><input aria-label={`Existing transaction hash ${record.id}`} value={candidateHashes[record.id] ?? ""} onChange={(event) => setCandidateHashes((current) => ({ ...current, [record.id]: event.target.value }))} placeholder="0x… (from your wallet or explorer)" className={`${inputClass} mono`} /></label><p className="mt-2 flex items-center gap-1 text-white/55">Recheck only verifies this existing hash.<InfoTip label="About rechecking" className="-my-1">Recheck above only verifies this existing hash. It cannot submit another transaction.</InfoTip></p></div>)}
+    {events.length > 0 && <><ol ref={eventsRef} aria-label="Server payment audit timeline" className="relative scroll-mt-20 pt-2 before:absolute before:bottom-3 before:left-[9px] before:top-4 before:w-px before:bg-white/15">{events.slice((currentEventPage - 1) * PAGE_SIZE, currentEventPage * PAGE_SIZE).map((event) => {
+      const onchain = event.kind === "ONCHAIN_RECEIPT"; const Icon = onchain ? BadgeCheck : FileText;
+      return <li key={event.id} className="relative break-all py-2 pl-9 text-xs"><span aria-hidden="true" className="absolute left-0 top-2 grid size-5 place-items-center rounded-full bg-[#101319]" style={{ color: onchain ? moneyColor.safe : muted }}><Icon className="size-4" /></span><span className="font-medium">{onchain ? "Onchain receipt" : "Local audit"}</span> <span className="lowercase first-letter:uppercase" style={{ color: muted }}>{event.stage.replaceAll("_", " ")}</span> <span className="mono whitespace-nowrap text-white/45">{new Date(event.occurred_at).toLocaleString()}</span><span className="mono mt-1 block text-[11px] text-white/45">Proposal {event.proposal_id}</span></li>;
+    })}</ol>
     <Pagination page={currentEventPage} pageCount={eventPages} onChange={(next) => { setEventPage(next); showTop(eventsRef.current); }} label="Server payment audit timeline pages" total={events.length} pageSize={PAGE_SIZE} /></>}
     {error && <p role="status" className="text-xs text-[#ff9a92]">{error}</p>}
   </div></SectionCard>;

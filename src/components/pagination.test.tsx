@@ -86,10 +86,10 @@ describe("activity ledger pagination", () => {
   it("returns to the first page when the actor filter changes", async () => {
     const user = userEvent.setup(); render(<ActivityLedger activities={entries(23, (index) => index < 12 ? "HUMAN" : "SYSTEM")} />);
     await user.click(within(ledger()).getByRole("button", { name: "Page 3" })); expect(shown()).toHaveLength(3);
-    await user.click(screen.getByRole("button", { name: "HUMAN" }));
+    await user.click(screen.getByRole("button", { name: "Human" }));
     expect(shown()).toHaveLength(10); expect(shown()[0]).toBe("Entry 01"); expect(within(ledger()).getByText("1–10 of 12")).toBeVisible();
     await user.click(within(ledger()).getByRole("button", { name: "Next" })); expect(shown()).toEqual(["Entry 11", "Entry 12"]);
-    await user.click(screen.getByRole("button", { name: "ALL" })); expect(within(ledger()).getByText("1–10 of 23")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "All" })); expect(within(ledger()).getByText("1–10 of 23")).toBeVisible();
   });
 
   it("clamps the page when the data shrinks", async () => {
