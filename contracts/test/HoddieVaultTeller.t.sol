@@ -48,7 +48,7 @@ contract HoddieVaultTellerTest is Base {
 
     function _deposit(uint256 amount) internal returns (uint256 shares) {
         vm.prank(operator);
-        shares = vault.depositToStrategy(address(teller), amount);
+        shares = vault.depositToStrategy(address(teller), amount, 1);
     }
 
     function _previewAssets(uint256 shares) internal view returns (uint256 assets) {
@@ -181,7 +181,7 @@ contract HoddieVaultTellerTest is Base {
             usdc.balanceOf(treasury), 5_000_000e6 + 600e6, "USDC went to the Teller's treasury"
         );
         assertEq(usdc.allowance(address(vault), address(teller)), 0, "allowance reset");
-        assertEq(vault.spentToday(), 600e6, "counts against the limits");
+        assertEq(vault.depositSpentLast24h(), 600e6, "counts against the limits");
     }
 
     function test_deposit_chargesTheFeeInsideTheApprovedAmount() public {
@@ -197,11 +197,11 @@ contract HoddieVaultTellerTest is Base {
         auth.setUserRole(address(vault), 0, false);
         vm.prank(operator);
         vm.expectRevert(MockTeller.NotPermissioned.selector);
-        vault.depositToStrategy(address(teller), 100e6);
+        vault.depositToStrategy(address(teller), 100e6, 1);
 
         assertEq(usdc.allowance(address(vault), address(teller)), 0, "nothing left approved");
         assertEq(usdc.balanceOf(address(vault)), FUNDS);
-        assertEq(vault.spentToday(), 0, "the budget was not consumed");
+        assertEq(vault.depositSpentLast24h(), 0, "the budget was not consumed");
 
         // once Circle allowlists the vault the same call works
         auth.setUserRole(address(vault), 0, true);
@@ -212,31 +212,31 @@ contract HoddieVaultTellerTest is Base {
         auth.setPaused(true);
         vm.prank(operator);
         vm.expectRevert(MockRolesAuthority.NoAccess.selector);
-        vault.depositToStrategy(address(teller), 100e6);
+        vault.depositToStrategy(address(teller), 100e6, 1);
     }
 
     function test_deposit_respectsTheVaultLimitsAndAccess() public {
         vm.startPrank(operator);
         vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsMaxPerTx.selector, MAX_TX + 1, MAX_TX)
+            abi.encodeWithSelector(HoddieVault.ExceedsMaxDepositPerTx.selector, MAX_TX + 1, MAX_TX)
         );
-        vault.depositToStrategy(address(teller), MAX_TX + 1);
-        vault.depositToStrategy(address(teller), MAX_TX);
-        vault.depositToStrategy(address(teller), MAX_TX);
+        vault.depositToStrategy(address(teller), MAX_TX + 1, 1);
+        vault.depositToStrategy(address(teller), MAX_TX, 1);
+        vault.depositToStrategy(address(teller), MAX_TX, 1);
         vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, 3000e6, DAILY)
+            abi.encodeWithSelector(HoddieVault.ExceedsDepositLimit24h.selector, 3000e6, DAILY)
         );
-        vault.depositToStrategy(address(teller), MAX_TX);
+        vault.depositToStrategy(address(teller), MAX_TX, 1);
         vm.stopPrank();
 
         vm.prank(stranger);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.depositToStrategy(address(teller), 1e6);
+        vault.depositToStrategy(address(teller), 1e6, 1);
         vm.prank(owner);
         vault.pause();
         vm.prank(operator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.depositToStrategy(address(teller), 1e6);
+        vault.depositToStrategy(address(teller), 1e6, 1);
     }
 
     function test_withdraw_exactAssetsBackIntoTheVault() public {
@@ -246,7 +246,7 @@ contract HoddieVaultTellerTest is Base {
         vm.expectEmit(true, false, false, true, address(vault));
         emit HoddieVault.WithdrawnFromStrategy(address(teller), 300e6, burn);
         vm.prank(operator);
-        uint256 burned = vault.withdrawFromStrategy(address(teller), 300e6);
+        uint256 burned = vault.withdrawFromStrategy(address(teller), 300e6, type(uint256).max);
 
         assertEq(burned, burn);
         assertEq(_vaultUsyc(), shares - burn);
@@ -261,7 +261,7 @@ contract HoddieVaultTellerTest is Base {
         (uint256 expected, uint256 fee,) = teller.previewRedeemData(address(vault), shares / 2);
 
         vm.prank(operator);
-        uint256 got = vault.redeemFromStrategy(address(teller), shares / 2);
+        uint256 got = vault.redeemFromStrategy(address(teller), shares / 2, 1);
 
         assertEq(got, expected);
         assertGt(fee, 0);
@@ -275,10 +275,10 @@ contract HoddieVaultTellerTest is Base {
         auth.setUserRole(address(vault), 0, false);
         vm.prank(operator);
         vm.expectRevert(MockTeller.NotPermissioned.selector);
-        vault.redeemFromStrategy(address(teller), shares);
+        vault.redeemFromStrategy(address(teller), shares, 1);
         vm.prank(operator);
         vm.expectRevert(MockTeller.NotPermissioned.selector);
-        vault.withdrawFromStrategy(address(teller), 1e6);
+        vault.withdrawFromStrategy(address(teller), 1e6, type(uint256).max);
         assertEq(_vaultUsyc(), shares);
     }
 
@@ -290,18 +290,18 @@ contract HoddieVaultTellerTest is Base {
         teller.setLimits(type(uint256).max, 500e6);
         // ... but the Teller only lets 500 USDC per day through
         vm.startPrank(operator);
-        vault.withdrawFromStrategy(address(teller), 400e6);
+        vault.withdrawFromStrategy(address(teller), 400e6, type(uint256).max);
         vm.expectRevert(MockTeller.LimitExceeded.selector);
-        vault.withdrawFromStrategy(address(teller), 200e6);
-        vault.withdrawFromStrategy(address(teller), 100e6);
+        vault.withdrawFromStrategy(address(teller), 200e6, type(uint256).max);
+        vault.withdrawFromStrategy(address(teller), 100e6, type(uint256).max);
         vm.expectRevert(MockTeller.LimitExceeded.selector);
-        vault.redeemFromStrategy(address(teller), shares / 4);
+        vault.redeemFromStrategy(address(teller), shares / 4, 1);
         vm.stopPrank();
 
         // the next UTC day has a fresh allowance
         vm.warp(block.timestamp + 1 days);
         vm.prank(operator);
-        vault.withdrawFromStrategy(address(teller), 500e6);
+        vault.withdrawFromStrategy(address(teller), 500e6, type(uint256).max);
     }
 
     function test_roundTrip_costsTheNextPriceSpread() public {
@@ -310,7 +310,7 @@ contract HoddieVaultTellerTest is Base {
         teller.configure(1.139744e18, 1.140213e18, true, 0, 0);
         uint256 shares = _deposit(100e6);
         vm.prank(operator);
-        uint256 back = vault.redeemFromStrategy(address(teller), shares);
+        uint256 back = vault.redeemFromStrategy(address(teller), shares, 1);
         assertLt(back, 100e6);
         assertGt(back, 99_900_000, "a few basis points, not more");
         assertEq(usdc.balanceOf(address(vault)), FUNDS - 100e6 + back);
@@ -529,8 +529,8 @@ contract HoddieVaultTellerTest is Base {
     function test_operatorCanNeverSteerUsycOrUsdcToItself() public {
         _deposit(500e6);
         vm.startPrank(operator);
-        vault.redeemFromStrategy(address(teller), _vaultUsyc() / 2);
-        vault.withdrawFromStrategy(address(teller), 50e6);
+        vault.redeemFromStrategy(address(teller), _vaultUsyc() / 2, 1);
+        vault.withdrawFromStrategy(address(teller), 50e6, type(uint256).max);
         vm.stopPrank();
         assertEq(usdc.balanceOf(operator), 0);
         assertEq(usyc.balanceOf(operator), 0);
@@ -556,7 +556,7 @@ contract HoddieVaultTellerTest is Base {
             + usdc.balanceOf(feeRecipient);
         uint256 shares = _deposit(amount);
         vm.prank(operator);
-        uint256 back = vault.redeemFromStrategy(address(teller), shares);
+        uint256 back = vault.redeemFromStrategy(address(teller), shares, 1);
 
         assertLe(back, amount, "a round trip never returns more than was put in");
         uint256 totalAfter = usdc.balanceOf(address(vault)) + usdc.balanceOf(treasury)

@@ -10,7 +10,7 @@ import {HoddieVaultFactory} from "../src/HoddieVaultFactory.sol";
 ///
 /// The deployer key is read from the environment at run time and is never written anywhere:
 ///
-///   DEPLOYER_PRIVATE_KEY=0x... forge script script/DeployFactory.s.sol:DeployFactory \
+///   PRIVATE_KEY=0x... forge script script/DeployFactory.s.sol:DeployFactory \
 ///     --rpc-url https://rpc.testnet.arc.network --broadcast
 ///
 /// Without `--broadcast` the script only simulates. Optional environment variables:
@@ -23,15 +23,28 @@ contract DeployFactory is Script {
     error WrongChain(uint256 actual, uint256 expected);
     error AssetNotSixDecimals(address asset, uint8 decimals);
 
+    /// @dev Reads the environment and deploys.
     function run() external returns (HoddieVaultFactory factory) {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address asset = vm.envOr("USDC_ADDRESS", ARC_TESTNET_USDC);
+        bool allowOtherChain = vm.envOr("ALLOW_OTHER_CHAIN", false);
+        return execute(deployerKey, asset, allowOtherChain);
+    }
 
-        if (block.chainid != ARC_TESTNET_CHAIN_ID && !vm.envOr("ALLOW_OTHER_CHAIN", false)) {
+    /// @dev The deployment itself, callable with explicit arguments (used by the tests).
+    function execute(uint256 deployerKey, address asset, bool allowOtherChain)
+        public
+        returns (HoddieVaultFactory factory)
+    {
+        if (block.chainid != ARC_TESTNET_CHAIN_ID && !allowOtherChain) {
             revert WrongChain(block.chainid, ARC_TESTNET_CHAIN_ID);
         }
         uint8 decimals = IERC20Metadata(asset).decimals();
         if (decimals != 6) revert AssetNotSixDecimals(asset, decimals);
+
+        address deployer = vm.addr(deployerKey);
+        console.log("deployer", deployer);
+        console.log("deployer nonce", vm.getNonce(deployer));
 
         vm.startBroadcast(deployerKey);
         factory = new HoddieVaultFactory(IERC20(asset));

@@ -27,7 +27,7 @@ contract HoddieVaultTest is Base {
 
     function _approveRecipient() internal {
         vm.prank(owner);
-        vault.addRecipient(recipient);
+        vault.addRecipient(recipient, type(uint256).max);
     }
 
     function _vaultWith(address[] memory list) internal returns (HoddieVault v) {
@@ -49,9 +49,12 @@ contract HoddieVaultTest is Base {
         assertEq(vault.owner(), owner);
         assertEq(vault.pendingOwner(), address(0));
         assertEq(vault.operator(), operator);
-        assertEq(vault.maxPerTx(), MAX_TX);
-        assertEq(vault.dailyLimit(), DAILY);
-        assertEq(vault.spentInDay(), 0);
+        assertEq(vault.maxDepositPerTx(), MAX_TX);
+        assertEq(vault.depositLimit24h(), DAILY);
+        assertEq(vault.maxPaymentPerTx(), MAX_TX);
+        assertEq(vault.paymentLimit24h(), DAILY);
+        assertEq(vault.depositSpentLast24h(), 0);
+        assertEq(vault.paymentSpentLast24h(), 0);
         assertEq(vault.strategyCount(), 2);
         assertTrue(vault.isStrategy(address(strat)));
         assertTrue(vault.isStrategy(address(strat2)));
@@ -66,10 +69,26 @@ contract HoddieVaultTest is Base {
         vm.expectEmit(true, true, false, true);
         emit HoddieVault.OperatorUpdated(address(0), operator);
         vm.expectEmit(false, false, false, true);
-        emit HoddieVault.LimitsUpdated(MAX_TX, DAILY);
+        emit HoddieVault.LimitsUpdated(MAX_TX, DAILY, MAX_TX, DAILY);
         vm.expectEmit(true, false, false, true);
         emit HoddieVault.StrategyAllowed(address(strat));
         _newVault(owner, operator, list);
+    }
+
+    function test_constructor_revertsWhenA24hLimitDoesNotFitUint64() public {
+        HoddieVault.Limits memory l = _limits();
+        l.depositLimit24h = uint256(type(uint64).max) + 1;
+        vm.expectRevert(abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.depositLimit24h));
+        new HoddieVault(IERC20(address(usdc)), owner, operator, l, new address[](0));
+
+        l = _limits();
+        l.paymentLimit24h = uint256(type(uint64).max) + 1;
+        vm.expectRevert(abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.paymentLimit24h));
+        new HoddieVault(IERC20(address(usdc)), owner, operator, l, new address[](0));
+
+        // exactly uint64 max is fine ("effectively unlimited")
+        l = HoddieVault.Limits(UNLIMITED, UNLIMITED, UNLIMITED, UNLIMITED);
+        new HoddieVault(IERC20(address(usdc)), owner, operator, l, new address[](0));
     }
 
     function test_constructor_allowsNoOperatorAndNoStrategies() public {
@@ -85,7 +104,7 @@ contract HoddieVaultTest is Base {
 
     function test_constructor_revertsOnZeroAsset() public {
         vm.expectRevert(HoddieVault.ZeroAddress.selector);
-        new HoddieVault(IERC20(address(0)), owner, operator, MAX_TX, DAILY, new address[](0));
+        new HoddieVault(IERC20(address(0)), owner, operator, _limits(), new address[](0));
     }
 
     function test_constructor_revertsOnInvalidStrategies() public {
@@ -149,9 +168,9 @@ contract HoddieVaultTest is Base {
         vm.deal(owner, 10 ether);
         _approveRecipient();
         bytes[5] memory operatorCalls = [
-            abi.encodeCall(vault.depositToStrategy, (address(strat), 1e6)),
-            abi.encodeCall(vault.withdrawFromStrategy, (address(strat), 1e6)),
-            abi.encodeCall(vault.redeemFromStrategy, (address(strat), 1e6)),
+            abi.encodeCall(vault.depositToStrategy, (address(strat), 1e6, 1)),
+            abi.encodeCall(vault.withdrawFromStrategy, (address(strat), 1e6, type(uint256).max)),
+            abi.encodeCall(vault.redeemFromStrategy, (address(strat), 1e6, 1)),
             abi.encodeCall(vault.transferToOwner, (1e6)),
             abi.encodeCall(vault.pay, (recipient, 1e6, REF))
         ];
@@ -164,12 +183,12 @@ contract HoddieVaultTest is Base {
         bytes[12] memory ownerCalls = [
             abi.encodeCall(vault.pause, ()),
             abi.encodeCall(vault.unpause, ()),
-            abi.encodeCall(vault.setLimits, (1, 2)),
+            abi.encodeCall(vault.setLimits, (1, 2,1, 2)),
             abi.encodeCall(vault.setOperator, (stranger)),
             abi.encodeCall(vault.revokeOperator, ()),
             abi.encodeCall(vault.allowStrategy, (address(strat))),
             abi.encodeCall(vault.disallowStrategy, (address(strat))),
-            abi.encodeCall(vault.addRecipient, (recipient2)),
+            abi.encodeCall(vault.addRecipient, (recipient2, type(uint256).max)),
             abi.encodeCall(vault.removeRecipient, (recipient)),
             abi.encodeCall(vault.withdrawAll, ()),
             abi.encodeCall(vault.exitStrategy, (address(strat))),
@@ -199,7 +218,8 @@ contract HoddieVaultTest is Base {
         assertEq(strat.balanceOf(address(vault)), shares, "shares go to the vault");
         assertEq(strat.balanceOf(operator), 0);
         assertEq(usdc.allowance(address(vault), address(strat)), 0, "allowance reset");
-        assertEq(vault.spentToday(), 400e6);
+        assertEq(vault.depositSpentLast24h(), 400e6);
+        assertEq(vault.paymentSpentLast24h(), 0, "payments have their own budget");
     }
 
     function test_deposit_approvesExactlyTheAmountThenZero() public {
@@ -211,11 +231,11 @@ contract HoddieVaultTest is Base {
     function test_deposit_revertsForNonOperator() public {
         vm.prank(owner);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
 
         vm.prank(stranger);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
     }
 
     function test_deposit_revertsWhenPaused() public {
@@ -223,7 +243,7 @@ contract HoddieVaultTest is Base {
         vault.pause();
         vm.prank(operator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
     }
 
     function test_deposit_revertsForUnknownStrategy() public {
@@ -232,17 +252,17 @@ contract HoddieVaultTest is Base {
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.StrategyNotAllowed.selector, address(unknown))
         );
-        vault.depositToStrategy(address(unknown), 1e6);
+        vault.depositToStrategy(address(unknown), 1e6, 1);
 
         vm.prank(operator);
         vm.expectRevert(abi.encodeWithSelector(HoddieVault.StrategyNotAllowed.selector, address(0)));
-        vault.depositToStrategy(address(0), 1e6);
+        vault.depositToStrategy(address(0), 1e6, 1);
     }
 
     function test_deposit_revertsOnZeroAmount() public {
         vm.prank(operator);
         vm.expectRevert(HoddieVault.ZeroAmount.selector);
-        vault.depositToStrategy(address(strat), 0);
+        vault.depositToStrategy(address(strat), 0, 1);
     }
 
     function test_deposit_revertsWhenStrategyMintsZeroShares() public {
@@ -250,51 +270,58 @@ contract HoddieVaultTest is Base {
         HoddieVault v = _vaultWith(_one(address(zero)));
         vm.prank(operator);
         vm.expectRevert(HoddieVault.ZeroShares.selector);
-        v.depositToStrategy(address(zero), 1e6);
+        v.depositToStrategy(address(zero), 1e6, 1);
     }
 
     function test_deposit_revertsWhenIdleBalanceIsTooLow() public {
         vm.prank(owner);
-        vault.setLimits(type(uint256).max, type(uint256).max);
+        vault.setLimits(UNLIMITED, UNLIMITED, UNLIMITED, UNLIMITED);
         vm.prank(operator);
         vm.expectRevert(); // ERC20InsufficientBalance bubbled up from the token
-        vault.depositToStrategy(address(strat), FUNDS + 1);
+        vault.depositToStrategy(address(strat), FUNDS + 1, 1);
     }
 
     function test_deposit_countsAgainstLimits_perTx() public {
         vm.startPrank(operator);
-        vault.depositToStrategy(address(strat), MAX_TX); // exactly at the cap is fine
+        vault.depositToStrategy(address(strat), MAX_TX, 1); // exactly at the cap is fine
         vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsMaxPerTx.selector, MAX_TX + 1, MAX_TX)
+            abi.encodeWithSelector(HoddieVault.ExceedsMaxDepositPerTx.selector, MAX_TX + 1, MAX_TX)
         );
-        vault.depositToStrategy(address(strat), MAX_TX + 1);
+        vault.depositToStrategy(address(strat), MAX_TX + 1, 1);
         vm.stopPrank();
     }
 
-    function test_deposit_countsAgainstLimits_daily() public {
+    function test_deposit_countsAgainstLimits_rolling24h() public {
         vm.startPrank(operator);
-        vault.depositToStrategy(address(strat), 1000e6);
-        vault.depositToStrategy(address(strat), 1000e6);
-        vault.depositToStrategy(address(strat2), 500e6); // exactly 2_500 = daily limit
+        vault.depositToStrategy(address(strat), 1000e6, 1);
+        vault.depositToStrategy(address(strat), 1000e6, 1);
+        vault.depositToStrategy(address(strat2), 500e6, 1); // exactly 2_500 = the 24h limit
         vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, DAILY + 1, DAILY)
+            abi.encodeWithSelector(HoddieVault.ExceedsDepositLimit24h.selector, DAILY + 1, DAILY)
         );
-        vault.depositToStrategy(address(strat), 1);
+        vault.depositToStrategy(address(strat), 1, 1);
         vm.stopPrank();
-        assertEq(vault.spentToday(), DAILY);
-        assertEq(vault.remainingAllowance(), 0);
+        assertEq(vault.depositSpentLast24h(), DAILY);
+        assertEq(vault.remainingDepositAllowance(), 0);
     }
 
-    function test_deposit_sharedDailyBudgetWithPayments() public {
+    function test_depositsAndPayments_haveSeparateBudgets() public {
         _approveRecipient();
         vm.startPrank(operator);
         vault.pay(recipient, 1000e6, REF);
-        vault.depositToStrategy(address(strat), 1000e6);
-        vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, 3000e6, DAILY)
-        );
         vault.pay(recipient, 1000e6, REF);
+        vault.pay(recipient, 500e6, REF); // payment budget used up ...
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.ExceedsPaymentLimit24h.selector, DAILY + 1, DAILY)
+        );
+        vault.pay(recipient, 1, REF);
+        // ... deposits are untouched
+        vault.depositToStrategy(address(strat), 1000e6, 1);
+        vault.depositToStrategy(address(strat), 1000e6, 1);
+        vault.depositToStrategy(address(strat), 500e6, 1);
         vm.stopPrank();
+        assertEq(vault.depositSpentLast24h(), DAILY);
+        assertEq(vault.paymentSpentLast24h(), DAILY);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -308,7 +335,7 @@ contract HoddieVaultTest is Base {
         vm.expectEmit(true, false, false, true, address(vault));
         emit HoddieVault.WithdrawnFromStrategy(address(strat), 300e6, burned);
         vm.prank(operator);
-        uint256 returned = vault.withdrawFromStrategy(address(strat), 300e6);
+        uint256 returned = vault.withdrawFromStrategy(address(strat), 300e6, type(uint256).max);
 
         assertEq(returned, burned);
         assertEq(usdc.balanceOf(address(vault)), FUNDS - 800e6 + 300e6);
@@ -325,7 +352,7 @@ contract HoddieVaultTest is Base {
         vm.expectEmit(true, false, false, true, address(vault));
         emit HoddieVault.RedeemedFromStrategy(address(strat), half, out);
         vm.prank(operator);
-        uint256 assets = vault.redeemFromStrategy(address(strat), half);
+        uint256 assets = vault.redeemFromStrategy(address(strat), half, 1);
 
         assertEq(assets, out);
         assertEq(usdc.balanceOf(address(vault)), FUNDS - 800e6 + out);
@@ -338,17 +365,17 @@ contract HoddieVaultTest is Base {
         _depositAs(address(strat), 1000e6);
         _depositAs(address(strat), 500e6); // daily budget used up
         vm.startPrank(operator);
-        vault.withdrawFromStrategy(address(strat), 2500e6);
+        vault.withdrawFromStrategy(address(strat), 2500e6, type(uint256).max);
         assertEq(usdc.balanceOf(address(vault)), FUNDS);
         // spends nothing against the budget, and they can be bigger than maxPerTx
-        assertEq(vault.spentToday(), DAILY);
+        assertEq(vault.depositSpentLast24h(), DAILY);
         vm.stopPrank();
 
         vm.prank(owner);
-        vault.setLimits(type(uint256).max, type(uint256).max);
+        vault.setLimits(UNLIMITED, UNLIMITED, UNLIMITED, UNLIMITED);
         vm.startPrank(operator);
-        uint256 shares = vault.depositToStrategy(address(strat), 5000e6);
-        vault.redeemFromStrategy(address(strat), shares);
+        uint256 shares = vault.depositToStrategy(address(strat), 5000e6, 1);
+        vault.redeemFromStrategy(address(strat), shares, 1);
         vm.stopPrank();
         assertEq(usdc.balanceOf(address(vault)), FUNDS);
     }
@@ -358,16 +385,16 @@ contract HoddieVaultTest is Base {
 
         vm.startPrank(stranger);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.withdrawFromStrategy(address(strat), 1e6);
+        vault.withdrawFromStrategy(address(strat), 1e6, type(uint256).max);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.redeemFromStrategy(address(strat), 1);
+        vault.redeemFromStrategy(address(strat), 1, 1);
         vm.stopPrank();
 
         vm.startPrank(owner);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.withdrawFromStrategy(address(strat), 1e6);
+        vault.withdrawFromStrategy(address(strat), 1e6, type(uint256).max);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.redeemFromStrategy(address(strat), 1);
+        vault.redeemFromStrategy(address(strat), 1, 1);
         vm.stopPrank();
 
         MockStrategy unknown = new MockStrategy(IERC20(address(usdc)));
@@ -375,24 +402,24 @@ contract HoddieVaultTest is Base {
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.StrategyNotAllowed.selector, address(unknown))
         );
-        vault.withdrawFromStrategy(address(unknown), 1e6);
+        vault.withdrawFromStrategy(address(unknown), 1e6, type(uint256).max);
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.StrategyNotAllowed.selector, address(unknown))
         );
-        vault.redeemFromStrategy(address(unknown), 1);
+        vault.redeemFromStrategy(address(unknown), 1, 1);
         vm.expectRevert(HoddieVault.ZeroAmount.selector);
-        vault.withdrawFromStrategy(address(strat), 0);
+        vault.withdrawFromStrategy(address(strat), 0, type(uint256).max);
         vm.expectRevert(HoddieVault.ZeroAmount.selector);
-        vault.redeemFromStrategy(address(strat), 0);
+        vault.redeemFromStrategy(address(strat), 0, 1);
         vm.stopPrank();
 
         vm.prank(owner);
         vault.pause();
         vm.startPrank(operator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.withdrawFromStrategy(address(strat), 1e6);
+        vault.withdrawFromStrategy(address(strat), 1e6, type(uint256).max);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.redeemFromStrategy(address(strat), 1);
+        vault.redeemFromStrategy(address(strat), 1, 1);
         vm.stopPrank();
     }
 
@@ -408,7 +435,8 @@ contract HoddieVaultTest is Base {
 
         assertEq(usdc.balanceOf(owner), 7000e6);
         assertEq(usdc.balanceOf(address(vault)), FUNDS - 7000e6);
-        assertEq(vault.spentToday(), 0);
+        assertEq(vault.depositSpentLast24h(), 0);
+        assertEq(vault.paymentSpentLast24h(), 0);
     }
 
     function test_transferToOwner_guards() public {
@@ -448,7 +476,8 @@ contract HoddieVaultTest is Base {
 
         assertEq(usdc.balanceOf(recipient), 400e6);
         assertEq(usdc.balanceOf(address(vault)), FUNDS - 400e6);
-        assertEq(vault.spentToday(), 400e6);
+        assertEq(vault.paymentSpentLast24h(), 400e6);
+        assertEq(vault.depositSpentLast24h(), 0, "deposits have their own budget");
     }
 
     function test_pay_revertsForUnapprovedRecipient() public {
@@ -496,104 +525,6 @@ contract HoddieVaultTest is Base {
         vault.pay(recipient, 1e6, REF);
     }
 
-    function test_pay_limits() public {
-        _approveRecipient();
-        vm.startPrank(operator);
-        vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsMaxPerTx.selector, MAX_TX + 1, MAX_TX)
-        );
-        vault.pay(recipient, MAX_TX + 1, REF);
-
-        vault.pay(recipient, MAX_TX, REF);
-        vault.pay(recipient, MAX_TX, REF);
-        vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, 3000e6, DAILY)
-        );
-        vault.pay(recipient, MAX_TX, REF);
-        vault.pay(recipient, 500e6, REF);
-        vm.stopPrank();
-        assertEq(usdc.balanceOf(recipient), DAILY);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                           LIMITS / DAY ROLLOVER
-    //////////////////////////////////////////////////////////////*/
-
-    function test_limits_resetAtUtcMidnight() public {
-        _approveRecipient();
-        vm.startPrank(operator);
-        vault.pay(recipient, 1000e6, REF);
-        vault.pay(recipient, 1000e6, REF);
-        vault.pay(recipient, 500e6, REF);
-        assertEq(vault.spentToday(), DAILY);
-
-        // the last second of the day is still the same day
-        vm.warp(DAY0 + 1 days - 1);
-        assertEq(vault.spentToday(), DAILY);
-        vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, DAILY + 1, DAILY)
-        );
-        vault.pay(recipient, 1, REF);
-
-        // midnight: fresh budget
-        vm.warp(DAY0 + 1 days);
-        assertEq(vault.spentToday(), 0);
-        assertEq(vault.remainingAllowance(), MAX_TX);
-        vault.pay(recipient, 1000e6, REF);
-        assertEq(vault.spentToday(), 1000e6);
-        assertEq(vault.lastSpendDay(), (DAY0 + 1 days) / 1 days);
-        vm.stopPrank();
-    }
-
-    function test_limits_noCarryOverAfterSeveralIdleDays() public {
-        _approveRecipient();
-        vm.prank(operator);
-        vault.pay(recipient, 1000e6, REF);
-        vm.warp(block.timestamp + 5 days);
-        assertEq(vault.spentToday(), 0);
-        vm.startPrank(operator);
-        vault.pay(recipient, 1000e6, REF);
-        vault.pay(recipient, 1000e6, REF);
-        vault.pay(recipient, 500e6, REF);
-        vm.stopPrank();
-        assertEq(vault.spentToday(), DAILY);
-    }
-
-    function test_limits_remainingAllowanceIsMinOfBoth() public {
-        assertEq(vault.remainingAllowance(), MAX_TX);
-        vm.prank(owner);
-        vault.setLimits(5000e6, 3000e6);
-        assertEq(vault.remainingAllowance(), 3000e6);
-        _approveRecipient();
-        vm.prank(operator);
-        vault.pay(recipient, 2500e6, REF);
-        assertEq(vault.remainingAllowance(), 500e6);
-    }
-
-    function test_setLimits_doesNotResetSpentAndCanFreezeOutflows() public {
-        _approveRecipient();
-        vm.prank(operator);
-        vault.pay(recipient, 1000e6, REF);
-
-        vm.expectEmit(false, false, false, true, address(vault));
-        emit HoddieVault.LimitsUpdated(500e6, 1000e6);
-        vm.prank(owner);
-        vault.setLimits(500e6, 1000e6);
-        assertEq(vault.spentToday(), 1000e6);
-
-        vm.prank(operator);
-        vm.expectRevert(
-            abi.encodeWithSelector(HoddieVault.ExceedsDailyLimit.selector, 1000e6 + 1, 1000e6)
-        );
-        vault.pay(recipient, 1, REF);
-
-        vm.prank(owner);
-        vault.setLimits(0, 0);
-        vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.ExceedsMaxPerTx.selector, 1, 0));
-        vault.pay(recipient, 1, REF);
-        assertEq(vault.remainingAllowance(), 0);
-    }
 
     /*//////////////////////////////////////////////////////////////
                               PAUSE / UNPAUSE
@@ -638,10 +569,10 @@ contract HoddieVaultTest is Base {
         vm.startPrank(owner);
         vault.pause();
 
-        vault.setLimits(1, 2);
+        vault.setLimits(1, 2,1, 2);
         vault.setOperator(stranger);
         vault.setOperator(operator);
-        vault.addRecipient(recipient2);
+        vault.addRecipient(recipient2, type(uint256).max);
         vault.removeRecipient(recipient2);
         vault.allowStrategy(address(new MockStrategy(IERC20(address(usdc)))));
         vault.invalidateNonce();
@@ -659,7 +590,7 @@ contract HoddieVaultTest is Base {
         vault.pause();
         vm.prank(operator);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
         vm.prank(owner);
         vault.unpause();
         _depositAs(address(strat), 1e6);
@@ -706,7 +637,7 @@ contract HoddieVaultTest is Base {
 
         vm.startPrank(operator);
         vm.expectRevert(HoddieVault.NotOperator.selector);
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
         vm.expectRevert(HoddieVault.NotOperator.selector);
         vault.pay(recipient, 1e6, REF);
         vm.expectRevert(HoddieVault.NotOperator.selector);
@@ -808,7 +739,7 @@ contract HoddieVaultTest is Base {
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.StrategyNotAllowed.selector, address(strat))
         );
-        vault.depositToStrategy(address(strat), 1e6);
+        vault.depositToStrategy(address(strat), 1e6, 1);
 
         vm.prank(owner);
         vm.expectRevert(
@@ -876,35 +807,45 @@ contract HoddieVaultTest is Base {
 
     function test_addRecipient_happyPathAndEvent() public {
         vm.expectEmit(true, false, false, true, address(vault));
-        emit HoddieVault.RecipientAdded(recipient);
-        _approveRecipient();
+        emit HoddieVault.RecipientAdded(recipient, 300e6);
+        vm.prank(owner);
+        vault.addRecipient(recipient, 300e6);
         assertTrue(vault.isRecipient(recipient));
+        assertEq(vault.recipientCap(recipient), 300e6);
 
-        // idempotent: no second event
+        // same values again: idempotent, no second event
         vm.recordLogs();
-        _approveRecipient();
+        vm.prank(owner);
+        vault.addRecipient(recipient, 300e6);
         assertEq(vm.getRecordedLogs().length, 0);
+
+        // a different cap on an approved recipient updates the cap
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit HoddieVault.RecipientCapUpdated(recipient, 50e6);
+        vm.prank(owner);
+        vault.addRecipient(recipient, 50e6);
+        assertEq(vault.recipientCap(recipient), 50e6);
     }
 
     function test_addRecipient_permissionsAndValidation() public {
         vm.prank(operator);
         vm.expectRevert(_unauthorized(operator));
-        vault.addRecipient(recipient);
+        vault.addRecipient(recipient, type(uint256).max);
         vm.prank(stranger);
         vm.expectRevert(_unauthorized(stranger));
-        vault.addRecipient(recipient);
+        vault.addRecipient(recipient, type(uint256).max);
 
         vm.startPrank(owner);
         vm.expectRevert(abi.encodeWithSelector(HoddieVault.InvalidRecipient.selector, address(0)));
-        vault.addRecipient(address(0));
+        vault.addRecipient(address(0), type(uint256).max);
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.InvalidRecipient.selector, address(vault))
         );
-        vault.addRecipient(address(vault));
+        vault.addRecipient(address(vault), type(uint256).max);
         vm.expectRevert(
             abi.encodeWithSelector(HoddieVault.InvalidRecipient.selector, address(usdc))
         );
-        vault.addRecipient(address(usdc));
+        vault.addRecipient(address(usdc), type(uint256).max);
         vm.stopPrank();
     }
 
@@ -923,6 +864,8 @@ contract HoddieVaultTest is Base {
         vault.removeRecipient(recipient);
         assertFalse(vault.isRecipient(recipient));
 
+        assertEq(vault.recipientCap(recipient), 0, "the cap goes with the approval");
+
         vm.recordLogs();
         vm.prank(owner);
         vault.removeRecipient(recipient); // idempotent
@@ -935,12 +878,12 @@ contract HoddieVaultTest is Base {
 
     function test_sig_validEoaSignatureAddsRecipient() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
 
         vm.expectEmit(true, false, false, true, address(vault));
-        emit HoddieVault.RecipientAdded(recipient);
+        emit HoddieVault.RecipientAdded(recipient, NO_CAP);
         vm.prank(stranger); // anyone (Hodd's server) can submit it
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
 
         assertTrue(vault.isRecipient(recipient));
         assertEq(vault.nonces(owner), 1);
@@ -952,102 +895,102 @@ contract HoddieVaultTest is Base {
     function test_sig_digestViewMatchesIndependentComputation() public view {
         uint256 deadline = block.timestamp + 1 hours;
         assertEq(
-            vault.addRecipientDigest(recipient, deadline),
-            _typedDigest(address(vault), recipient, 0, deadline)
+            vault.addRecipientDigest(recipient, NO_CAP, deadline),
+            _typedDigest(address(vault), recipient, NO_CAP, 0, deadline)
         );
     }
 
     function test_sig_deadlineIsInclusiveAndExpiredReverts() public {
         uint256 deadline = block.timestamp + 100;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
 
         vm.warp(deadline + 1);
         vm.expectRevert(abi.encodeWithSelector(HoddieVault.SignatureExpired.selector, deadline));
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
 
         vm.warp(deadline); // the deadline second itself is still valid
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
         assertTrue(vault.isRecipient(recipient));
     }
 
     function test_sig_replayReverts() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
 
         vm.prank(owner);
         vault.removeRecipient(recipient);
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
         assertFalse(vault.isRecipient(recipient));
     }
 
     function test_sig_nonceMustMatchAndIncrementsInOrder() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig0 = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
-        bytes memory sig1 = _sign(OWNER_PK, address(vault), recipient2, 1, deadline);
+        bytes memory sig0 = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
+        bytes memory sig1 = _sign(OWNER_PK, address(vault), recipient2, NO_CAP, 1, deadline);
 
         // nonce 1 does not work first
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient2, deadline, sig1);
+        vault.addRecipientWithSig(recipient2, NO_CAP, deadline, sig1);
 
-        vault.addRecipientWithSig(recipient, deadline, sig0);
-        vault.addRecipientWithSig(recipient2, deadline, sig1);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig0);
+        vault.addRecipientWithSig(recipient2, NO_CAP, deadline, sig1);
         assertEq(vault.nonces(owner), 2);
         assertTrue(vault.isRecipient(recipient2));
     }
 
     function test_sig_wrongSignerReverts() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(0xBEEF, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(0xBEEF, address(vault), recipient, NO_CAP, 0, deadline);
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
         assertFalse(vault.isRecipient(recipient));
         assertEq(vault.nonces(owner), 0);
     }
 
     function test_sig_tamperedFieldsRevert() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient2, deadline, sig); // other recipient
+        vault.addRecipientWithSig(recipient2, NO_CAP, deadline, sig); // other recipient
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline + 1, sig); // other deadline
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline + 1, sig); // other deadline
     }
 
     function test_sig_malformedSignatureReverts() public {
         uint256 deadline = block.timestamp + 1 hours;
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, "");
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, "");
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, hex"1234");
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, hex"1234");
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, new bytes(65));
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, new bytes(65));
     }
 
     function test_sig_otherVaultDomainReverts() public {
         // same owner, same everything, other vault: a signature for one can not be used on the other
         HoddieVault other = _vaultWith(_one(address(strat)));
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        other.addRecipientWithSig(recipient, deadline, sig);
+        other.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     function test_sig_otherChainDomainReverts() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
         vm.chainId(block.chainid + 1);
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     function test_sig_invalidateNonceCancelsOutstandingSignature() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
 
         vm.prank(operator);
         vm.expectRevert(_unauthorized(operator));
@@ -1060,7 +1003,7 @@ contract HoddieVaultTest is Base {
         assertEq(next, 1);
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     function test_sig_worksWhilePaused() public {
@@ -1068,30 +1011,30 @@ contract HoddieVaultTest is Base {
         vault.pause();
         uint256 deadline = block.timestamp + 1 hours;
         vault.addRecipientWithSig(
-            recipient, deadline, _sign(OWNER_PK, address(vault), recipient, 0, deadline)
+            recipient, NO_CAP, deadline, _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline)
         );
         assertTrue(vault.isRecipient(recipient));
     }
 
     function test_sig_rejectsInvalidRecipientButKeepsNonceUnused() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), address(0), 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), address(0), NO_CAP, 0, deadline);
         vm.expectRevert(abi.encodeWithSelector(HoddieVault.InvalidRecipient.selector, address(0)));
-        vault.addRecipientWithSig(address(0), deadline, sig);
+        vault.addRecipientWithSig(address(0), NO_CAP, deadline, sig);
         assertEq(vault.nonces(owner), 0);
     }
 
     function test_sig_alreadyApprovedStillConsumesNonce() public {
         _approveRecipient();
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
         assertEq(vault.nonces(owner), 1);
         // so a later removal can not be undone with the same signature
         vm.prank(owner);
         vault.removeRecipient(recipient);
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     function test_sig_erc1271SmartAccountOwner() public {
@@ -1100,15 +1043,15 @@ contract HoddieVaultTest is Base {
         HoddieVault v = _newVault(address(account), operator, _one(address(strat)));
 
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(controllerPk, address(v), recipient, 0, deadline);
+        bytes memory sig = _sign(controllerPk, address(v), recipient, NO_CAP, 0, deadline);
         vm.prank(stranger);
-        v.addRecipientWithSig(recipient, deadline, sig);
+        v.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
         assertTrue(v.isRecipient(recipient));
         assertEq(v.nonces(address(account)), 1);
 
         // replay
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        v.addRecipientWithSig(recipient, deadline, sig);
+        v.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     function test_sig_erc1271WrongSignerAndRejectingAccount() public {
@@ -1118,14 +1061,14 @@ contract HoddieVaultTest is Base {
         uint256 deadline = block.timestamp + 1 hours;
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        v.addRecipientWithSig(recipient, deadline, _sign(0xBAD, address(v), recipient, 0, deadline));
+        v.addRecipientWithSig(recipient, NO_CAP, deadline, _sign(0xBAD, address(v), recipient, NO_CAP, 0, deadline));
 
-        bytes memory good = _sign(controllerPk, address(v), recipient, 0, deadline);
+        bytes memory good = _sign(controllerPk, address(v), recipient, NO_CAP, 0, deadline);
         account.setRejectAll(true);
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        v.addRecipientWithSig(recipient, deadline, good);
+        v.addRecipientWithSig(recipient, NO_CAP, deadline, good);
         account.setRejectAll(false);
-        v.addRecipientWithSig(recipient, deadline, good);
+        v.addRecipientWithSig(recipient, NO_CAP, deadline, good);
         assertTrue(v.isRecipient(recipient));
     }
 
@@ -1136,20 +1079,20 @@ contract HoddieVaultTest is Base {
         // signed by the unrelated EOA owner of the main fixture
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
         v.addRecipientWithSig(
-            recipient, deadline, _sign(OWNER_PK, address(v), recipient, 0, deadline)
+            recipient, NO_CAP, deadline, _sign(OWNER_PK, address(v), recipient, NO_CAP, 0, deadline)
         );
     }
 
     function test_sig_ownershipChangeVoidsOldSignatures() public {
         uint256 deadline = block.timestamp + 1 hours;
-        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, 0, deadline);
+        bytes memory sig = _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline);
         address newOwner = makeAddr("newOwner");
         vm.prank(owner);
         vault.transferOwnership(newOwner);
         vm.prank(newOwner);
         vault.acceptOwnership();
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        vault.addRecipientWithSig(recipient, deadline, sig);
+        vault.addRecipientWithSig(recipient, NO_CAP, deadline, sig);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1258,7 +1201,7 @@ contract HoddieVaultTest is Base {
         usdc.mint(address(v), 100e6);
 
         vm.startPrank(vm.addr(controllerPk));
-        account.execute(address(v), abi.encodeCall(v.addRecipient, (recipient)));
+        account.execute(address(v), abi.encodeCall(v.addRecipient, (recipient, type(uint256).max)));
         account.execute(address(v), abi.encodeCall(v.pause, ()));
         account.execute(address(v), abi.encodeCall(v.withdrawAll, ()));
         vm.stopPrank();
@@ -1416,7 +1359,7 @@ contract HoddieVaultTest is Base {
             list[1] = address(strat);
             HoddieVault v = _vaultWith(list);
             vm.prank(operator);
-            v.depositToStrategy(address(strat), 400e6);
+            v.depositToStrategy(address(strat), 400e6, 1);
             uint256 before = usdc.balanceOf(owner);
 
             vm.prank(owner);
@@ -1437,7 +1380,7 @@ contract HoddieVaultTest is Base {
         list[1] = address(burner);
         HoddieVault v = _vaultWith(list);
         vm.prank(operator);
-        v.depositToStrategy(address(strat), 400e6);
+        v.depositToStrategy(address(strat), 400e6, 1);
 
         // With a realistic block gas limit the 63/64 rule leaves enough for the final transfer.
         vm.prank(owner);
@@ -1458,8 +1401,8 @@ contract HoddieVaultTest is Base {
         list[2] = address(strat2);
         HoddieVault v = _vaultWith(list);
         vm.startPrank(operator);
-        v.depositToStrategy(address(strat), 400e6);
-        v.depositToStrategy(address(strat2), 400e6);
+        v.depositToStrategy(address(strat), 400e6, 1);
+        v.depositToStrategy(address(strat2), 400e6, 1);
         vm.stopPrank();
 
         vm.startPrank(owner);
@@ -1545,7 +1488,7 @@ contract HoddieVaultTest is Base {
         v = _newVault(owner, address(op), _one(address(rs)));
         usdc.mint(address(v), FUNDS);
         vm.prank(owner);
-        v.addRecipient(recipient);
+        v.addRecipient(recipient, type(uint256).max);
         op.setTarget(address(v), payloadSeed);
         rs.setHook(address(op));
     }
@@ -1553,7 +1496,7 @@ contract HoddieVaultTest is Base {
     function test_reentrancy_payInsideDeposit() public {
         (HoddieVault v, ReentrantOperator op, ReentrantStrategy rs) =
             _reentrancyFixture(abi.encodeCall(HoddieVault.pay, (recipient, 1e6, REF)));
-        (bool ok,) = op.call(abi.encodeCall(HoddieVault.depositToStrategy, (address(rs), 100e6)));
+        (bool ok,) = op.call(abi.encodeCall(HoddieVault.depositToStrategy, (address(rs), 100e6, 1)));
         assertTrue(ok, "outer call itself succeeds");
         assertTrue(op.reentered());
         assertFalse(op.reenterOk(), "reentrant call must fail");
@@ -1569,11 +1512,11 @@ contract HoddieVaultTest is Base {
             _reentrancyFixture(abi.encodeCall(HoddieVault.transferToOwner, (1e6)));
         // deposit first with the hook disabled, then arm it
         rs.setHook(address(0));
-        (bool ok,) = op.call(abi.encodeCall(HoddieVault.depositToStrategy, (address(rs), 100e6)));
+        (bool ok,) = op.call(abi.encodeCall(HoddieVault.depositToStrategy, (address(rs), 100e6, 1)));
         assertTrue(ok);
         rs.setHook(address(op));
 
-        (ok,) = op.call(abi.encodeCall(HoddieVault.withdrawFromStrategy, (address(rs), 50e6)));
+        (ok,) = op.call(abi.encodeCall(HoddieVault.withdrawFromStrategy, (address(rs), 50e6, type(uint256).max)));
         assertTrue(ok);
         assertTrue(op.reentered());
         assertFalse(op.reenterOk());
@@ -1590,19 +1533,19 @@ contract HoddieVaultTest is Base {
 
     function test_stranger_cannotCallAnyPrivilegedFunction() public {
         bytes[19] memory calls = [
-            abi.encodeCall(vault.depositToStrategy, (address(strat), 1e6)),
-            abi.encodeCall(vault.withdrawFromStrategy, (address(strat), 1e6)),
-            abi.encodeCall(vault.redeemFromStrategy, (address(strat), 1)),
+            abi.encodeCall(vault.depositToStrategy, (address(strat), 1e6, 1)),
+            abi.encodeCall(vault.withdrawFromStrategy, (address(strat), 1e6, type(uint256).max)),
+            abi.encodeCall(vault.redeemFromStrategy, (address(strat), 1, 1)),
             abi.encodeCall(vault.transferToOwner, (1e6)),
             abi.encodeCall(vault.pay, (recipient, 1e6, REF)),
             abi.encodeCall(vault.pause, ()),
             abi.encodeCall(vault.unpause, ()),
-            abi.encodeCall(vault.setLimits, (type(uint256).max, type(uint256).max)),
+            abi.encodeCall(vault.setLimits, (UNLIMITED, UNLIMITED, UNLIMITED, UNLIMITED)),
             abi.encodeCall(vault.setOperator, (stranger)),
             abi.encodeCall(vault.revokeOperator, ()),
             abi.encodeCall(vault.allowStrategy, (address(strat))),
             abi.encodeCall(vault.disallowStrategy, (address(strat))),
-            abi.encodeCall(vault.addRecipient, (stranger)),
+            abi.encodeCall(vault.addRecipient, (stranger, type(uint256).max)),
             abi.encodeCall(vault.removeRecipient, (recipient)),
             abi.encodeCall(vault.invalidateNonce, ()),
             abi.encodeCall(vault.withdrawAll, ()),

@@ -10,10 +10,16 @@ import {MockStrategy} from "./mocks/MockStrategy.sol";
 /// @dev Shared fixture: a vault owned by an EOA (known key), one operator, two OZ strategies.
 abstract contract Base is Test {
     uint256 internal constant OWNER_PK = 0xA11CE;
+    /// @dev Per-call cap of strategy deposits and of payments in the default fixture.
     uint256 internal constant MAX_TX = 1000e6;
+    /// @dev Rolling-24-hour limit of strategy deposits and, separately, of payments.
     uint256 internal constant DAILY = 2500e6;
     uint256 internal constant FUNDS = 10_000e6;
-    /// @dev A UTC midnight, so tests can reason about day boundaries.
+    /// @dev No per-recipient cap in effect (the per-payment cap of the vault still applies).
+    uint256 internal constant NO_CAP = type(uint256).max;
+    /// @dev "Effectively unlimited" for a 24-hour limit (they must fit in uint64).
+    uint256 internal constant UNLIMITED = type(uint64).max;
+    /// @dev A UTC midnight, so tests can reason about hour and day boundaries.
     uint256 internal constant DAY0 = 20_000 days;
 
     MockUSDC internal usdc;
@@ -41,27 +47,41 @@ abstract contract Base is Test {
         usdc.mint(address(vault), FUNDS);
     }
 
+    function _limits() internal pure returns (HoddieVault.Limits memory) {
+        return HoddieVault.Limits(MAX_TX, DAILY, MAX_TX, DAILY);
+    }
+
     function _newVault(address owner_, address operator_, address[] memory list)
         internal
         returns (HoddieVault)
     {
-        return new HoddieVault(IERC20(address(usdc)), owner_, operator_, MAX_TX, DAILY, list);
+        return new HoddieVault(IERC20(address(usdc)), owner_, operator_, _limits(), list);
     }
 
     function _depositAs(address strategy, uint256 amount) internal returns (uint256 shares) {
         vm.prank(operator);
-        shares = vault.depositToStrategy(strategy, amount);
+        shares = vault.depositToStrategy(strategy, amount, 1);
     }
 
-    function _typedDigest(address vault_, address recipient_, uint256 nonce, uint256 deadline)
-        internal
-        view
-        returns (bytes32)
-    {
+    function _addRecipient(address who) internal {
+        vm.prank(owner);
+        vault.addRecipient(who, NO_CAP);
+    }
+
+    function _typedDigest(
+        address vault_,
+        address recipient_,
+        uint256 maxPerPayment,
+        uint256 nonce,
+        uint256 deadline
+    ) internal view returns (bytes32) {
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("AddRecipient(address recipient,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "AddRecipient(address recipient,uint256 maxPerPayment,uint256 nonce,uint256 deadline)"
+                ),
                 recipient_,
+                maxPerPayment,
                 nonce,
                 deadline
             )
@@ -80,13 +100,16 @@ abstract contract Base is Test {
         return keccak256(abi.encodePacked("\x19\x01", domain, structHash));
     }
 
-    function _sign(uint256 pk, address vault_, address recipient_, uint256 nonce, uint256 deadline)
-        internal
-        view
-        returns (bytes memory)
-    {
+    function _sign(
+        uint256 pk,
+        address vault_,
+        address recipient_,
+        uint256 maxPerPayment,
+        uint256 nonce,
+        uint256 deadline
+    ) internal view returns (bytes memory) {
         (uint8 v, bytes32 r, bytes32 s) =
-            vm.sign(pk, _typedDigest(vault_, recipient_, nonce, deadline));
+            vm.sign(pk, _typedDigest(vault_, recipient_, maxPerPayment, nonce, deadline));
         return abi.encodePacked(r, s, v);
     }
 }
