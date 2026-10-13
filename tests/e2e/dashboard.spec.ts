@@ -169,7 +169,7 @@ test("USYC pool deposit is one click: exact approval then deposit, each inside t
   });
   await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask", exact: true }).click();
   await expect(page.getByText("Custody: user")).toBeVisible();
-  await page.getByRole("link", { name: "Strategies" }).first().click();
+  await page.getByRole("link", { name: "Invest" }).first().click();
   const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
   await expect(page.getByText("Circle enabled")).toBeVisible();
   await page.getByLabel("USYC pool amount").fill("5"); await page.getByRole("button", { name: "Deposit", exact: true }).click();

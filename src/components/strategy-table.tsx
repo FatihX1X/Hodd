@@ -123,7 +123,6 @@ export function StrategyTable({ workspace, strategies }: { workspace: TreasuryWo
             <div><dt className={labelClass}>Balance</dt><dd><MoneyValue money={selected.balance} className="mt-2 block text-sm" /></dd></div>
             <div><dt className={labelClass}>Redeemable</dt><dd><MoneyValue money={selected.redeemable} className="mt-2 block text-sm" /></dd></div>
             <div><dt className={labelClass}>Risk</dt><dd className="mono mt-2 text-sm">{selected.risk}</dd></div>
-            <div><dt className={labelClass}>Integration</dt><dd className="mono mt-2 text-sm">{selected.integration === "DEMO" ? "Not connected" : selected.integration}</dd></div>
           </dl>
           {capped && (
             <div className="mt-5 border-t border-white/10 pt-5">

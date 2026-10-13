@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import { AlertTriangle, Ban, CheckCircle2, Coins, Droplets, Gauge, Layers, ListChecks, Lock, Pencil, ShieldCheck, Wallet } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { TreasuryNotice, PageBody, PageHeader, KpiGrid, MoneyValue, SectionCard, SectionHeading } from "@/components/primitives";
+import { PageBody, PageHeader, KpiGrid, MoneyValue, SectionCard, SectionHeading } from "@/components/primitives";
 import { StatusChip } from "@/components/ledger-visuals";
 import { PolicyForm } from "@/components/policy-form";
 import { useTreasuryWorkspace } from "@/components/treasury-workspace-provider";
@@ -55,7 +55,6 @@ export function PolicyView() {
   return (
     <>
       <PageHeader eyebrow="04 · Policy" title="The rules behind every number." description="Your policy, today's checks and the values you can change." />
-      <TreasuryNotice>Policy protects your bills and safety buffer before investment planning. Your wallet signs every transaction.</TreasuryNotice>
       <PageBody>
         <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="min-w-0 space-y-6">

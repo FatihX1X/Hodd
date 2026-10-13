@@ -16,7 +16,7 @@ import { WalletPanel } from "./wallet-panel";
 
 const navigation = [
   { href: "/", label: "Overview", icon: Landmark },
-  { href: "/invest", label: "Strategies", icon: BriefcaseBusiness },
+  { href: "/invest", label: "Invest", icon: BriefcaseBusiness },
   { href: "/obligations", label: "Obligations", icon: ListChecks },
   { href: "/policy", label: "Policy", icon: SlidersHorizontal },
   { href: "/activity", label: "Activity", icon: Activity },
@@ -27,7 +27,7 @@ const navigation = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { workspace, walletState, hydrated, signedIn } = useTreasuryWorkspace();
+  const { workspace, hydrated, signedIn } = useTreasuryWorkspace();
   const liveMode = workspace.treasuryMode === "ARC_TESTNET_WALLET";
   const walletLabels = {
     CIRCLE_USER_CONTROLLED: "Circle Embedded",
@@ -64,11 +64,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </ul>
         </nav>
         <div className="mt-auto border-t border-white/10 p-5">
-          <div className="border border-white/10 bg-white/[0.03] p-4">
-            <div className="flex items-center gap-2 text-xs text-[#b9ccff]"><span className="size-1.5 bg-[#7fa6ff]" />{liveMode ? "Arc Testnet · user-owned wallet" : "Live Arc Testnet treasury"}</div>
-            <p className="mt-2 text-xs leading-5 text-white/50">{liveMode ? walletState.status === "READY" ? "Live balances · wallet approval required" : "Live balance unavailable · engine paused" : "Connect your wallet to start"}</p>
-          </div>
-          <a href="https://docs.arc.io/" target="_blank" rel="noreferrer" className="mt-4 flex min-h-11 items-center justify-between text-xs text-white/50 hover:text-white">
+          <a href="https://docs.arc.io/" target="_blank" rel="noreferrer" className="flex min-h-11 items-center justify-between text-xs text-white/50 hover:text-white">
             Arc documentation <ArrowUpRight aria-hidden="true" className="size-3.5" />
           </a>
         </div>
@@ -81,8 +77,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
           <div className="hidden items-center gap-3 lg:flex">
             <span className="text-[12px] font-medium text-white/70">{liveMode ? walletLabel : "Wallet not connected"}</span>
-            <span className="h-3 w-px bg-white/20" />
-            <span className="text-xs text-white/60">{pathname.startsWith("/autopilot") ? "Agent wallet · bounded server signing" : "Your own wallet signs every transaction"}</span>
           </div>
           <div className="flex items-center gap-3">
             <AccountMenu />

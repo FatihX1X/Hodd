@@ -1,9 +1,8 @@
 "use client";
 
-import { isExecutionAvailable } from "@/lib/earn/access-policy";
 import Image from "next/image";
 import Link from "next/link";
-import { Activity, ArrowRight, CalendarClock, Landmark, Layers, ShieldCheck, TriangleAlert, Wallet } from "lucide-react";
+import { Activity, ArrowRight, CalendarClock, ShieldCheck, TriangleAlert } from "lucide-react";
 import { RunwayChart } from "@/components/charts";
 import { TreasuryNotice, MoneyValue, PageBody, PageHeader, PolicyPill, SectionCard, SectionHeading, StatusPill, buttonClass, labelClass } from "@/components/primitives";
 import { Figure, InfoTip, Reservoir, Ring, Spark, moneyColor, type ReservoirPart } from "@/components/visuals";
@@ -65,7 +64,7 @@ function CoverageRing({ bps, status }: { bps: number | null; status: string }) {
 }
 
 export default function PortfolioPage() {
-  const { workspace, operationalWorkspace, assessment, walletState, earnState, hydrated, mode, autopilotActive } = useTreasuryWorkspace();
+  const { workspace, operationalWorkspace, assessment, mode, autopilotActive } = useTreasuryWorkspace();
   if (!assessment || !operationalWorkspace) return <>
     <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="Bills come first. Hodd shows what must stay liquid and what can work for you." aside={<div className="flex min-w-56 items-center gap-3 border border-white/15 bg-white/[0.04] p-4"><TriangleAlert aria-hidden="true" className="size-5 text-[#ff9a92]" /><div><p className="text-[12px] text-white/55">Treasury Engine</p><p className="mt-1 text-lg text-[#ff9a92]">Awaiting verified balance</p><div className="mt-1"><StatusPill label="PAUSED" tone="danger" /></div></div></div>} />
     <TreasuryNotice>Connect your own Arc Testnet wallet to see live USDC balances. Financial calculations wait for a verified balance.</TreasuryNotice>
@@ -88,22 +87,9 @@ export default function PortfolioPage() {
   });
   const daysToNext = next ? Math.max(0, Math.ceil((Date.parse(next.dueAt) - evaluatedAt.getTime()) / DAY)) : null;
   const runwayState = runway.firstBelowZeroDay !== null ? { label: "Below zero", tone: "danger" as const } : runway.firstBelowBufferDay !== null ? { label: "Below buffer", tone: "warning" as const } : { label: "Above buffer", tone: "success" as const };
-  const integrationRows = workspace.integrations.map((item) => {
-    if (item.name === "Morpho") {
-      if (earnState.status === "READY") return { ...item, label: earnState.portfolio.integration.execution.replaceAll("_", " "), tone: isExecutionAvailable(earnState.portfolio.integration.execution) ? "success" as const : "info" as const, message: earnState.portfolio.integration.message };
-      if (earnState.status === "ERROR") return { ...item, label: "UNAVAILABLE", tone: "danger" as const, message: earnState.message };
-      return { ...item, label: "SYNCING", tone: "info" as const, message: "Loading the verified Arc Earn allowlist." };
-    }
-    if (workspace.treasuryMode !== "ARC_TESTNET_WALLET" || (item.name !== "User wallet" && item.name !== "Arc Testnet")) return { ...item, label: item.status === "DEMO" ? "Not connected" : item.status.replace("_", " "), tone: "neutral" as const };
-    if (walletState.status === "READY") return { ...item, label: item.name === "Arc Testnet" ? "LIVE" : "USER CONTROLLED", tone: "success" as const, message: item.name === "User wallet" ? "The selected wallet is authoritative for this workspace. Hodd never combines balances across wallet choices." : `Live USDC verified at block ${walletState.snapshot.blockNumber} on Arc Testnet.` };
-    if (walletState.status === "ERROR") return { ...item, label: "UNAVAILABLE", tone: "danger" as const, message: "The live Arc balance is unavailable, so Treasury Engine outputs are paused." };
-    return { ...item, label: "SYNCING", tone: "info" as const, message: "Waiting for a verified Arc Testnet USDC snapshot." };
-  });
-  const integrationIcon = (name: string) => name === "User wallet" ? Wallet : name === "Arc Testnet" ? Landmark : name === "Morpho" ? Layers : Activity;
 
   return <>
     <PageHeader eyebrow="01 · Overview" title="Liquidity before yield." description="Bills come first. Hodd shows what must stay liquid and what can work for you." aside={<div className="flex flex-col gap-3 sm:flex-row sm:items-stretch md:flex-col"><CoverageRing bps={assessment.liquidityCoverageBps} status={assessment.coverageStatus} /><PolicyPanel /></div>} />
-    <TreasuryNotice>{hydrated ? "Live Arc Testnet balances from your own wallet. Your wallet signs every transaction." : "Loading your treasury workspace…"}</TreasuryNotice>
     <PageBody>
       <OnboardingChecklist />
       <div id="treasury-wallet"><WalletPanel /></div>
@@ -122,7 +108,7 @@ export default function PortfolioPage() {
           </div>
         </div>
         <div className="mt-8"><Reservoir parts={parts} total={operationalWorkspace.totalTreasury} protectedMoney={assessment.protectedCapital} deployable={assessment.deployableCapital} /></div>
-        <Link href="/invest" className="mt-5 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-white/80 hover:text-[#8fb0ff]">Open strategies <ArrowRight aria-hidden="true" className="size-4" /></Link>
+        <Link href="/invest" className="mt-5 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-white/80 hover:text-[#8fb0ff]">Open Invest <ArrowRight aria-hidden="true" className="size-4" /></Link>
       </section>
 
       <section aria-label="Treasury overview" className="mt-6 grid gap-px border border-white/[0.14] bg-white/[0.14] sm:grid-cols-2 xl:grid-cols-4">
@@ -202,14 +188,13 @@ export default function PortfolioPage() {
         </SectionCard>
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-6">
         <SectionCard>
           <SectionHeading icon={<Activity className="size-4" />} title="Recent activity" description="Local records, separate from onchain receipts" />
-          <ol className="relative m-0 list-none p-5 pl-9">
-            <span aria-hidden="true" className="absolute bottom-6 left-[1.6rem] top-7 w-px bg-white/15" />
+          <ol className="m-0 grid list-none lg:grid-cols-3">
             {workspace.activities.slice(0, 3).map((entry) => (
-              <li key={entry.id} className="relative pb-5 last:pb-0">
-                <span aria-hidden="true" className="absolute -left-[0.95rem] top-1.5 size-2.5 rounded-full ring-4 ring-[#101319]" style={{ background: entry.policy.status === "PASS" ? moneyColor.safe : entry.policy.status === "BLOCKED" ? moneyColor.danger : moneyColor.deployable }} />
+              <li key={entry.id} className="border-b border-white/10 p-5 last:border-b-0 lg:border-b-0 lg:border-r lg:last:border-r-0">
+                <span aria-hidden="true" className="mb-3 block size-2.5 rounded-full" style={{ background: entry.policy.status === "PASS" ? moneyColor.safe : entry.policy.status === "BLOCKED" ? moneyColor.danger : moneyColor.deployable }} />
                 <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold">{entry.action}</h3><StatusPill label={entry.execution.replace("_", " ")} /></div>
                 <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-white/55">{entry.summary}</p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1"><span className={labelClass}>{entry.actor.toLowerCase()}, {formatDate(entry.occurredAt, { year: undefined, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span><PolicyPill policy={entry.policy} /></div>
@@ -218,21 +203,6 @@ export default function PortfolioPage() {
             ))}
           </ol>
           <Link href="/activity" className="flex min-h-11 items-center justify-between border-t border-white/[0.14] px-5 py-3 text-sm font-semibold hover:text-[#8fb0ff]">Open audit view <ArrowRight aria-hidden="true" className="size-4" /></Link>
-        </SectionCard>
-        <SectionCard>
-          <SectionHeading icon={<Layers className="size-4" />} title="Integration boundaries" description="Arc Testnet balances, wallet-approved transactions" />
-          <ul className="grid gap-px bg-white/10 sm:grid-cols-2">{integrationRows.map((item, index) => {
-            const Icon = integrationIcon(item.name);
-            return (
-              <li key={item.name} className={`flex items-start gap-3 bg-[#101319] p-4 ${integrationRows.length % 2 === 1 && index === integrationRows.length - 1 ? "sm:col-span-2" : ""}`}>
-                <Icon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-white/50" />
-                <div className="min-w-0">
-                  <h3 className="flex items-center gap-1 text-sm font-semibold">{item.name}<InfoTip label={`About ${item.name}`}>{item.message}</InfoTip></h3>
-                  <div className="mt-1"><StatusPill label={item.label} tone={item.tone} /></div>
-                </div>
-              </li>
-            );
-          })}</ul>
         </SectionCard>
       </div>
     </PageBody>
