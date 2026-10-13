@@ -69,7 +69,7 @@ export function AgentRequests() {
   const localExecution = portfolio ? isExecutionAvailable(portfolio.integration.execution) : false;
 
   return <SectionCard className="mt-6">
-    <SectionHeading index="00" title="Agent requests" description="Reviewed requests · finish here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
+    <SectionHeading index="00" title="Agent requests" description="Finish each one here with your own wallet signature" action={<StatusPill label={`${requests.length} OPEN`} tone="info" />} />
     <div className="divide-y divide-white/10">
       {requests.map((request) => {
         const expired = request.expires_at !== null && Date.parse(request.expires_at) <= loadedAt;
@@ -89,7 +89,7 @@ export function AgentRequests() {
           <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#8fb0ff]" /><div>
             <p className="text-sm font-semibold">{request.summary}</p>
             <p className="mt-1 text-xs text-white/55">Source: {request.source === "HODDIE" ? "Hoddie" : "Claude connector"}</p>
-            <p className="mono mt-1 text-[10px] uppercase tracking-[0.1em] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"} · requested {new Date(request.created_at).toLocaleString()}{expired ? " · expired" : request.expires_at ? ` · expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
+            <p className="mt-1 text-[12px] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"}, requested {new Date(request.created_at).toLocaleString()}{expired ? ", expired" : request.expires_at ? `, expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
             {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Wallet signing is not available on this host right now. Open app.hoddfinance.xyz to finish it.</p>}
           </div></div>
           <div className="flex flex-wrap items-center gap-2">{action}

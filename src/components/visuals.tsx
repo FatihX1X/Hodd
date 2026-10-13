@@ -73,25 +73,25 @@ export function Reservoir({ parts, total, protectedMoney, deployable }: { parts:
   const locked = share(protectedMoney);
   const free = share(deployable);
   const visible = parts.filter((part) => minor(part.money) > 0);
-  let offset = 0;
+  const widths = visible.map((part) => share(part.money) * 100);
+  const lefts = widths.map((_, index) => widths.slice(0, index).reduce((sum, width) => sum + width, 0));
   const summary = `${formatMoney(total)} in total: ${parts.map((part) => `${part.label} ${formatMoney(part.money)}`).join(", ")}. Protected ${formatMoney(protectedMoney)}, deployable ${formatMoney(deployable)}.`;
   return (
     <LazyMotion features={domAnimation} strict>
       <figure className="m-0" aria-label={summary}>
         <div aria-hidden="true" className="relative">
           {/* the brackets: locked for bills on the left, free to deploy on the right */}
-          <div className="relative mb-2 h-8 text-[12px]">
+          <div className="relative mb-2 h-10 text-[12px]">
             {locked > 0 && <m.div className="absolute inset-y-0 left-0 flex items-end border-l border-t pb-1.5 pl-2" style={{ borderColor: moneyColor.protected, color: moneyColor.protected }} initial={{ width: 0, opacity: 0 }} animate={{ width: `${locked * 100}%`, opacity: 1 }} transition={{ duration: reduced ? 0 : 0.9, delay: reduced ? 0 : 0.45, ease: EASE }}>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><LockKeyhole className="size-3" />Protected</span>
             </m.div>}
-            {free > 0 && <m.div className="absolute inset-y-0 right-0 flex items-end justify-end border-r border-t pb-1.5 pr-2" style={{ borderColor: moneyColor.deployable, color: moneyColor.deployable }} initial={{ width: 0, opacity: 0 }} animate={{ width: `${free * 100}%`, opacity: 1 }} transition={{ duration: reduced ? 0 : 0.9, delay: reduced ? 0 : 0.6, ease: EASE }}>
+            {free > 0 && <m.div className="absolute bottom-0 right-0 top-3 flex items-end justify-end border-r border-t pb-1.5 pr-2" style={{ borderColor: moneyColor.deployable, color: moneyColor.deployable }} initial={{ width: 0, opacity: 0 }} animate={{ width: `${free * 100}%`, opacity: 1 }} transition={{ duration: reduced ? 0 : 0.9, delay: reduced ? 0 : 0.6, ease: EASE }}>
               <span className="whitespace-nowrap">Deployable</span>
             </m.div>}
           </div>
           <div className="relative flex h-14 overflow-hidden bg-white/[0.06]">
             {visible.map((part, index) => {
-              const width = share(part.money) * 100;
-              const left = offset; offset += width;
+              const width = widths[index], left = lefts[index];
               return <m.div key={part.key} className="absolute inset-y-0" style={{ left: `${left}%`, background: part.color }} initial={{ width: 0 }} animate={{ width: `${width}%` }} transition={{ duration: reduced ? 0 : 0.8, delay: reduced ? 0 : index * 0.12, ease: EASE }} />;
             })}
             {locked > 0 && <m.div className="absolute inset-y-0 left-0" style={{ backgroundImage: `repeating-linear-gradient(135deg, rgba(11,11,13,0.55) 0 2px, transparent 2px 7px)` }} initial={{ width: 0 }} animate={{ width: `${locked * 100}%` }} transition={{ duration: reduced ? 0 : 0.9, delay: reduced ? 0 : 0.45, ease: EASE }} />}
