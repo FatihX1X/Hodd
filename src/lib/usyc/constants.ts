@@ -74,7 +74,7 @@ export const USYC_DOCS_URL = "https://developers.circle.com/tokenized/usyc/subsc
  * only USDC and never need allowlisting. Set at deployment (`contracts/script/DeployHoddUSYCVault.s.sol`);
  * `HODD_USYC_POOL_ADDRESS` can override it. Until then the USYC pool is shown as not deployed.
  */
-const DEPLOYED_POOL: string | null = null;
+const DEPLOYED_POOL: string | null = "0x97A7BAaA5416e0aC0674C395cec22FF606120b76"; // Arc Testnet, verified on ArcScan
 export function usycPoolAddress(value = process.env.HODD_USYC_POOL_ADDRESS ?? DEPLOYED_POOL): `0x${string}` | null {
   const configured = value?.trim();
   return configured && /^0x[0-9a-fA-F]{40}$/.test(configured) ? getAddress(configured) : null;
