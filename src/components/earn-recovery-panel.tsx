@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { earnJobApiSchema } from "@/lib/earn/models";
 import { formatMoney } from "@/lib/treasury/format";
-import { SectionCard, SectionHeading, StatusPill } from "./primitives";
+import { LifeBuoy, LockKeyhole, ShieldCheck } from "lucide-react";
+import { SectionCard, SectionHeading, StatusPill, buttonClass, inputClass, labelClass } from "./primitives";
+import { InfoTip } from "./visuals";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 type OpenExecution = { id: string; state: string; operation: string; amount: { currency: "USDC"; decimals: 6; minorUnits: string }; txHash: string | null; failure: string | null };
@@ -42,19 +44,19 @@ export function EarnRecoveryPanel() {
     } catch (cause) { setMessages((current) => ({ ...current, [row.id]: cause instanceof Error ? cause.message : "Recovery could not be verified." })); }
     finally { setBusy(null); }
   };
-  return <div className="mx-auto max-w-[1440px] px-5 pt-7 md:px-8 lg:px-10 lg:pt-10"><SectionCard><SectionHeading index="02.0" title="Open Earn executions" description="This wallet stays locked for Earn and payments until each one is resolved" /><div className="space-y-4 p-5">
+  return <div className="mx-auto max-w-[1440px] px-5 pt-7 md:px-8 lg:px-10 lg:pt-10"><SectionCard><SectionHeading icon={<LifeBuoy className="size-4" />} title="Open Earn executions" action={<div className="flex items-center gap-2"><span className="inline-flex items-center gap-1.5 text-[12px] text-[#ffd27f]"><LockKeyhole aria-hidden="true" className="size-3.5" />Wallet locked</span><InfoTip label="About open executions">This wallet stays locked for Earn and payments until each one is resolved.</InfoTip></div>} /><div className="space-y-4 p-5">
     {rows.map((row) => {
       const candidate = candidates[row.id] ?? "";
       return <article key={row.id} aria-label={`Open execution ${row.id}`} className="space-y-3 border border-[#fab219]/30 bg-[#fab219]/10 p-4 text-xs leading-5 text-[#ffd27f]">
-        <div className="flex flex-wrap items-center justify-between gap-3"><p className="font-semibold text-[#f4f1e8]">{labels[row.operation] ?? row.operation} · {formatMoney(row.amount, { fractionDigits: 6 })}</p><StatusPill label={row.state.replaceAll("_", " ")} tone="warning" /></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><p className="flex flex-wrap items-baseline gap-x-3 text-[#f4f1e8]"><span className="text-sm font-semibold">{labels[row.operation] ?? row.operation}</span><span className="mono text-sm tabular-nums">{formatMoney(row.amount, { fractionDigits: 6 })}</span></p><StatusPill label={row.state.replaceAll("_", " ")} tone="warning" /></div>
         {row.txHash && <a className="mono block break-all underline" href={`https://testnet.arcscan.app/tx/${row.txHash}`} target="_blank" rel="noreferrer">Reported transaction: {row.txHash}</a>}
         {row.failure && <p className="mono text-white/60">{row.failure.replaceAll("_", " ")}</p>}
         <div className="flex flex-wrap gap-2">
-          <button disabled={busy !== null} onClick={() => void recover(row, {})} className="border border-white/20 px-3 py-2 text-[#f4f1e8] disabled:opacity-40">Check again (no new transaction)</button>
-          {!row.txHash && <button disabled={busy !== null} onClick={() => void recover(row, { acknowledgeNoPendingTransaction: true })} className="border border-white/20 px-3 py-2 text-[#f4f1e8] disabled:opacity-40">I rejected or closed the wallet request</button>}
+          <button disabled={busy !== null} onClick={() => void recover(row, {})} className={buttonClass.ghost}>Check again (no new transaction)</button>
+          {!row.txHash && <button disabled={busy !== null} onClick={() => void recover(row, { acknowledgeNoPendingTransaction: true })} className={buttonClass.ghost}>I rejected or closed the wallet request</button>}
         </div>
-        {row.state === "UNKNOWN" && <div className="flex flex-wrap items-end gap-2"><label className="block min-w-0 flex-1">Transaction hash from your wallet<input value={candidate} onChange={(event) => { const value = event.target.value.trim(); setCandidates((current) => ({ ...current, [row.id]: value })); }} placeholder="0x…" className="mono mt-1 w-full border border-white/20 bg-[#0b0b0d] p-2 text-[#f4f1e8]" /></label><button disabled={busy !== null || !hash.test(candidate)} onClick={() => void recover(row, { candidateTxHash: candidate })} className="border border-white/20 px-3 py-2 text-[#f4f1e8] disabled:opacity-40">Verify this transaction</button></div>}
-        {messages[row.id] && <p role="status" className="text-[#f4f1e8]">{messages[row.id]}</p>}
+        {row.state === "UNKNOWN" && <div className="flex flex-wrap items-end gap-2"><label className={`block min-w-0 flex-1 ${labelClass} text-[#ffd27f]`}>Transaction hash from your wallet<input value={candidate} onChange={(event) => { const value = event.target.value.trim(); setCandidates((current) => ({ ...current, [row.id]: value })); }} placeholder="0x…" className={`${inputClass} mono`} /></label><button disabled={busy !== null || !hash.test(candidate)} onClick={() => void recover(row, { candidateTxHash: candidate })} className={buttonClass.ghost}>Verify this transaction</button></div>}
+        {messages[row.id] && <p role="status" className="flex items-start gap-2 text-[#f4f1e8]"><ShieldCheck aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-[#7fa6ff]" />{messages[row.id]}</p>}
       </article>;
     })}
   </div></SectionCard></div>;
