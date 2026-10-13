@@ -9,7 +9,10 @@ const min = (...v: bigint[]) => v.reduce((a,b) => a < b ? a : b);
 const max = (a: bigint,b: bigint) => a > b ? a : b;
 export interface DecisionInputs { workspace: TreasuryWorkspace; ownerPositions: EarnPosition[]; agentPosition: EarnPosition; mandate: Mandate; cashMinor: string; spentMinor: string; feeReserveMinor: string; returnAll?: boolean; now?: Date; }
 /** Integer amounts only. Balances/positions are supplied by the server, never the browser or an LLM. */
-export function decideAutopilot(i: DecisionInputs): Decision {
+export function decideAutopilot(input: DecisionInputs): Decision {
+  // Autopilot manages Morpho only. The owner's USYC is a wallet-signed, allowlisted holding that the agent never plans,
+  // counts as funding or touches, even if a caller passes a workspace that carries a live USYC position.
+  const i: DecisionInputs = { ...input, workspace: { ...input.workspace, strategies: input.workspace.strategies.filter((strategy) => strategy.kind !== "USYC") } };
   const now = i.now ?? new Date();
   const context = { autopilotActive: i.mandate.enabled && !i.mandate.paused && !i.returnAll };
   const m = validateMandate({ ...i.mandate, maxMorphoBps: i.workspace.policy.enabledStrategies.MORPHO ? Math.min(i.mandate.maxMorphoBps, i.workspace.policy.strategyCapsBps.MORPHO) : 0 }, i.workspace.policy);

@@ -69,7 +69,8 @@ export function liquiditySources(workspace: TreasuryWorkspace, evaluatedAt = new
   for (const strategy of workspace.strategies) {
     if (!strategyIsFresh(strategy, evaluatedAt)) continue;
     if (strategy.kind === "MORPHO" && (strategy.integration === "DEMO" || strategy.integration === "LIVE")) sourceMap.MORPHO = addMoney(sourceMap.MORPHO, strategy.redeemable);
-    if (strategy.kind === "USYC" && strategy.integration === "DEMO") sourceMap.USYC = addMoney(sourceMap.USYC, strategy.redeemable);
+    // LIVE USYC is the connected wallet's own holding, read fresh and redeemable only while the wallet is allowlisted (liquidityStatus).
+    if (strategy.kind === "USYC" && (strategy.integration === "DEMO" || strategy.integration === "LIVE")) sourceMap.USYC = addMoney(sourceMap.USYC, strategy.redeemable);
     if (strategy.kind === "BTC_RESERVE" && strategy.integration === "DEMO") sourceMap.BTC_SALE = addMoney(sourceMap.BTC_SALE, strategy.redeemable);
   }
   return workspace.policy.liquidityWaterfall.map((source) => ({ source, available: sourceMap[source] }));
