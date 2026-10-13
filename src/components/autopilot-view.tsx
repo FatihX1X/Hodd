@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
 import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
 import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
+import { ConfirmButton } from "./confirm-button";
 import { Ring, moneyColor } from "./visuals";
 import { Tip } from "./tip";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
@@ -366,7 +367,7 @@ export function AutopilotView() {
         <SectionCard><SectionHeading icon={<TrendingUp aria-hidden="true" className="size-4" />} title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
           <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass + " mono tabular-nums"} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
           <div className="flex flex-wrap items-center gap-2">
-            <button className={buttonClass.primary} disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</button>
+            <ConfirmButton type="submit" disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</ConfirmButton>
             <Tip label="How investing works">Your wallet sends the USDC to your agent; the agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s limits and keeps the rest ready as cash.</Tip>
           </div>
         </form></SectionCard>
@@ -376,7 +377,7 @@ export function AutopilotView() {
             <p className="mono mt-1 text-2xl font-medium tabular-nums tracking-[-0.03em]">{total === null ? "Balance unavailable" : display(total)}</p>
           </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-white/60"><Bot aria-hidden="true" className="size-4 shrink-0" /><ArrowRight aria-hidden="true" className="size-3.5 shrink-0 text-white/40" /><Wallet aria-hidden="true" className="size-4 shrink-0" /><span className="sr-only">Destination:</span>{destination ? <span title={destination} className="mono text-[13px] text-white/80">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : <span>Connect your verified wallet</span>}</p>
-          <button className={buttonClass.primary} disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</button>
+          <ConfirmButton disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</ConfirmButton>
         </div></SectionCard>
       </div>
       {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading title="Progress" />
@@ -385,12 +386,11 @@ export function AutopilotView() {
       </SectionCard>}
       <details className="mt-6 border border-white/15"><summary className="flex min-h-11 cursor-pointer items-center gap-2 px-5 py-3 text-sm"><Settings2 aria-hidden="true" className="size-4 text-white/55" />Settings</summary><div className="space-y-4 p-5 pt-2 text-sm">
         <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}><Pause aria-hidden="true" className="size-3.5" />Pause autopilot</button>
-        <div className="flex flex-wrap items-center justify-between gap-3 border border-white/12 p-4">
+        <div className="border border-white/12 p-4">
           <div className="min-w-0">
-            <p className="flex items-center gap-1.5 font-medium"><Sparkles aria-hidden="true" className="size-4 text-[#9ec5f4]" />AI advisor<Tip label="About the AI advisor">Every six hours, when your policy changes and when a bill comes due, your agent runs. With the advisor on, a Groq model may invest less, wait, or move part of the Morpho position back to the agent&apos;s cash, always inside the limits Hodd&apos;s engine sets, and writes down why. It never sees addresses or bill names, and safety moves (protecting your bills, refilling the reserve, returning everything) are never up to it.</Tip></p>
-            <p className="mt-1 text-[12px] text-white/55">{status?.advisor?.available ? (status.mandate?.advisorEnabled ? "On" : "Off") + (status.advisor.model ? `, ${status.advisor.model} on Groq` : "") : "Not enabled by the operator yet"}</p>
+            <p className="flex items-center gap-1.5 font-medium"><Sparkles aria-hidden="true" className="size-4 text-[#9ec5f4]" />AI advisor<Tip label="About the AI advisor">Every six hours, when your policy changes and when a bill comes due, your agent runs. Each run, a Groq model may invest less, wait, or move part of the Morpho position back to the agent&apos;s cash, always inside the limits Hodd&apos;s engine sets, and writes down why. It never sees addresses or bill names, and safety moves (protecting your bills, refilling the reserve, returning everything) are never up to it.</Tip></p>
+            <p className="mt-1 text-[12px] text-white/55">{status?.advisor?.available ? "Always on" + (status.advisor.model ? `, ${status.advisor.model} on Groq` : "") : "Not enabled by the operator yet"}</p>
           </div>
-          <button type="button" role="switch" aria-checked={Boolean(status?.mandate?.advisorEnabled)} aria-label="AI advisor" className={buttonClass.ghost} disabled={disabled || !status?.mandate || !status?.advisor?.available} onClick={() => void act(async signal => { await post("advisor", { enabled: !status?.mandate?.advisorEnabled }, signal); await load(signal); setMessage(status?.mandate?.advisorEnabled ? "AI advisor turned off. The engine decides alone." : "AI advisor turned on. It works inside the engine's limits."); })}>{status?.mandate?.advisorEnabled ? "Turn off" : "Turn on"}</button>
         </div>
         {status?.wallet && <><p className="break-all font-mono text-[13px]">{status.wallet.address}</p><a className="inline-flex min-h-11 items-center gap-1.5 text-[#9ec5f4] underline underline-offset-4" href={"https://testnet.arcscan.app/address/" + status.wallet.address} target="_blank" rel="noreferrer">View agent on ArcScan<ExternalLink aria-hidden="true" className="size-3.5" /></a></>}
       </div></details>

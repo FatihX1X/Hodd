@@ -142,7 +142,7 @@ test("Autopilot Invest signs with MetaMask inside the server's gas ceiling and n
   // In-app navigation keeps the in-memory signer.
   await page.getByRole("link", { name: "Autopilot" }).first().click();
   const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
-  await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click();
+  await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click(); await page.getByRole("button", { name: "Confirm?" }).click();
   await expect(page.getByRole("region", { name: "Invest progress" })).toContainText("Done.", { timeout: 20_000 });
   const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string }[] }).sent);
   expect(sent).toHaveLength(1); expect(BigInt(sent[0].gas)).toBe(59_206n); expect(BigInt(sent[0].gasPrice)).toBe(50_000_000_000n); expect(sent[0].to.toLowerCase()).toBe("0x3600000000000000000000000000000000000000");
@@ -172,7 +172,7 @@ test("USYC pool deposit is one click: exact approval then deposit, each inside t
   await page.getByRole("link", { name: "Invest" }).first().click();
   const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
   await expect(page.getByText("Circle enabled")).toBeVisible();
-  await page.getByLabel("USYC pool amount").fill("5"); await page.getByRole("button", { name: "Deposit", exact: true }).click();
+  await page.getByLabel("USYC pool amount").fill("5"); await page.getByRole("button", { name: "Deposit", exact: true }).click(); await page.getByRole("button", { name: "Confirm?" }).click();
   await expect(page.getByRole("region", { name: "Deposit progress" })).toContainText("Deposit verified on Arc Testnet", { timeout: 20_000 });
   const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string; data: string }[] }).sent);
   expect(sent.map((item) => [item.to.toLowerCase(), BigInt(item.gas), BigInt(item.gasPrice)])).toEqual([[usdcToken, 46_447n, 50_000_000_000n], [pool.toLowerCase(), 397_200n, 50_000_000_000n]]);

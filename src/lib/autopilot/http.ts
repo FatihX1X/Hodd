@@ -94,7 +94,7 @@ async function confirm(c:Ctx,reviewId:string,kind:Kind) {
   if(error && /run unresolved/i.test(error.message))throw new Error("AGENT_RUN_OPEN");
   if(error || data!==kind)throw new Error("AGENT_REVIEW_CHANGED");
 }
-export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover"|"advisor") {
+export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover") {
   try {
     const read=request.method==="GET";
     // GETs are read-only. Reuse same-origin JSON guards without requiring an Origin on normal navigation reads.
@@ -131,7 +131,7 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       // The budget covers what the agent already holds plus this amount; fees and returns already counted stay counted.
       const budget=BigInt(current?.spent_minor ?? "0")+await agentHoldings(wallet.address)+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
-      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false,...(current?.mandate.advisorEnabled!==undefined ? {advisorEnabled:current.mandate.advisorEnabled} : {})},policy);
+      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
       // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
       // and wallet extensions made that fail before the wallet opened). The wallet signs within this exact ceiling.
       const funding=await fundingTransfer(getAddress(c.wallet.address),getAddress(wallet.address),BigInt(input.amountMinor));
@@ -147,16 +147,6 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       if(receipt.status!=="success")return Response.json({status:"REVERTED"},{headers});
       const arrived=receipt.logs.reduce((sum,log)=>{if(log.address.toLowerCase()!==ARC_TESTNET_USDC.toLowerCase())return sum;try{const e=decodeEventLog({abi:erc20Abi,data:log.data,topics:log.topics});return e.eventName==="Transfer" && e.args.from.toLowerCase()===wallet.owner_address && e.args.to.toLowerCase()===wallet.address ? sum+e.args.value : sum;}catch{return sum;}},0n);
       return Response.json({status:arrived>0n?"ARRIVED":"UNRELATED",amountMinor:arrived.toString()},{headers});
-    }
-    if(action==="advisor") {
-      // The owner turns the LLM advisor on or off. Limits are unchanged; it is a mandate revision like any other.
-      const input=z.object({enabled:z.boolean()}).strict().parse(body);
-      await reserveLiveUsage(c.client,mode,"QUOTE");
-      const wallet=await loadWallet(c.userId),current=await loadMandate(c.userId);
-      if(!wallet || !current || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
-      const mandate=validateMandate({...current.mandate,advisorEnabled:input.enabled},c.workspace.policy);
-      await confirm(c,await review(c,wallet,current.revision,"MANDATE",mandate),"MANDATE");
-      return Response.json({status:"READY",mandate},{headers});
     }
     if(action==="pause") {
       z.object({}).strict().parse(body);const {error}=await agentDb().rpc("hodd_pause_agent",{p_user:c.userId});if(error)throw new Error("AGENT_PAUSE_UNAVAILABLE");

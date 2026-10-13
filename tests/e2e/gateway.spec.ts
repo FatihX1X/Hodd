@@ -39,6 +39,12 @@ test("Overview shows USDC on every chain and opens Bring USDC to Arc", async ({ 
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(/Reconnect your wallet/)).toBeVisible();
   await expect(dialog.getByRole("combobox", { name: /Source chain/ })).toHaveValue("Base_Sepolia");
+  // One button: 2 USDC is already in Gateway on Base Sepolia, so only a free signature is needed.
+  await dialog.getByLabel("Amount to move").fill("2");
+  await expect(dialog.getByRole("note").filter({ hasText: "Already in Gateway on Base Sepolia" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Bring 2 USDC to Arc" })).toBeDisabled();
+  await dialog.getByLabel("Amount to move").fill("4");
+  await expect(dialog.getByRole("note").filter({ hasText: "first deposits about" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("move-dialog.png") });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -97,6 +103,7 @@ test("Autopilot returns everything with one click", async ({ page }) => {
   await page.goto("/autopilot");
   await expect(page.getByRole("button", { name: "Return everything", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Return everything", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm?" }).click();
   const rail = page.getByRole("region", { name: "Return progress" });
   await expect(rail).toContainText("Done. 19.98 USDC sent to your wallet.", { timeout: 15_000 });
   await expect(rail.getByRole("link", { name: /Open transaction/ })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);

@@ -6,7 +6,7 @@ const minor = z.string().regex(/^(0|[1-9]\d{0,15})$/);
 export const mandateSchema = z.object({
   budgetMinor: minor, maxMorphoBps: z.number().int().min(0).max(10_000),
   reserveMinor: minor, maxPerRunMinor: minor, enabled: z.boolean(), paused: z.boolean(),
-  /** The owner lets the LLM advisor adjust decisions inside the engine's limits (off when absent). */
+  /** Legacy opt-in from before the advisor ran for every mandate. Ignored; kept so stored mandates still parse. */
   advisorEnabled: z.boolean().optional(),
 }).strict();
 export type Mandate = z.infer<typeof mandateSchema>;

@@ -12,7 +12,8 @@ import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
 import { useHasActiveSigner } from "@/lib/wallet/use-active-signer";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
 import { ProgressRail, type RailOutcome, type Step } from "./progress-rail";
-import { Meter, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass, labelClass } from "./primitives";
+import { Meter, SectionCard, SectionHeading, StatusPill, inputClass, labelClass } from "./primitives";
+import { ConfirmButton } from "./confirm-button";
 import { InfoTip, Ring, moneyColor } from "./visuals";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
@@ -145,9 +146,9 @@ export function UsycPoolCard() {
     {position && <div className="border-t border-white/10 p-5">
       <label className={`block ${labelClass}`}>Amount (USDC)<input aria-label="USYC pool amount" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="1.00" disabled={busy} className={`${inputClass} mono`} /></label>
       <div className="mt-4 flex flex-wrap gap-2">
-        <button onClick={() => void start("DEPOSIT")} disabled={!canDeposit || busy || !amount} className={buttonClass.primary}>{busy && run?.kind === "DEPOSIT" ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" /> : <ArrowDownToLine aria-hidden="true" className="size-4" />}Deposit</button>
-        <button onClick={() => void start("WITHDRAW")} disabled={!canWithdraw || busy || !amount} className={buttonClass.ghost}><ArrowUpFromLine aria-hidden="true" className="size-4" />Withdraw</button>
-        <button onClick={() => void start("WITHDRAW", true)} disabled={!canWithdraw || busy} className={buttonClass.ghost}>Withdraw all</button>
+        <ConfirmButton onClick={() => void start("DEPOSIT")} disabled={!canDeposit || busy || !amount}>{busy && run?.kind === "DEPOSIT" ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" /> : <ArrowDownToLine aria-hidden="true" className="size-4" />}Deposit</ConfirmButton>
+        <ConfirmButton variant="ghost" onClick={() => void start("WITHDRAW")} disabled={!canWithdraw || busy || !amount}><ArrowUpFromLine aria-hidden="true" className="size-4" />Withdraw</ConfirmButton>
+        <ConfirmButton variant="ghost" onClick={() => void start("WITHDRAW", true)} disabled={!canWithdraw || busy}>Withdraw all</ConfirmButton>
       </div>
       {note && <p role="note" className="mt-4 flex items-start gap-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>{note}</span></p>}
       {open && !hasSigner && <p role="note" className="mt-4 flex items-start gap-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>Signer session: reconnect required. Use “Reconnect signer” in the wallet panel first.</span></p>}

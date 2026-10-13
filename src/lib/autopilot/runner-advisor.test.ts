@@ -4,7 +4,7 @@ import { sampleWorkspace } from "@/test/fixtures";
 
 const m = vi.hoisted(() => ({
   controls: new Map<string, boolean>(), configured: true, groq: vi.fn(), started: [] as { p_decision: { kind: string; depositMinor: string; withdrawMinor: string; advisor?: { status: string } }; p_snapshot: { trigger: string } }[],
-  mandate: { budgetMinor: "1000000000", reserveMinor: "0", maxPerRunMinor: "1000000000", maxMorphoBps: 6000, enabled: true, paused: false, advisorEnabled: true } as Record<string, unknown>,
+  mandate: { budgetMinor: "1000000000", reserveMinor: "0", maxPerRunMinor: "1000000000", maxMorphoBps: 6000, enabled: true, paused: false } as Record<string, unknown>,
   engine: { kind: "INVEST", depositMinor: "100000000", withdrawMinor: "0", transferMinor: "0", remainingBudgetMinor: "1000000000", protectedMinor: "0", explanation: "Invest" } as Record<string, unknown>,
   returnRequested: false,
 }));
@@ -36,7 +36,6 @@ import { startAgentRun } from "./runner";
 
 beforeEach(() => {
   m.controls = new Map([["AGENT", true], ["EXECUTION", true], ["AGENT_ADVISOR", true]]); m.configured = true; m.started = []; m.returnRequested = false;
-  m.mandate = { ...m.mandate, advisorEnabled: true };
   m.engine = { kind: "INVEST", depositMinor: "100000000", withdrawMinor: "0", transferMinor: "0", remainingBudgetMinor: "1000000000", protectedMinor: "0", explanation: "Invest" };
   m.groq.mockReset().mockResolvedValue({ advice: { action: "REDUCE", amountUsdc: "40", rationale: "A bill is due in two days; invest less." }, provider: "GROQ", model: "openai/gpt-oss-120b" });
 });
@@ -49,13 +48,20 @@ describe("startAgentRun with the advisor", () => {
     expect(m.started[0].p_snapshot.trigger).toBe("BILL_PROTECTION");
   });
 
-  it("asks nothing while the owner, the operator or the server has it off, or for return-all", async () => {
-    for (const setup of [() => { m.mandate = { ...m.mandate, advisorEnabled: false }; }, () => { m.controls.delete("AGENT_ADVISOR"); }, () => { m.configured = false; }, () => { m.returnRequested = true; }]) {
+  it("runs for every mandate, even one stored with the old opt-in turned off", async () => {
+    m.mandate = { ...m.mandate, advisorEnabled: false };
+    await startAgentRun("user");
+    expect(m.groq).toHaveBeenCalledTimes(1);
+    expect(m.started[0].p_decision.advisor).toMatchObject({ status: "APPLIED" });
+  });
+
+  it("asks nothing while the operator or the server has it off, or for return-all", async () => {
+    for (const setup of [() => { m.controls.delete("AGENT_ADVISOR"); }, () => { m.configured = false; }, () => { m.returnRequested = true; }]) {
       m.started = []; setup();
       await startAgentRun("user");
       expect(m.started[0].p_decision).toMatchObject({ kind: "INVEST", depositMinor: "100000000" });
       expect(m.started[0].p_decision.advisor).toBeUndefined();
-      m.mandate = { ...m.mandate, advisorEnabled: true }; m.controls.set("AGENT_ADVISOR", true); m.configured = true; m.returnRequested = false;
+      m.controls.set("AGENT_ADVISOR", true); m.configured = true; m.returnRequested = false;
     }
     expect(m.groq).not.toHaveBeenCalled();
   });

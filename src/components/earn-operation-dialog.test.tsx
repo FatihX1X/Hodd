@@ -23,7 +23,7 @@ const warned = { ...quote, policy: { ...quote.policy, status: "REVIEW" as const 
 async function start() {
   render(<EarnOperationDialog operation="DEPOSIT" vault={vault} policyLimit={money} enabled />);
   await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.type(screen.getByLabelText("Deposit amount"), "1");
-  await userEvent.click(screen.getByRole("button", { name: "Deposit now" }));
+  await userEvent.click(screen.getByRole("button", { name: "Deposit now" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
 }
 async function review() { await start(); await screen.findByText("Server approved"); }
 beforeEach(() => { vi.clearAllMocks(); fake.sync.mockResolvedValue(undefined); fake.send.mockResolvedValue(hash); fake.pin.mockResolvedValue(undefined); fake.runtime.mockReturnValue({ connection: { address: wallet, connectedAt: "session" }, sendCalls: fake.send, approveChallenge: fake.pin }); });
@@ -33,7 +33,7 @@ describe("one-click Earn confirmation", () => {
     fake.runtime.mockReturnValue(null); const fetcher = fetchResponses([]);
     render(<EarnOperationDialog operation="DEPOSIT" vault={vault} policyLimit={money} enabled />);
     await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.type(screen.getByLabelText("Deposit amount"), "1");
-    await userEvent.click(screen.getByRole("button", { name: "Deposit now" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deposit now" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Signer session is not active");
     expect(fetcher).not.toHaveBeenCalled(); expect(fake.sync).not.toHaveBeenCalled();
   });

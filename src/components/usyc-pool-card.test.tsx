@@ -39,7 +39,7 @@ describe("UsycPoolCard", () => {
     ]);
     render(<UsycPoolCard />);
     await userEvent.type(screen.getByLabelText("USYC pool amount"), "5");
-    await userEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/Deposit verified on Arc Testnet/)).toBeInTheDocument();
     expect(sent(fetcher)).toEqual([
       { action: "QUOTE_DEPOSIT", amountMinor: "5000000" },
@@ -60,7 +60,7 @@ describe("UsycPoolCard", () => {
       { body: { status: "CONFIRMED", step: "WITHDRAW", txHash: hash("1"), burnedShares: "8000000000000", receivedUsdcMinor: "9117958" } },
     ]);
     render(<UsycPoolCard />);
-    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/9\.117958 USDC is back in your wallet/)).toBeInTheDocument();
     expect(sent(fetcher)).toEqual([{ action: "QUOTE_WITHDRAW", all: true }, { action: "VERIFY", step: "WITHDRAW", txHash: hash("1"), amountMinor: "8000000000000" }]);
     expect(fake.send).toHaveBeenCalledTimes(1);
@@ -73,7 +73,7 @@ describe("UsycPoolCard", () => {
       { body: { status: "CONFIRMED", step: "WITHDRAW", txHash: hash("1"), burnedShares: "8000000000000", receivedUsdcMinor: "9117958" } },
     ]);
     render(<UsycPoolCard />);
-    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/is back in your wallet/, undefined, { timeout: 5000 })).toBeInTheDocument();
   });
 
@@ -82,7 +82,7 @@ describe("UsycPoolCard", () => {
     const fetcher = serve([{ body: { status: "READY", quote: depositQuote } }]);
     render(<UsycPoolCard />);
     await userEvent.type(screen.getByLabelText("USYC pool amount"), "5");
-    await userEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/You rejected the request in your wallet. Nothing was sent./)).toBeInTheDocument();
     expect(fake.send).toHaveBeenCalledTimes(1); expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -91,7 +91,7 @@ describe("UsycPoolCard", () => {
     fake.send.mockReset().mockRejectedValue(new Error("Lost provider response"));
     serve([{ body: { status: "READY", quote: withdrawQuote } }]);
     render(<UsycPoolCard />);
-    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/did not confirm whether it sent this/)).toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe("UsycPoolCard", () => {
     serve([{ ok: false, body: { status: "ERROR", code: "USYC_LIMIT_EXCEEDED", message: "The USYC pool can take at most 3 USDC right now. Choose a smaller amount. Nothing was sent." } }]);
     render(<UsycPoolCard />);
     await userEvent.type(screen.getByLabelText("USYC pool amount"), "5");
-    await userEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/can take at most 3 USDC/)).toBeInTheDocument();
     expect(fake.send).not.toHaveBeenCalled();
   });
@@ -112,7 +112,7 @@ describe("UsycPoolCard", () => {
     ]);
     render(<UsycPoolCard />);
     await userEvent.type(screen.getByLabelText("USYC pool amount"), "5");
-    await userEvent.click(screen.getByRole("button", { name: "Deposit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deposit" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/rejected this transaction. Your funds did not move./)).toBeInTheDocument();
     expect(fake.activity).not.toHaveBeenCalled();
   });
@@ -121,7 +121,7 @@ describe("UsycPoolCard", () => {
     fake.runtime.mockReturnValue(null);
     const fetcher = serve([]);
     render(<UsycPoolCard />);
-    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Withdraw all" })); await userEvent.click(screen.getByRole("button", { name: "Confirm?" }));
     expect(await screen.findByText(/wallet session is not active/)).toBeInTheDocument();
     expect(fetcher).not.toHaveBeenCalled();
   });

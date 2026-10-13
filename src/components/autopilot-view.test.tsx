@@ -36,10 +36,11 @@ async function ready() {
   await waitFor(() => expect(screen.getByRole("button", { name: "Return everything" })).toBeEnabled());
 }
 async function tick(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
-async function clickReturn() { await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Return everything" })); }); }
+async function clickReturn() { fireEvent.click(screen.getByRole("button", { name: "Return everything" })); await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm?" })); }); }
 async function clickInvest() {
   fireEvent.change(screen.getByLabelText("Amount (USDC)"), { target: { value: "10" } });
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Invest 10 USDC" })); });
+  fireEvent.click(screen.getByRole("button", { name: "Invest 10 USDC" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm?" })); });
 }
 const funding = { status: "READY", agentAddress: address, funding: { call: { to: address, data: "0x1234", value: "0" }, gasBudgetWei: "1000", gasCeiling: { gasLimit: "50", gasPriceWei: "20" }, amountMinor: "10000000" } };
 /** invest -> the funding call; funding -> the next queued arrival status (ARRIVED when the queue is empty); anything else -> the run. */
@@ -162,21 +163,17 @@ describe("AI advisor", () => {
     expect(screen.getByText("A bill is due in two days; invest less.")).toBeInTheDocument();
     expect(screen.getByText(/Engine proposed: invested in morpho 10 USDC/)).toBeInTheDocument();
   });
-  it("turns the advisor on through the advisor endpoint once the operator enables it", async () => {
+  it("shows the advisor as always on once the operator enables it, with no switch to turn", async () => {
     snapshot = { ...initial(), mandate, advisor: { available: true, model: "openai/gpt-oss-120b" } } as unknown as ReturnType<typeof initial>;
-    handler = () => json({ status: "READY", mandate: { ...mandate, advisorEnabled: true } });
     await ready();
     fireEvent.click(screen.getByText("Settings"));
-    const toggle = screen.getByRole("switch", { name: "AI advisor" });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    await act(async () => { fireEvent.click(toggle); });
-    await waitFor(() => expect(requests).toContainEqual({ action: "advisor", body: { enabled: true } }));
+    expect(screen.getByText("Always on, openai/gpt-oss-120b on Groq")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "AI advisor" })).toBeNull();
   });
-  it("keeps the switch off while the operator has not enabled the advisor", async () => {
+  it("says so while the operator has not enabled the advisor", async () => {
     snapshot = { ...initial(), mandate, advisor: { available: false, model: null } } as unknown as ReturnType<typeof initial>;
     await ready();
     fireEvent.click(screen.getByText("Settings"));
-    expect(screen.getByRole("switch", { name: "AI advisor" })).toBeDisabled();
     expect(screen.getByText("Not enabled by the operator yet")).toBeInTheDocument();
   });
 });

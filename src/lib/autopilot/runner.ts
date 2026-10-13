@@ -24,12 +24,12 @@ const same=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
 const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = i.feeReserveMinor) => decideAutopilot({workspace:i.workspace,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,mandate:i.stored.mandate,cashMinor:i.cash.balance.minorUnits,spentMinor:String(i.stored.spent_minor),feeReserveMinor,returnAll:i.stored.return_requested});
 /**
  * The LLM advisor may adjust the engine's decision only inside the envelope the engine sets (see advisor.ts). It runs
- * when the owner enabled it, the operator's AGENT_ADVISOR switch is on and a Groq key is configured; otherwise, and on
+ * for every active mandate while the operator's AGENT_ADVISOR switch is on and a Groq key is configured; otherwise, and on
  * any model failure, the engine's decision stands. Safety decisions and return-all never reach the model.
  */
 async function advise(i: Awaited<ReturnType<typeof agentInputs>>, engine: Decision, now = new Date()): Promise<Decision> {
   const m=i.stored.mandate;
-  if(i.stored.return_requested || !m.advisorEnabled || !m.enabled || m.paused || !(await advisorConfigured()))return engine;
+  if(i.stored.return_requested || !m.enabled || m.paused || !(await advisorConfigured()))return engine;
   const controls=await liveControls(); if(!controls?.get("AGENT_ADVISOR"))return engine;
   const observed=Date.parse(i.agentPosition.observedAt);
   const fresh=i.agentPosition.liquidityStatus==="READY" && now.getTime()-observed<=60_000 && observed<=now.getTime()+5_000;

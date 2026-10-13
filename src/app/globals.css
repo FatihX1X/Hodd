@@ -88,6 +88,10 @@ body:has([data-theme="dark"]) { background: var(--ink); color: var(--paper-stron
 
 .hairline { border-color: var(--line-light); }
 
+/* ConfirmButton: the armed window running out (6 s, matches CONFIRM_WINDOW_MS). */
+.confirm-countdown { animation: confirm-countdown 6s linear forwards; }
+@keyframes confirm-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;
