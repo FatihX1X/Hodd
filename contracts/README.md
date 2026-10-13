@@ -12,10 +12,19 @@ interface is a view of the native balance).
 contracts/
   src/HoddieVault.sol             the per-user vault (not upgradeable)
   src/HoddieVaultFactory.sol      CREATE2 factory, one deterministic address per parameter set
+  src/HoddUSYCVault.sol           the pooled, Hodd-wide USYC vault (see "HoddUSYCVault" below)
+  src/interfaces/                 ITeller, IRolesAuthority (the slice of Circle's contracts it uses)
   script/DeployFactory.s.sol      forge script, reads the deployer key from the environment
+  script/DeployHoddUSYCVault.s.sol  forge script for the pooled USYC vault
   test/                           unit, fuzz, invariant, fork and script tests (+ mocks)
+  test/pool/                      the HoddUSYCVault suites
   lib/                            forge-std v1.17.0, openzeppelin-contracts v5.7.0 (git submodules)
 ```
+
+Two separate contracts: `HoddieVault` (per user, holds USDC, the agent is a limited operator) and
+`HoddUSYCVault` (one pooled vault Circle allowlists, so that users never have to be allowlisted).
+The agent invests in USYC only through `HoddieVault -> HoddUSYCVault`, which is a normal ERC-4626
+strategy for the `HoddieVault`; the `HoddieVault` never holds USYC and never talks to the Teller.
 
 > **Status: testnet-grade, unaudited.** Do not hold real value in these contracts before an
 > independent audit. See "Before mainnet" at the end.
@@ -340,3 +349,210 @@ only pause; an operator-triggered emergency pause; a maximum share of funds per 
 maintained by Hodd and an owner-visible "approved by Hodd" flag; a per-owner salt in the factory so a
 user can have several vaults with identical parameters; an ERC-7739-aware signature path for
 smart-account owners; and an independent audit.
+
+---
+
+# `HoddUSYCVault`: the pooled, Hodd-wide USYC vault
+
+Circle's USYC (a tokenized money-market fund) is **permissioned**: the Teller that sells it and the
+token itself only talk to addresses on Circle's allowlist (`RolesAuthority`, role 0). Hodd's users
+are not on that list, and they should not have to be. `HoddUSYCVault` is **one contract that Circle
+allowlists once**. Users deposit only **USDC** and withdraw only **USDC to their own address**; the
+contract subscribes to, holds and redeems the USYC internally.
+
+```
+user (USDC) --deposit--> HoddUSYCVault --Teller.deposit--> USYC held by the pool
+user (USDC) <--redeem--- HoddUSYCVault <--Teller.redeem--- USYC
+```
+
+It is an ERC-4626 vault over USDC, so a `HoddieVault` can use it as an ordinary strategy (this is the
+only way Hodd's agent invests in USYC; the `HoddieVault` never holds USYC and never talks to the
+Teller). It is non-upgradeable, solc 0.8.28, OpenZeppelin v5.7, 8.8 KB of runtime code.
+
+## External API
+
+| Function | Notes |
+| --- | --- |
+| `deposit(assets, receiver)` / `deposit(assets, receiver, minShares)` | pulls USDC from the caller, subscribes, mints shares to `receiver` |
+| `redeem(shares, receiver, holder)` / `redeem(shares, receiver, holder, minAssets)` | `msg.sender == receiver == holder` only; returns exactly the USDC the holder received |
+| `reinvestIdle()` | permissionless: subscribes idle USDC (gifts) for the whole pool, mints nothing |
+| `pauseDeposits()` `unpauseDeposits()` `setDepositCaps(perTx, total)` | admin (`Ownable2Step`), nothing else |
+| `mint` `withdraw` `previewMint` `previewWithdraw` | revert `NotSupported`; `maxMint` / `maxWithdraw` are 0 |
+| `transfer` `transferFrom` `approve` | revert `SharesNotTransferable` |
+| views | `asset` `totalAssets` `convertToShares` `convertToAssets` `previewDeposit` `previewRedeem` `maxDeposit` `maxRedeem` `usycHeld` `usycOf(shares)` `usdc` `teller` `usyc` `authority` `depositsPaused` `maxDepositPerTx` `maxTotalAssets` `OFFSET` (the guarded ones never revert) |
+| events | ERC-4626 `Deposit` / `Withdraw` plus `UsycSubscribed(user, receiver, usdcIn, usycIn, shares)`, `UsycRedeemed(user, shares, usycOut, usdcOut)`, `IdleReinvested`, `DepositsPaused`, `DepositsUnpaused`, `DepositCapsUpdated` |
+
+Constructor: `(IERC20 usdc, ITeller teller, IERC20 usyc, IRolesAuthority authority, address admin)`,
+reverts unless `teller.asset() == usdc`, `teller.share() == usyc` and both tokens have 6 decimals. All
+four addresses are immutable. The caps start at 1,000 USDC per deposit and 100,000 USDC in total.
+
+## How shares work, and the deliberate deviations from ERC-4626
+
+1. **Shares follow the USYC actually received, never an oracle quote.** On `deposit` the vault
+   measures its USYC balance delta and mints `shares = usycIn * (supply + 10**6) / (usycHeld + 1)`.
+   Reason: the Teller prices a subscription at the *next* price when the oracle price is stale or
+   after the 14:00 New York cut-off, while `convertToAssets` uses the current one. Minting from the
+   NAV would let a depositor buy in at a price the pool does not get and dilute everybody. On
+   `redeem`, `usycOut = shares * (usycHeld + 1) / (supply + 10**6)`. Both round **down** (towards the
+   pool), so a holder never takes out more than pro rata.
+2. **Virtual shares.** The `10**6` virtual shares and the `+1` virtual USYC unit (OZ style) make the
+   inflation/donation attack unprofitable: share decimals are 12 (USYC's 6 plus `OFFSET = 6`), and
+   an attacker who donates to inflate the price loses about `10**6` times more than he can steal.
+   `supply <= 10**6 * usycHeld` holds from the first deposit on, so the USYC claimed by all shares
+   never exceeds the USYC held (an invariant test checks it). The virtual position keeps a tiny share
+   (`10**6 / (supply + 10**6)`) of any gift: tens of base units (thousandths of a cent) even after a
+   gift 40 times the size of a 500 USDC pool.
+3. **`redeem` pays only the holder**, to the holder's own address: `msg.sender == receiver ==
+   holder`. No allowance-based redemption, no third-party receiver. The Teller pays the USDC to the
+   (allowlisted) vault, which measures the USDC delta and forwards exactly that. The return value is
+   that exact delta, so a caller can verify it from its own balance.
+4. **Shares are non-transferable.** They are a claim only the holder can redeem.
+5. **`mint` and `withdraw` are not supported.** What a number of shares fetches is only known at
+   redemption time. `maxMint` / `maxWithdraw` return 0 so the vault stays ERC-4626-consistent.
+6. **`totalAssets`, `convertToShares`, `convertToAssets` are informational**: the USYC at the Teller's
+   latest price plus idle USDC. `previewDeposit` and `previewRedeem` use the Teller's own quote
+   (`previewDepositData`, `previewRedeemData`), so they price exactly like the real operation.
+7. **Slippage overloads** (`minShares`, `minAssets`) on both `deposit` and `redeem`.
+8. **Redemptions can never be paused.** Not by the admin, not by anyone.
+
+`maxDeposit` is 0 when deposits are paused, a cap is reached, the Teller's subscription limit for the
+vault is used up, or Circle does not currently permit the vault (not allowlisted, authority paused or
+unreadable). `maxRedeem(holder)` is the holder's shares bounded by the Teller's own `maxRedeem` (daily
+redemption limit and treasury liquidity), converted to shares, and 0 if Circle does not permit the
+vault. Every view is guarded and never reverts.
+
+## Idle USDC, donations, inflation attacks
+
+Share value is measured in **USYC only**, so sending USDC to the vault cannot move the share price:
+it is idle until anyone calls `reinvestIdle()`, which subscribes it for the whole pool (a gift to all
+holders pro rata, no shares minted; it can neither be stolen by the next depositor nor lost). USYC can
+only be sent by allowlisted senders and is a gift to all holders too. Subscribing a gift costs the
+Teller's next-price spread like any subscription. The first-depositor/inflation attack is covered
+by the virtual shares (see above and `testFuzz_inflationAttackNeverPays`).
+
+## Trust model
+
+* **Users** trust the contract, not Hodd: nobody, including the admin, can move, freeze, transfer or
+  redeem their shares, or send their USDC anywhere but their own address.
+* **The admin** (Hodd's ops key, `Ownable2Step`, `renounceOwnership` disabled) can only pause/unpause
+  **new deposits** and set the two **deposit caps** (`maxDepositPerTx`, `maxTotalAssets`). The caps
+  are pool-level on purpose: they bound the pilot's total exposure, and a per-account cap would be
+  trivially sidestepped with more addresses. The admin can not change the Teller, USYC or the
+  authority (immutable) and can not touch redemptions.
+* **Circle** controls the allowlist, the oracle price, fees, the daily limits and the treasury.
+
+### Circle-side risks (testnet only)
+
+* If Circle **removes the vault from the allowlist or pauses its `RolesAuthority`**, deposits and
+  redemptions revert until it is restored. Shares stay valid claims; nothing is lost, redemptions
+  just wait. (`deposit` then reverts `NotPermittedByCircle`; `redeem` bubbles the Teller's own
+  `NotPermissioned` / `NoAccess`. `redeem` deliberately has no pre-check, so a wrong guess of ours can
+  never block a redemption the Teller would allow.)
+* The Teller's **daily subscription/redemption limits and its treasury liquidity are shared by every
+  user** of the pool (the Teller sees one account, the vault). Today's default limit is 1,000,000
+  USDC per day each. One large redeemer can use up the day for everyone.
+* **Fees and the next-price spread** are borne by the user whose operation triggers them. Measured on
+  the live Teller: a deposit followed by an immediate redemption returns about 0.04 % less
+  (the subscription is priced at the next price while the oracle price is stale or after the cut-off).
+  Fees are 0 today.
+* **Pooled exposure for non-allowlisted users needs Circle's explicit approval** before any
+  mainnet use. This contract is testnet-grade and unaudited.
+
+## Using it as a `HoddieVault` strategy
+
+`depositToStrategy(pool, assets)` works as is (`deposit(assets, vault)`), and so does the operator's
+`redeemFromStrategy(pool, shares)`, because it redeems to the vault itself (holder == receiver ==
+the `HoddieVault`). `withdrawFromStrategy` reverts (`NotSupported`).
+
+**Exit path.** The pool pays only the holder and its shares can not be moved, so a `HoddieVault` can
+only leave the pool by **redeeming to itself and then sweeping the idle USDC to its owner**. The clean
+Morpho-only `HoddieVault` (commit `fa2be29`) does not do that in `withdrawAll()` / `exitStrategy()`:
+it tries `redeem(shares, owner, vault)` (refused: receiver != holder) and then a share transfer
+(refused: non-transferable), so the pool shares stay in the `HoddieVault` (`StrategyExitFailed`) and
+only the operator can get them out (`redeemFromStrategy`, then the owner's `withdrawAll`). The fix for
+the final `HoddieVault`, shown to work end to end in
+`test/pool/HoddUSYCVaultHoddie.fork.t.sol::test_fork_redeemToSelfThenSweepIsAllTheExitPathNeeds`:
+when a strategy refuses a foreign receiver, `redeem(shares, address(this), address(this))`, measure
+the exact USDC delta and forward it to the owner in the same call. `redeem` returns precisely that
+delta, so the vault can verify it by its own balance.
+
+## Tests
+
+```bash
+cd contracts
+forge test                                   # unit + fuzz + invariants (fork tests skip), ~45 s
+forge test --match-contract HoddUSYCVault    # the pool only
+forge test --match-contract Fork --fork-url https://rpc.testnet.arc.network   # live Arc Testnet
+```
+
+| Suite | File | What it covers |
+| --- | --- | --- |
+| Unit (50) | `test/pool/HoddUSYCVault.t.sol` | every path and revert, share math, non-transferability, admin limits, paused deposits never block redemptions, Circle-side failures (allowlist, paused authority, daily limits, illiquid treasury), views never revert, donations, reentrancy |
+| Fuzz (9, 1000 runs) | `test/pool/HoddUSYCVault.fuzz.t.sol` | rounding (no one redeems more USDC-worth of USYC than contributed), pro-rata fairness with several users and price moves incl. next-price subscriptions, gifts, previews, split redemptions, the inflation attack |
+| Invariants (5) | `test/pool/HoddUSYCVault.invariant.t.sol` | USYC held covers every claim; redeem pays only the holder the exact pro-rata amount; the admin can never change a balance; a stranger can not change state; USYC and USDC accounting balances |
+| Fork | `test/pool/HoddUSYCVault.fork.t.sol`, `test/pool/HoddUSYCVaultHoddie.fork.t.sol` | the real Teller/USYC/RolesAuthority: a NON-allowlisted wallet deposits and redeems USDC after the vault is allowlisted by impersonating the authority owner; a not-allowlisted pool (`maxDeposit` 0, clean revert); removal from the allowlist, paused authority, shared daily limits; the clean `HoddieVault` using the pool as a strategy |
+
+The mock Teller / USYC / RolesAuthority in `test/mocks/MockTeller.sol` enforce the allowlist exactly
+like Circle's contracts (caller and receiver checks, two-user checks on redeem, `canCall` reverting
+while the authority is paused). The fork tests need the Arc precompile stand-ins described in the
+fork section above.
+
+## Deploying `HoddUSYCVault` (not done yet)
+
+```bash
+cd contracts
+export PRIVATE_KEY=0x...     # deployer, read at run time from the environment, never written anywhere
+export ADMIN=0x...           # Hodd's ops key: may only pause deposits and set the caps
+
+forge script script/DeployHoddUSYCVault.s.sol:DeployHoddUSYCVault \
+  --rpc-url https://rpc.testnet.arc.network                      # dry run
+forge script script/DeployHoddUSYCVault.s.sol:DeployHoddUSYCVault \
+  --rpc-url https://rpc.testnet.arc.network --broadcast --with-gas-price 25gwei \
+  --verify --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/
+```
+
+The script uses Arc Testnet's USDC `0x3600...0000`, Teller `0x9fdF14c5B14173D74C08Af27AebFf39240dC105A`,
+USYC `0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C` and RolesAuthority
+`0xCC205224862C7641930c87679E98999d23C26113`; it refuses any other chain unless
+`ALLOW_OTHER_CHAIN=true`. The constructor itself checks `teller.asset()`/`teller.share()`.
+
+Verify on ArcScan (`testnet.arcscan.app` redirects to the Blockscout at `explorer.testnet.arc.io`):
+
+```bash
+forge verify-contract <POOL_ADDRESS> src/HoddUSYCVault.sol:HoddUSYCVault \
+  --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+  --compiler-version 0.8.28 --num-of-optimizations 200 --evm-version cancun \
+  --constructor-args $(cast abi-encode "constructor(address,address,address,address,address)" \
+    0x3600000000000000000000000000000000000000 0x9fdF14c5B14173D74C08Af27AebFf39240dC105A \
+    0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C 0xCC205224862C7641930c87679E98999d23C26113 $ADMIN) --watch
+```
+
+Gas on the live Teller (fork): `deposit` about 330 K, `redeem` about 210 K to 230 K, `reinvestIdle`
+about 220 K; at Arc's 20 gwei minimum base fee that is well under one US cent each.
+
+### Request to send to Circle with the deployed address
+
+> Subject: Allowlist request: Hodd USYC pool contract on Arc Testnet
+>
+> Hi Circle team, Hodd is building a USDC-in / USDC-out pooled vault so that our users can hold USYC
+> exposure without each of them having to be allowlisted. The contract below is the only party that
+> ever subscribes to, holds or redeems USYC; users deal in USDC only, shares are non-transferable and
+> redeemable only by their holder to their own address. Could you please allowlist this address on
+> Arc Testnet (`RolesAuthority` `0xCC205224862C7641930c87679E98999d23C26113`, role 0, the same role
+> as other investors)?
+>
+> * Contract: `<POOL_ADDRESS>` (verified source on explorer.testnet.arc.io)
+> * Teller `0x9fdF14c5B14173D74C08Af27AebFf39240dC105A`, USYC `0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C`
+> * It calls `Teller.deposit` and `Teller.redeem` (as itself, with itself as receiver) and holds USYC;
+>   it never transfers USYC to anyone.
+> * Admin (Hodd ops): `<ADMIN>`. The admin can only pause new deposits and set deposit caps. Initial
+>   caps: 1,000 USDC per deposit and 100,000 USDC in total.
+> * Testnet only. For any mainnet use we would ask for your explicit approval of the pooled model first.
+
+### Post-deploy checks
+
+1. `cast call <POOL> "teller()(address)"` etc. match the addresses above; `owner()` is the admin.
+2. Before Circle acts: `maxDeposit(user)` is 0 and a deposit reverts `NotPermittedByCircle` (clean).
+3. After the allowlisting: `maxDeposit(user)` is > 0. Smoke test with a few cents: deposit, then
+   redeem everything and check the USDC arrived at the user's own address.
+4. Watch `UsycSubscribed` / `UsycRedeemed` / `IdleReinvested` on ArcScan.

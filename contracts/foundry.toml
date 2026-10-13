@@ -25,7 +25,9 @@ fail_on_revert = false
 [lint]
 # The tests are allowed to cast, warp and so on. The two timestamp comparisons in src are
 # intentional (UTC-day budget and signature deadline) and carry an inline `forge-lint` comment.
-exclude_lints = ["unsafe-typecast"]
+# `erc20-unchecked-transfer` and `divide-before-multiply` only ever fire in the tests (plain calls on
+# mocks, the Teller mock's day arithmetic); the sources use SafeERC20 and multiply first.
+exclude_lints = ["unsafe-typecast", "erc20-unchecked-transfer", "divide-before-multiply"]
 ignore = ["test/**", "script/**"]
 
 [fmt]
