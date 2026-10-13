@@ -150,3 +150,33 @@ describe("one-click Autopilot", () => {
     expect(requests.map(item => item.action)).toEqual(["invest", "run"]);
   });
 });
+describe("AI advisor", () => {
+  const mandate = { budgetMinor: "50000000", reserveMinor: "0", maxPerRunMinor: "50000000", maxMorphoBps: 4000, enabled: true, paused: false };
+  it("shows why the advisor changed a run, what triggered it and what the engine had proposed", async () => {
+    const advised = { ...run, state: "COMPLETED", snapshot: { trigger: "BILL_PROTECTION" }, decision: { kind: "INVEST", depositMinor: "4000000", withdrawMinor: "0", transferMinor: "0", remainingBudgetMinor: "0", protectedMinor: "0", explanation: "Advisor: A bill is due in two days; invest less.", advisor: { status: "APPLIED", action: "REDUCE", provider: "GROQ", model: "openai/gpt-oss-120b", rationale: "A bill is due in two days; invest less.", engine: { kind: "INVEST", depositMinor: "10000000", withdrawMinor: "0", transferMinor: "0", explanation: "Invest only arrived agent cash." } } } };
+    snapshot = { ...initial(), runs: [advised as unknown as typeof run] };
+    await ready();
+    fireEvent.click(screen.getByText("History"));
+    expect(screen.getByText("Advisor adjusted")).toBeInTheDocument();
+    expect(screen.getByText("A bill entered its protection window")).toBeInTheDocument();
+    expect(screen.getByText("A bill is due in two days; invest less.")).toBeInTheDocument();
+    expect(screen.getByText(/Engine proposed: invested in morpho 10 USDC/)).toBeInTheDocument();
+  });
+  it("turns the advisor on through the advisor endpoint once the operator enables it", async () => {
+    snapshot = { ...initial(), mandate, advisor: { available: true, model: "openai/gpt-oss-120b" } } as unknown as ReturnType<typeof initial>;
+    handler = () => json({ status: "READY", mandate: { ...mandate, advisorEnabled: true } });
+    await ready();
+    fireEvent.click(screen.getByText("Settings"));
+    const toggle = screen.getByRole("switch", { name: "AI advisor" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await act(async () => { fireEvent.click(toggle); });
+    await waitFor(() => expect(requests).toContainEqual({ action: "advisor", body: { enabled: true } }));
+  });
+  it("keeps the switch off while the operator has not enabled the advisor", async () => {
+    snapshot = { ...initial(), mandate, advisor: { available: false, model: null } } as unknown as ReturnType<typeof initial>;
+    await ready();
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.getByRole("switch", { name: "AI advisor" })).toBeDisabled();
+    expect(screen.getByText("Not enabled by the operator yet")).toBeInTheDocument();
+  });
+});

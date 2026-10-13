@@ -2,20 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
-import { ArrowRight, Bot, CircleSlash, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
 import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
 import { Ring, moneyColor } from "./visuals";
 import { Tip } from "./tip";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { AutopilotProgress, type AutopilotLocalPhase, type AutopilotProgressInput } from "./autopilot-progress";
 import type { Mandate, Decision } from "@/lib/autopilot/models";
+import { triggerLabels, type RunTrigger } from "@/lib/autopilot/triggers";
 import { decimalStringToMoney } from "@/lib/earn/money";
 import { getActiveWalletRuntime, isSignerFor, type EarnGasCeiling, type WalletCall } from "@/lib/wallet/runtime";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
 
-interface Run { id: string; state: string; decision: Decision; failure: string | null; created_at: string }
+interface Run { id: string; state: string; decision: Decision; failure: string | null; created_at: string; snapshot?: { trigger?: RunTrigger } }
 interface Status {
   executionEnabled: boolean; policyMorphoCapBps: number; mode: string;
+  advisor?: { available: boolean; model: string | null };
   wallet: { address: string; owner_address: string; account_type: string } | null;
   mandate: Mandate | null; spentMinor: string; returnRequested: boolean;
   balances: { cashMinor: string; positionMinor: string; redeemableMinor: string; observedAt: string } | null;
@@ -76,7 +78,26 @@ const decisionKinds: Record<Decision["kind"], { label: string; Icon: LucideIcon;
   RESERVE_REFILL: { label: "Refilled the reserve", Icon: ShieldPlus, color: moneyColor.protected },
   RETURN_ALL: { label: "Returned everything", Icon: Undo2, color: moneyColor.safe },
   NO_ACTION: { label: "No action needed", Icon: CircleSlash, color: "#8d8b84" },
+  DE_RISK: { label: "Moved Morpho back to cash", Icon: ArrowDownToLine, color: moneyColor.LIQUID },
 };
+const advisorStates: Record<NonNullable<Decision["advisor"]>["status"], { label: string; tone: "info" | "success" | "warning" | "neutral" }> = {
+  APPLIED: { label: "Advisor adjusted", tone: "info" },
+  FOLLOWED: { label: "Advisor agreed", tone: "success" },
+  REJECTED: { label: "Advice outside limits", tone: "warning" },
+  UNAVAILABLE: { label: "Advisor unavailable", tone: "neutral" },
+};
+
+/** The advisor's reasoning beside the engine's: what it decided, why, and what the engine had proposed. */
+function AdvisorNote({ decision }: { decision: Decision }) {
+  const advisor = decision.advisor;
+  if (!advisor) return null;
+  const state = advisorStates[advisor.status], engine = decisionKinds[advisor.engine.kind] ?? decisionKinds.NO_ACTION;
+  return <div className="mt-2 border-l-2 border-[#7fa6ff]/50 bg-[#7fa6ff]/[0.06] px-3 py-2 text-[12px] leading-5">
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="inline-flex items-center gap-1.5 text-[#9ec5f4]"><Sparkles aria-hidden="true" className="size-3.5" />{state.label}</span>{advisor.model && <span className="mono text-[11px] text-white/45">{advisor.model}</span>}</p>
+    <p className="mt-1 text-white/75">{advisor.rationale}</p>
+    {advisor.status === "APPLIED" && <p className="mt-1 text-white/50">Engine proposed: {engine.label.toLowerCase()}{BigInt(advisor.engine.depositMinor) > 0n ? ` ${display(advisor.engine.depositMinor)}` : ""}. {advisor.engine.explanation}</p>}
+  </div>;
+}
 const runTone = (state: string) => state === "UNKNOWN" ? "warning" : state === "COMPLETED" ? "success" : state === "FAILED" ? "danger" : state === "PARTIAL" ? "warning" : "neutral";
 
 /** What the agent holds, as one band: cash on the left, Morpho on the right. */
@@ -140,8 +161,9 @@ function RunTimeline({ runs, steps }: { runs: Run[]; steps: Status["steps"] }) {
       <span aria-hidden="true" className="relative grid size-8 shrink-0 place-items-center rounded-full border bg-[#101319]" style={{ borderColor: kind.color, color: kind.color }}><Icon className="size-4" /></span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"><p className="text-sm font-medium">{kind.label}</p><StatusPill label={item.state} tone={runTone(item.state)} /></div>
-        <p className="mono mt-0.5 text-[11px] text-white/45">{new Date(item.created_at).toLocaleString()}</p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[11px] text-white/45"><span className="mono">{new Date(item.created_at).toLocaleString()}</span>{item.snapshot?.trigger && <span>{triggerLabels[item.snapshot.trigger] ?? item.snapshot.trigger}</span>}</p>
         <p className="mt-2 text-[13px] leading-5 text-white/65">{item.decision.explanation}</p>
+        <AdvisorNote decision={item.decision} />
         {moved.length > 0 && <ul className="mt-2 flex flex-wrap gap-2">{moved.map(([label, minor]) => <li key={label} className="border border-white/15 px-2 py-1 text-[12px] text-white/60">{label} <span className="mono tabular-nums text-white/90">{display(minor)}</span></li>)}</ul>}
         {item.failure && <p className="mt-2 text-[12px] text-[#ffd27f]">{outcome(item.failure)}</p>}
         {own.length > 0 && <details className="mt-2"><summary className="inline-flex min-h-11 cursor-pointer items-center text-[12px] text-white/55 hover:text-white">Steps ({own.length})</summary>
@@ -363,6 +385,13 @@ export function AutopilotView() {
       </SectionCard>}
       <details className="mt-6 border border-white/15"><summary className="flex min-h-11 cursor-pointer items-center gap-2 px-5 py-3 text-sm"><Settings2 aria-hidden="true" className="size-4 text-white/55" />Settings</summary><div className="space-y-4 p-5 pt-2 text-sm">
         <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}><Pause aria-hidden="true" className="size-3.5" />Pause autopilot</button>
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-white/12 p-4">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 font-medium"><Sparkles aria-hidden="true" className="size-4 text-[#9ec5f4]" />AI advisor<Tip label="About the AI advisor">Every six hours, when your policy changes and when a bill comes due, your agent runs. With the advisor on, a Groq model may invest less, wait, or move part of the Morpho position back to the agent&apos;s cash, always inside the limits Hodd&apos;s engine sets, and writes down why. It never sees addresses or bill names, and safety moves (protecting your bills, refilling the reserve, returning everything) are never up to it.</Tip></p>
+            <p className="mt-1 text-[12px] text-white/55">{status?.advisor?.available ? (status.mandate?.advisorEnabled ? "On" : "Off") + (status.advisor.model ? `, ${status.advisor.model} on Groq` : "") : "Not enabled by the operator yet"}</p>
+          </div>
+          <button type="button" role="switch" aria-checked={Boolean(status?.mandate?.advisorEnabled)} aria-label="AI advisor" className={buttonClass.ghost} disabled={disabled || !status?.mandate || !status?.advisor?.available} onClick={() => void act(async signal => { await post("advisor", { enabled: !status?.mandate?.advisorEnabled }, signal); await load(signal); setMessage(status?.mandate?.advisorEnabled ? "AI advisor turned off. The engine decides alone." : "AI advisor turned on. It works inside the engine's limits."); })}>{status?.mandate?.advisorEnabled ? "Turn off" : "Turn on"}</button>
+        </div>
         {status?.wallet && <><p className="break-all font-mono text-[13px]">{status.wallet.address}</p><a className="inline-flex min-h-11 items-center gap-1.5 text-[#9ec5f4] underline underline-offset-4" href={"https://testnet.arcscan.app/address/" + status.wallet.address} target="_blank" rel="noreferrer">View agent on ArcScan<ExternalLink aria-hidden="true" className="size-3.5" /></a></>}
       </div></details>
       <details className="mt-6 border border-white/15"><summary className="flex min-h-11 cursor-pointer items-center gap-2 px-5 py-3 text-sm"><History aria-hidden="true" className="size-4 text-white/55" />History{status && status.runs.length > 0 && <span className="mono text-[12px] tabular-nums text-white/50">{status.runs.length}</span>}</summary>

@@ -21,7 +21,7 @@ vi.mock("./store",()=>({
   loadWallet:async()=>m.wallet,loadMandate:async()=>m.mandate,openRun:async()=>m.open,
 }));
 import { agentHttp } from "./http";
-const post=(action:"invest"|"funding"|"return-all"|"mandate",body:unknown)=>agentHttp(new Request("https://app.hoddfinance.xyz/api/autopilot/"+action,{method:"POST",headers:{origin:"https://app.hoddfinance.xyz","content-type":"application/json"},body:JSON.stringify(body)}),action);
+const post=(action:"invest"|"funding"|"return-all"|"mandate"|"advisor",body:unknown)=>agentHttp(new Request("https://app.hoddfinance.xyz/api/autopilot/"+action,{method:"POST",headers:{origin:"https://app.hoddfinance.xyz","content-type":"application/json"},body:JSON.stringify(body)}),action);
 const reviewed=()=>m.rpc.mock.calls.find(([name])=>name==="hodd_agent_review")?.[1] as {p_mandate:Record<string,unknown>;p_kind:string;p_mandate_revision:number;p_workspace_revision:number};
 beforeEach(()=>{
   vi.clearAllMocks();m.upserts=[];m.open=null;m.holdings=0n;m.balance=50_000_000n;m.rpcDown=false;
@@ -101,5 +101,24 @@ describe("one-click return all",()=>{
   });
   it("keeps one-click starts to return all; a mandate still needs its review",async()=>{
     expect((await post("mandate",{phase:"now"})).status).toBe(400);expect(m.rpc).not.toHaveBeenCalled();
+  });
+});
+describe("AI advisor switch",()=>{
+  it("turns the advisor on as a confirmed mandate revision with the limits unchanged",async()=>{
+    const response=await post("advisor",{enabled:true});
+    expect(response.status).toBe(200);
+    expect(reviewed()).toMatchObject({p_kind:"MANDATE",p_mandate_revision:11,p_mandate:{budgetMinor:"50000000",reserveMinor:"5000000",maxPerRunMinor:"10000000",maxMorphoBps:4000,advisorEnabled:true}});
+    expect(m.rpc).toHaveBeenCalledWith("hodd_confirm_agent_review",expect.objectContaining({p_kind:"MANDATE"}));
+  });
+  it("needs an existing agent of this owner and a plain boolean",async()=>{
+    m.mandate=null;expect((await post("advisor",{enabled:true})).status).toBeGreaterThanOrEqual(400);
+    m.mandate={mandate:{budgetMinor:"50000000",reserveMinor:"0",maxPerRunMinor:"1000000",maxMorphoBps:4000,enabled:true,paused:false},revision:1,spent_minor:"0",return_requested:false};
+    expect((await post("advisor",{enabled:"yes"})).status).toBe(400);
+    expect(m.rpc).not.toHaveBeenCalled();
+  });
+  it("keeps the owner's advisor choice when one-click invest renews the mandate",async()=>{
+    m.mandate={mandate:{budgetMinor:"50000000",reserveMinor:"0",maxPerRunMinor:"1000000",maxMorphoBps:4000,enabled:true,paused:false,advisorEnabled:true},revision:4,spent_minor:"0",return_requested:false};
+    expect((await post("invest",{amountMinor:"1000000"})).status).toBe(200);
+    expect(reviewed().p_mandate).toMatchObject({advisorEnabled:true});
   });
 });

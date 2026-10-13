@@ -17,6 +17,9 @@ import { AGENT_MAX_BUDGET_MINOR, validateMandate, type AgentWallet, type Mandate
 import { agentDb, loadWallet, loadMandate, openRun } from "./store";
 import { agentHoldings, agentInputs } from "./inputs";
 import { advanceAgentRun, startAgentRun } from "./runner";
+import { scheduledTrigger, type RunTrigger } from "./triggers";
+import { advisorConfigured, groqAdvisorModel } from "./advisor-model";
+import { treasuryPolicySchema, treasuryWorkspaceSchema } from "@/lib/treasury/models";
 const headers={"Cache-Control":"no-store"};
 const messages:Record<string,string>={
   AGENT_SCHEMA_UNAVAILABLE:"Autopilot is not provisioned. Its local migration has not been applied.",
@@ -90,7 +93,7 @@ async function confirm(c:Ctx,reviewId:string,kind:Kind) {
   if(error && /run unresolved/i.test(error.message))throw new Error("AGENT_RUN_OPEN");
   if(error || data!==kind)throw new Error("AGENT_REVIEW_CHANGED");
 }
-export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover") {
+export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover"|"advisor") {
   try {
     const read=request.method==="GET";
     // GETs are read-only. Reuse same-origin JSON guards without requiring an Origin on normal navigation reads.
@@ -106,7 +109,8 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       let balances=null, balanceError=null;
       if(wallet && stored)try{const i=await agentInputs(c.userId);balances={cashMinor:i.cash.balance.minorUnits,positionMinor:i.agentPosition.currentBalance.minorUnits,redeemableMinor:i.agentPosition.redeemable.minorUnits,observedAt:i.cash.observedAt};}catch{balanceError="Fresh balances are unavailable. Execution stays closed until they can be read.";}
       const policy=c.workspace.policy;
-      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
+      const controls=await liveControls();
+      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,advisor:{available:advisorConfigured() && controls?.get("AGENT_ADVISOR")===true,model:advisorConfigured()?groqAdvisorModel():null},wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
     }
     const body=await request.json();
     if(action==="wallet") {
@@ -126,7 +130,7 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       // The budget covers what the agent already holds plus this amount; fees and returns already counted stay counted.
       const budget=BigInt(current?.spent_minor ?? "0")+await agentHoldings(wallet.address)+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
-      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
+      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false,...(current?.mandate.advisorEnabled!==undefined ? {advisorEnabled:current.mandate.advisorEnabled} : {})},policy);
       // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
       // and wallet extensions made that fail before the wallet opened). The wallet signs within this exact ceiling.
       const funding=await fundingTransfer(getAddress(c.wallet.address),getAddress(wallet.address),BigInt(input.amountMinor));
@@ -142,6 +146,16 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       if(receipt.status!=="success")return Response.json({status:"REVERTED"},{headers});
       const arrived=receipt.logs.reduce((sum,log)=>{if(log.address.toLowerCase()!==ARC_TESTNET_USDC.toLowerCase())return sum;try{const e=decodeEventLog({abi:erc20Abi,data:log.data,topics:log.topics});return e.eventName==="Transfer" && e.args.from.toLowerCase()===wallet.owner_address && e.args.to.toLowerCase()===wallet.address ? sum+e.args.value : sum;}catch{return sum;}},0n);
       return Response.json({status:arrived>0n?"ARRIVED":"UNRELATED",amountMinor:arrived.toString()},{headers});
+    }
+    if(action==="advisor") {
+      // The owner turns the LLM advisor on or off. Limits are unchanged; it is a mandate revision like any other.
+      const input=z.object({enabled:z.boolean()}).strict().parse(body);
+      await reserveLiveUsage(c.client,mode,"QUOTE");
+      const wallet=await loadWallet(c.userId),current=await loadMandate(c.userId);
+      if(!wallet || !current || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
+      const mandate=validateMandate({...current.mandate,advisorEnabled:input.enabled},c.workspace.policy);
+      await confirm(c,await review(c,wallet,current.revision,"MANDATE",mandate),"MANDATE");
+      return Response.json({status:"READY",mandate},{headers});
     }
     if(action==="pause") {
       z.object({}).strict().parse(body);const {error}=await agentDb().rpc("hodd_pause_agent",{p_user:c.userId});if(error)throw new Error("AGENT_PAUSE_UNAVAILABLE");
@@ -183,18 +197,36 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
     return Response.json({status:"ERROR",code,message:known?error.message:messages[code] ?? "Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
   }
 }
+/** A bearer secret compared in constant time. */
+function bearerMatches(request:Request,secret:string|undefined) {
+  if(!secret)return false;
+  const supplied=request.headers.get("authorization") ?? "", expected="Bearer "+secret;
+  return Buffer.byteLength(supplied)===Buffer.byteLength(expected) && timingSafeEqual(Buffer.from(supplied),Buffer.from(expected));
+}
+/**
+ * The scheduler tick (Vercel cron daily, the Supabase scheduler hourly). A run starts only for agents that are due:
+ * six hours since the last run, a changed treasury policy, or a bill entering its protection window or falling due
+ * (see triggers.ts). Bounded per invocation; the next tick picks up the rest.
+ */
 export async function agentCron(request:Request) {
   try {
-    const secret=process.env.CRON_SECRET;const supplied=request.headers.get("authorization") ?? "";const expected="Bearer "+secret;
-    if(!secret || Buffer.byteLength(supplied)!==Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))return Response.json({status:"ERROR"},{status:401,headers});
+    if(!bearerMatches(request,process.env.CRON_SECRET) && !bearerMatches(request,process.env.AUTOPILOT_SCHEDULER_SECRET))return Response.json({status:"ERROR"},{status:401,headers});
     await access(request,true,true);
-    const {data,error}=await agentDb().from("agent_mandates").select("user_id,mandate").eq("mandate->>enabled","true").eq("mandate->>paused","false").order("updated_at",{ascending:true}).limit(5);if(error)throw new Error();
-    const results=[];
+    const {data,error}=await agentDb().from("agent_mandates").select("user_id,mandate").eq("mandate->>enabled","true").eq("mandate->>paused","false").order("updated_at",{ascending:true}).limit(50);if(error)throw new Error();
+    const results:{trigger:RunTrigger;id?:string;state:string}[]=[];const now=new Date();
     for(const row of data ?? []) {
-      const {data:last,error:lastError}=await agentDb().from("agent_runs").select("created_at").eq("user_id",row.user_id).order("created_at",{ascending:false}).limit(1).maybeSingle();
-      if(lastError || last && Date.now()-Date.parse(last.created_at)<5*60_000)continue;
-      try{const run=await startAgentRun(row.user_id);results.push({id:run.id,state:run.state});}catch{results.push({state:"FAILED"});}
-      if(results.length>=5)break; // bounded Hobby invocation; Run now covers other agents.
+      const [last,stored]=await Promise.all([
+        agentDb().from("agent_runs").select("created_at,policy:snapshot->workspace->policy").eq("user_id",row.user_id).order("created_at",{ascending:false}).limit(1).maybeSingle(),
+        agentDb().from("treasury_workspaces").select("workspace").eq("user_id",row.user_id).maybeSingle(),
+      ]);
+      if(last.error || stored.error || !stored.data)continue;
+      const workspace=treasuryWorkspaceSchema.safeParse(stored.data.workspace);if(!workspace.success)continue;
+      const lastRun=last.data as {created_at:string;policy:unknown}|null;
+      const lastPolicy=lastRun?.policy ? treasuryPolicySchema.safeParse(lastRun.policy) : null;
+      const trigger=scheduledTrigger({now,lastRunAt:lastRun?new Date(lastRun.created_at):null,lastPolicy:lastPolicy?.success?lastPolicy.data:null,workspace:workspace.data});
+      if(!trigger)continue;
+      try{const run=await startAgentRun(row.user_id,trigger);results.push({trigger,id:run.id,state:run.state});}catch{results.push({trigger,state:"FAILED"});}
+      if(results.length>=5)break; // bounded Hobby invocation; the next tick continues.
     }
     return Response.json({status:"READY",results},{headers});
   } catch {return Response.json({status:"ERROR",code:"AGENT_CRON_UNAVAILABLE"},{status:503,headers});}

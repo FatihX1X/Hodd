@@ -16,15 +16,35 @@ import { agentEarnQuote } from "./quotes";
 import { agentDb, openRun, patchRun, patchRunDecision, patchStep, type AgentRun, type AgentStep } from "./store";
 import { stepAction } from "./state";
 import { agentFeeConfig, validateAgentEarnCall } from "./calls";
+import { adviseDecision, advisorEnvelope, advisorFacts } from "./advisor";
+import { advisorConfigured, groqAdvisor } from "./advisor-model";
+import type { Decision } from "./models";
+import type { RunTrigger } from "./triggers";
 const same=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
 const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = i.feeReserveMinor) => decideAutopilot({workspace:i.workspace,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,mandate:i.stored.mandate,cashMinor:i.cash.balance.minorUnits,spentMinor:String(i.stored.spent_minor),feeReserveMinor,returnAll:i.stored.return_requested});
-export async function startAgentRun(userId: string) {
+/**
+ * The LLM advisor may adjust the engine's decision only inside the envelope the engine sets (see advisor.ts). It runs
+ * when the owner enabled it, the operator's AGENT_ADVISOR switch is on and a Groq key is configured; otherwise, and on
+ * any model failure, the engine's decision stands. Safety decisions and return-all never reach the model.
+ */
+async function advise(i: Awaited<ReturnType<typeof agentInputs>>, engine: Decision, now = new Date()): Promise<Decision> {
+  const m=i.stored.mandate;
+  if(i.stored.return_requested || !m.advisorEnabled || !m.enabled || m.paused || !advisorConfigured())return engine;
+  const controls=await liveControls(); if(!controls?.get("AGENT_ADVISOR"))return engine;
+  const observed=Date.parse(i.agentPosition.observedAt);
+  const fresh=i.agentPosition.liquidityStatus==="READY" && now.getTime()-observed<=60_000 && observed<=now.getTime()+5_000;
+  const envelope=fresh ? advisorEnvelope(engine,{cashMinor:BigInt(i.cash.balance.minorUnits),redeemableMinor:BigInt(i.agentPosition.redeemable.minorUnits),positionMinor:BigInt(i.agentPosition.currentBalance.minorUnits),feeReserveMinor:BigInt(i.feeReserveMinor)}) : null;
+  if(!envelope)return engine;
+  const facts=advisorFacts({workspace:i.workspace,cash:i.cash.balance,ownerCash:i.ownerCash.balance,agentPosition:i.agentPosition,vault:i.vault,mandate:m,remainingBudgetMinor:engine.remainingBudgetMinor,now});
+  return adviseDecision(engine,envelope,facts,groqAdvisor);
+}
+export async function startAgentRun(userId: string, trigger: RunTrigger = "MANUAL") {
   const existing=await openRun(userId); if(existing)return advanceAgentRun(existing);
-  const i=await agentInputs(userId); const decision=decisionOf(i); const quote=await agentEarnQuote(i,decision);
+  const i=await agentInputs(userId); const decision=await advise(i,decisionOf(i)); const quote=await agentEarnQuote(i,decision);
   // A withdrawal re-quoted at Circle's rounded max records the amount that will actually move.
   if(quote?.operation==="WITHDRAW" && BigInt(quote.amount.minorUnits)<BigInt(decision.withdrawMinor))decision.withdrawMinor=quote.amount.minorUnits;
   const id=randomUUID();
-  const snapshot={workspace:i.workspace,workspaceRevision:i.workspaceRevision,mandate:i.stored.mandate,mandateRevision:i.stored.revision,spentMinor:String(i.stored.spent_minor),cash:i.cash,ownerCash:i.ownerCash,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,feeReserveMinor:i.feeReserveMinor};
+  const snapshot={trigger,workspace:i.workspace,workspaceRevision:i.workspaceRevision,mandate:i.stored.mandate,mandateRevision:i.stored.revision,spentMinor:String(i.stored.spent_minor),cash:i.cash,ownerCash:i.ownerCash,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,feeReserveMinor:i.feeReserveMinor};
   const {error}=await agentDb().rpc("hodd_start_agent_run",{p_id:id,p_user:userId,p_snapshot:snapshot,p_decision:decision,p_quote:quote,p_return_all:i.stored.return_requested,p_revision:i.stored.revision});
   if(error)throw new Error(/rate limit/i.test(error.message)?"AGENT_RATE_LIMIT":"AGENT_RUN_CHANGED");
   const {data,error:readError}=await agentDb().from("agent_runs").select("*").eq("id",id).single();
@@ -60,7 +80,12 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
     if(reserveLeft<=0n)throw new Error("AGENT_FEE_RESERVE_EXHAUSTED");
     const fresh=decisionOf(i,reserveLeft.toString());
     // Return-all amounts are re-derived from live balances below; only the owner can receive them.
-    if(run.return_all ? fresh.kind!=="RETURN_ALL" : fresh.kind!==run.decision.kind || ["depositMinor","withdrawMinor","transferMinor"].some(key=>BigInt(fresh[key as "depositMinor"])<BigInt(run.decision[key as "depositMinor"]))) {
+    // The engine re-decides on live data before every signature. An advised run may only ever be smaller than the
+    // engine's fresh decision; an advised de-risk withdrawal only proceeds while the engine needs no safety action.
+    const blocked=run.return_all ? fresh.kind!=="RETURN_ALL"
+      : run.decision.kind==="DE_RISK" ? (fresh.kind!=="INVEST" && fresh.kind!=="NO_ACTION") || BigInt(i.agentPosition.redeemable.minorUnits)<BigInt(run.decision.withdrawMinor)
+      : fresh.kind!==run.decision.kind || ["depositMinor","withdrawMinor","transferMinor"].some(key=>BigInt(fresh[key as "depositMinor"])<BigInt(run.decision[key as "depositMinor"]));
+    if(blocked) {
       if(continuing && fresh.kind==="NO_ACTION")return await finish(run);
       return await patchRun(run,steps.length ? "PARTIAL":"FAILED","AGENT_FRESH_POLICY_BLOCKED");
     }
