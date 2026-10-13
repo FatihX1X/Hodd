@@ -15,7 +15,7 @@ contract DeployFactoryTest is Test {
 
     function test_script_guardsTheChainAndDeploysTheFactory() public {
         MockUSDC usdc = new MockUSDC();
-        vm.setEnv("DEPLOYER_PRIVATE_KEY", FIXTURE_KEY);
+        vm.setEnv("PRIVATE_KEY", FIXTURE_KEY);
         vm.setEnv("USDC_ADDRESS", vm.toString(address(usdc)));
         DeployFactory script = new DeployFactory();
 

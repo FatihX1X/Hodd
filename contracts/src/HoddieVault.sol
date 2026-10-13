@@ -13,12 +13,6 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
 import {RollingWindow} from "./RollingWindow.sol";
 
-/// @dev The one extra function a "teller" strategy has over a plain ERC-4626 vault: its share
-///      token is a separate ERC-20 (Circle's USYC Teller returns the USYC token here).
-interface IShareProvider {
-    function share() external view returns (address);
-}
-
 /// @title HoddieVault
 /// @author Hodd
 /// @notice A non-custodial, per-user vault that holds USDC for its `owner` and lets a limited
@@ -28,8 +22,9 @@ interface IShareProvider {
 ///        asset out (`withdrawAll`, `exitStrategy`, `rescueToken`), also while the vault is paused
 ///        and also when the operator is gone. Nothing the operator does can block these calls.
 ///      - The OPERATOR can only (a) deposit idle USDC into an owner-allowlisted ERC-4626 strategy,
-///        (b) withdraw/redeem from such a strategy back into this vault, (c) send idle USDC to the
-///        owner, and (d) pay an owner-approved recipient. (a) and (d) have separate budgets, each
+///        (b) withdraw/redeem from such a strategy back into this vault, or redeem and send the
+///        USDC straight on to the owner, (c) send idle USDC to the owner, and (d) pay an
+///        owner-approved recipient. (a) and (d) have separate budgets, each
 ///        capped per transaction and over a rolling 24 hours (see {RollingWindow} for the exact
 ///        guarantee), and (d) is capped per recipient as well. Every strategy call carries a
 ///        slippage bound that is checked against the vault's real balance changes. The operator
@@ -39,22 +34,13 @@ interface IShareProvider {
 ///      The contract is not upgradeable, has no `receive`/`fallback` (native value reverts) and
 ///      ownership can not be renounced (that would lock the funds).
 ///
-///      Strategies. A strategy is either a plain ERC-4626 vault (the vault's position is its own
-///      share balance, e.g. Morpho) or a "teller": an ERC-4626-shaped contract whose `share()` is
-///      a separate ERC-20 (Circle's USYC Teller). Both are called with the ERC-4626 selectors
-///      `deposit/withdraw/redeem`; only the place where the share balance lives differs, see
-///      {shareTokenOf}.
-///
-///      Permissioned tellers (USYC). The USYC Teller and the USYC token only talk to addresses
-///      that Circle has allowlisted. This vault can subscribe to, hold, redeem and move USYC only
-///      if the VAULT'S OWN ADDRESS is allowlisted, and the owner (or any receiver) can only get
-///      USDC out of a redemption or USYC tokens out of the vault if that address is allowlisted
-///      too. Until Circle allowlists the vault, operator deposits into the teller revert with the
-///      Teller's own `NotPermissioned` error. The vault address is predictable before deployment
-///      (see `HoddieVaultFactory.predictVault`), so the allowlisting can be requested up front.
-///      If Circle removes the vault from the allowlist later, the USYC the vault holds is frozen
-///      (nobody, owner included, can move it) until it is allowlisted again. The owner's
-///      `withdrawAll` still returns everything that is not frozen.
+///      Strategies. Every strategy is an ERC-4626 vault over `asset` whose shares are its own
+///      token: Morpho, and Hodd's USYC pool (HoddUSYCVault). The vault never holds USYC itself.
+///      Redemptions always name this vault as receiver and holder, because the USYC pool only
+///      redeems to its holder (its shares are not transferable and `withdraw` is not supported);
+///      when the USDC is meant for the owner it is forwarded in the same transaction, exactly
+///      the amount that arrived (measured by balance). Whether Circle lets the pool buy or
+///      redeem USYC is the pool's matter: this vault needs no allowlisting of its own.
 contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces {
     using SafeERC20 for IERC20;
     using RollingWindow for RollingWindow.Window;
@@ -79,10 +65,6 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     bytes32 public constant ADD_RECIPIENT_TYPEHASH = keccak256(
         "AddRecipient(address recipient,uint256 maxPerPayment,uint256 nonce,uint256 deadline)"
     );
-
-    /// @dev Gas given to the `share()` probe. A getter needs a few thousand; the cap keeps a
-    ///      hostile strategy from burning the gas of `allowStrategy` / `exitStrategy`.
-    uint256 private constant SHARE_PROBE_GAS = 50_000;
 
     /*//////////////////////////////////////////////////////////////
                                  STORAGE
@@ -120,12 +102,6 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
 
     address[] private _strategies;
 
-    /// @dev The ERC-20 whose balance is the vault's position in a strategy: the strategy itself
-    ///      for a plain ERC-4626 vault, the separate `share()` token for a teller. Set when the
-    ///      strategy is allowlisted and deliberately kept when it is removed again, so that
-    ///      `exitStrategy` keeps working for a removed teller.
-    mapping(address strategy => address) private _shareTokens;
-
     /*//////////////////////////////////////////////////////////////
                                   EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -141,9 +117,6 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     );
     /// @notice A strategy was added to the allowlist.
     event StrategyAllowed(address indexed strategy);
-    /// @notice The share token the vault uses for a strategy that was just allowlisted
-    ///         (equal to `strategy` for a plain ERC-4626 vault).
-    event ShareTokenSet(address indexed strategy, address indexed shareToken);
     /// @notice A strategy was removed from the allowlist. Shares already held stay in the vault.
     event StrategyDisallowed(address indexed strategy);
     /// @notice A payment recipient was approved with a cap per payment.
@@ -158,13 +131,17 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     event WithdrawnFromStrategy(address indexed strategy, uint256 assets, uint256 shares);
     /// @notice The operator redeemed an exact share amount from a strategy into the vault.
     event RedeemedFromStrategy(address indexed strategy, uint256 shares, uint256 assets);
+    /// @notice The operator redeemed shares and the USDC that arrived went straight on to the owner.
+    event RedeemedToOwner(
+        address indexed strategy, address indexed owner, uint256 shares, uint256 assets
+    );
     /// @notice The operator sent idle USDC to the owner.
     event TransferredToOwner(address indexed owner, uint256 amount);
     /// @notice The operator paid an approved recipient. `ref` lets Hodd match the payment to a bill.
     event Payment(address indexed recipient, uint256 amount, bytes32 indexed ref);
     /// @notice The owner ran `withdrawAll` (or `exitStrategy`) for one strategy.
-    /// @dev `assetsReceived` is the amount the strategy reported for the redeem it did on the
-    ///      owner's behalf. It is informational, a hostile strategy could misreport it.
+    /// @dev `assetsReceived` is the USDC that arrived in the vault from the redemption (measured
+    ///      by balance) and was forwarded to the owner.
     event StrategyExited(
         address indexed strategy,
         uint256 sharesRedeemed,
@@ -228,7 +205,7 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     /// @param owner_ The user's wallet (EOA or ERC-1271 smart account). Must not be zero.
     /// @param operator_ Hodd's agent wallet, or `address(0)` for none.
     /// @param limits_ Deposit and payment limits (USDC base units), see {Limits}.
-    /// @param strategies_ Initial strategy allowlist (each must be an ERC-4626 or teller over
+    /// @param strategies_ Initial strategy allowlist (each must be an ERC-4626 vault over
     ///        `asset_`). No recipients are approved initially.
     constructor(
         IERC20 asset_,
@@ -257,16 +234,14 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
                            OPERATOR FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Deposit idle USDC into an allowlisted ERC-4626 or teller strategy. Shares go to this
-    ///         vault.
+    /// @notice Deposit idle USDC into an allowlisted ERC-4626 strategy. Shares go to this vault.
     /// @dev Counts against `maxDepositPerTx` and `depositLimit24h`. Approves exactly `assets`, then
     ///      resets the allowance to zero. The shares received are MEASURED as the change of the
     ///      vault's balance of the strategy's share token (not taken from the return value) and
     ///      must be at least `minShares`; `minShares` must not be zero, the caller has to state
-    ///      what it expects. For the USYC Teller this reverts with the Teller's `NotPermissioned`
-    ///      until Circle has allowlisted this vault's address. The Teller prices a subscription at
-    ///      the oracle's next price when the price is stale or after its cut-off, so an immediate
-    ///      redemption can return slightly less than was deposited.
+    ///      what it expects. The USYC pool prices a deposit with Circle's next price when the
+    ///      oracle is stale or after its cut-off, so an immediate redemption can return slightly
+    ///      less than was deposited.
     /// @param strategy The allowlisted strategy.
     /// @param assets USDC amount (base units) to deposit.
     /// @param minShares Minimum share tokens the vault must end up with (> 0).
@@ -283,7 +258,7 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
         if (minShares == 0) revert ZeroSlippageBound();
         _spendDeposit(assets);
 
-        IERC20 shareToken = IERC20(_shareTokens[strategy]);
+        IERC20 shareToken = IERC20(strategy);
         uint256 sharesBefore = shareToken.balanceOf(address(this));
 
         asset.forceApprove(strategy, assets);
@@ -299,9 +274,8 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
 
     /// @notice Withdraw an exact USDC amount from a strategy back into this vault.
     /// @dev Receiver and share owner are always this vault. Not subject to the spending limits
-    ///      because the funds stay in custody. A teller additionally enforces its own daily
-    ///      redemption limit and treasury liquidity (it reverts with `LimitExceeded` or a token
-    ///      error), and needs this vault to be allowlisted. The shares burned and the USDC
+    ///      because the funds stay in custody. Strategies without `withdraw` (the USYC pool)
+    ///      revert here; use {redeemFromStrategy} or {redeemToOwner}. The shares burned and the USDC
     ///      received are MEASURED from balance changes: the vault must receive at least `assets`
     ///      and burn at most `maxShares`.
     /// @param strategy The allowlisted strategy.
@@ -319,7 +293,7 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
         if (assets == 0) revert ZeroAmount();
         if (maxShares == 0) revert ZeroSlippageBound();
 
-        IERC20 shareToken = IERC20(_shareTokens[strategy]);
+        IERC20 shareToken = IERC20(strategy);
         uint256 sharesBefore = shareToken.balanceOf(address(this));
         uint256 assetsBefore = asset.balanceOf(address(this));
 
@@ -358,6 +332,37 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
 
         if (assets < minAssets) revert InsufficientAssets(assets, minAssets);
         emit RedeemedFromStrategy(strategy, shares, assets);
+    }
+
+    /// @notice Redeem an exact share amount from a strategy and send the USDC straight on to the
+    ///         owner in the same transaction (for example out of Hodd's USYC pool, which only
+    ///         pays its holder).
+    /// @dev Not subject to the spending limits: the USDC can only go to the owner. The USDC is
+    ///      MEASURED as the change of the vault's balance, must be at least `minAssets` (> 0) and
+    ///      exactly that amount is forwarded; USDC that was already idle in the vault stays.
+    /// @param strategy The allowlisted strategy.
+    /// @param shares Strategy shares to burn.
+    /// @param minAssets Minimum USDC (base units) the owner must receive (> 0).
+    /// @return assets USDC sent to the owner.
+    function redeemToOwner(address strategy, uint256 shares, uint256 minAssets)
+        external
+        onlyOperator
+        whenNotPaused
+        nonReentrant
+        returns (uint256 assets)
+    {
+        if (!isStrategy[strategy]) revert StrategyNotAllowed(strategy);
+        if (shares == 0) revert ZeroAmount();
+        if (minAssets == 0) revert ZeroSlippageBound();
+
+        uint256 assetsBefore = asset.balanceOf(address(this));
+        IERC4626(strategy).redeem(shares, address(this), address(this));
+        assets = asset.balanceOf(address(this)) - assetsBefore;
+        if (assets < minAssets) revert InsufficientAssets(assets, minAssets);
+
+        address to = owner();
+        asset.safeTransfer(to, assets);
+        emit RedeemedToOwner(strategy, to, shares, assets);
     }
 
     /// @notice Send idle USDC to the owner. Not subject to the spending limits.
@@ -531,17 +536,14 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     }
 
     /// @notice Take everything out to the owner. Works when paused and without an operator.
-    /// @dev For every allowlisted strategy holding shares it (1) tries to redeem all shares with
-    ///      the owner as receiver, (2) if that fails, redeems `maxRedeem` shares, (3) sends any
-    ///      shares still left to the owner as share tokens so they can redeem later. Each step
-    ///      uses guarded low-level calls: a strategy that reverts, returns garbage or has no code
-    ///      is skipped (`StrategyExitFailed`) and can not block the others. Finally all idle USDC
+    /// @dev For every allowlisted strategy holding shares it (1) tries to redeem all shares into
+    ///      the vault, (2) if that fails, redeems `maxRedeem` shares, forwarding exactly the USDC
+    ///      that arrived to the owner, and (3) sends any shares still left to the owner as share
+    ///      tokens so they can redeem later (not possible for the USYC pool, whose shares can not
+    ///      be transferred: those stay in the vault for a later `exitStrategy`). Each step uses
+    ///      guarded low-level calls: a strategy that reverts, returns garbage or has no code is
+    ///      skipped (`StrategyExitFailed`) and can not block the others. Finally all idle USDC
     ///      goes to the owner. (Morpho Vault V2 reports `maxRedeem == 0`, hence step 1 first.)
-    ///      Share balances are read from the strategy's share token (see {shareTokenOf}). A
-    ///      teller (USYC) gets two more attempts: if redeeming to the owner is refused (the owner
-    ///      is not allowlisted) the same amount is redeemed into the vault and forwarded; and the
-    ///      leftover share tokens can only be sent to the owner if both the vault and the owner
-    ///      are allowlisted, otherwise they stay in the vault (`StrategyExitFailed`).
     ///      If a strategy burns all gas, call {disallowStrategy} for it first (constant gas) or
     ///      use {exitStrategy} per strategy.
     function withdrawAll() external onlyOwner nonReentrant {
@@ -558,10 +560,8 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
 
     /// @notice Exit a single strategy to the owner, with the same logic as {withdrawAll}.
     /// @dev Works for any address (also strategies that were removed from the allowlist) and
-    ///      never sends anything but the redeemed assets or the share tokens to the owner. Does
-    ///      not touch USDC that was already idle in the vault. For a teller whose redemption to
-    ///      the owner is refused (owner not allowlisted) the USDC is redeemed into the vault and
-    ///      forwarded to the owner here.
+    ///      never sends anything but the redeemed USDC (exactly what arrived) or the share tokens
+    ///      to the owner. Does not touch USDC that was already idle in the vault.
     /// @param strategy The strategy to exit.
     function exitStrategy(address strategy) external onlyOwner nonReentrant {
         _exitStrategy(strategy, owner());
@@ -590,16 +590,6 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
     /// @return The strategy addresses (order may change when one is removed).
     function strategies() external view returns (address[] memory) {
         return _strategies;
-    }
-
-    /// @notice The ERC-20 whose balance is this vault's position in `strategy`.
-    /// @dev The strategy itself for a plain ERC-4626 vault (Morpho), the separate `share()` token
-    ///      for a teller (USYC). For a strategy that is or was allowlisted this is the value
-    ///      stored at allowlisting; for any other address it is detected on the fly.
-    /// @param strategy The strategy.
-    /// @return The share token.
-    function shareTokenOf(address strategy) external view returns (address) {
-        return _resolveShareToken(strategy);
     }
 
     /// @notice Number of allowlisted strategies.
@@ -674,9 +664,7 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
         uint256 deadline
     ) private view returns (bytes32) {
         return _hashTypedDataV4(
-            keccak256(
-                abi.encode(ADD_RECIPIENT_TYPEHASH, recipient, maxPerPayment, nonce, deadline)
-            )
+            keccak256(abi.encode(ADD_RECIPIENT_TYPEHASH, recipient, maxPerPayment, nonce, deadline))
         );
     }
 
@@ -726,122 +714,78 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
             revert InvalidStrategy(strategy);
         }
 
-        address shareToken = _detectShareToken(strategy);
-        _shareTokens[strategy] = shareToken;
-
         isStrategy[strategy] = true;
         _strategies.push(strategy);
         emit StrategyAllowed(strategy);
-        emit ShareTokenSet(strategy, shareToken);
-    }
-
-    /// @dev The stored share token if the strategy is or was allowlisted, otherwise a live probe.
-    function _resolveShareToken(address strategy) private view returns (address) {
-        address stored = _shareTokens[strategy];
-        return stored != address(0) ? stored : _detectShareToken(strategy);
-    }
-
-    /// @dev A guarded, gas-capped `share()` probe. A strategy without `share()` (every plain
-    ///      ERC-4626 vault), or one whose answer is not a contract other than the asset and this
-    ///      vault, is its own share token.
-    function _detectShareToken(address strategy) private view returns (address token) {
-        (bool ok, uint256 word) =
-            _staticUintCapped(strategy, abi.encodeCall(IShareProvider.share, ()), SHARE_PROBE_GAS);
-        if (ok && word <= type(uint160).max) {
-            // forge-lint: disable-next-line(unsafe-typecast)
-            token = address(uint160(word));
-            if (token.code.length == 0 || token == address(asset) || token == address(this)) {
-                token = address(0);
-            }
-        }
-        if (token == address(0)) token = strategy;
     }
 
     /// @dev Counts a strategy deposit against `maxDepositPerTx` and the rolling 24-hour limit.
     function _spendDeposit(uint256 amount) private {
         if (amount > maxDepositPerTx) revert ExceedsMaxDepositPerTx(amount, maxDepositPerTx);
-        (bool ok, uint256 total) =
-            _depositWindow.tryAdd(block.timestamp, amount, depositLimit24h);
+        (bool ok, uint256 total) = _depositWindow.tryAdd(block.timestamp, amount, depositLimit24h);
         if (!ok) revert ExceedsDepositLimit24h(total, depositLimit24h);
     }
 
     /// @dev Counts a payment against `maxPaymentPerTx` and the rolling 24-hour limit.
     function _spendPayment(uint256 amount) private {
         if (amount > maxPaymentPerTx) revert ExceedsMaxPaymentPerTx(amount, maxPaymentPerTx);
-        (bool ok, uint256 total) =
-            _paymentWindow.tryAdd(block.timestamp, amount, paymentLimit24h);
+        (bool ok, uint256 total) = _paymentWindow.tryAdd(block.timestamp, amount, paymentLimit24h);
         if (!ok) revert ExceedsPaymentLimit24h(total, paymentLimit24h);
     }
 
     /// @dev Best-effort exit of `strategy` to `to`. Never reverts because of the strategy.
     function _exitStrategy(address strategy, address to) private {
-        address shareToken = _resolveShareToken(strategy);
         (bool ok, uint256 shares) =
-            _staticUint(shareToken, abi.encodeCall(IERC20.balanceOf, (address(this))));
+            _staticUint(strategy, abi.encodeCall(IERC20.balanceOf, (address(this))));
         if (!ok) {
             emit StrategyExitFailed(strategy, 0);
             return;
         }
         if (shares == 0) return;
 
-        // 1) + 2) Redeem everything, else what the strategy says it can serve right now.
-        //    A teller (separate share token) may also redeem into the vault, see _tryRedeem.
-        (uint256 assetsReceived, uint256 toVault) =
-            _redeemBestEffort(strategy, shares, to, shareToken != strategy);
-
-        // 3) Whatever is still in the vault goes to the owner as share tokens.
-        (uint256 redeemed, uint256 sent, uint256 left) = _returnShares(shareToken, shares, to);
-
-        // USDC that had to be redeemed into the vault goes on to the owner (best effort: if this
-        // fails it stays idle and the idle sweep of `withdrawAll` or a later call picks it up).
-        if (toVault != 0) {
-            _callUint(address(asset), abi.encodeCall(IERC20.transfer, (to, toVault)));
+        // 1) + 2) Redeem everything into the vault, else what the strategy says it can serve
+        //    now, and forward exactly the USDC that arrived. (Best effort: if the transfer fails
+        //    the USDC stays idle and the sweep of `withdrawAll` or `rescueToken` picks it up.)
+        uint256 received = _redeemBestEffort(strategy, shares);
+        if (received != 0) {
+            _callUint(address(asset), abi.encodeCall(IERC20.transfer, (to, received)));
         }
 
-        emit StrategyExited(strategy, redeemed, assetsReceived, sent);
+        // 3) Whatever is still in the vault goes to the owner as share tokens, where possible.
+        (uint256 redeemed, uint256 sent, uint256 left) = _returnShares(strategy, shares, to);
+
+        emit StrategyExited(strategy, redeemed, received, sent);
         if (left != 0) emit StrategyExitFailed(strategy, left);
     }
 
-    /// @dev Redeem all `shares`; if that fails redeem `maxRedeem` shares if it is a proper partial.
-    ///      Returns what was received and how much of it landed in the vault (not at `to`).
-    function _redeemBestEffort(address strategy, uint256 shares, address to, bool teller)
-        private
-        returns (uint256 assetsReceived, uint256 toVault)
-    {
-        bool ok;
-        (ok, assetsReceived, toVault) = _tryRedeem(strategy, shares, to, teller);
-        if (ok) return (assetsReceived, toVault);
+    /// @dev Redeem all `shares`; if that fails redeem `maxRedeem` shares if it is a proper
+    ///      partial. Returns the USDC that arrived in the vault.
+    function _redeemBestEffort(address strategy, uint256 shares) private returns (uint256) {
+        (bool ok, uint256 received) = _tryRedeem(strategy, shares);
+        if (ok) return received;
 
         (bool okMax, uint256 maxShares) =
             _staticUint(strategy, abi.encodeCall(IERC4626.maxRedeem, (address(this))));
         if (okMax && maxShares != 0 && maxShares < shares) {
-            (ok, assetsReceived, toVault) = _tryRedeem(strategy, maxShares, to, teller);
-            if (ok) return (assetsReceived, toVault);
+            (ok, received) = _tryRedeem(strategy, maxShares);
+            if (ok) return received;
         }
-        return (0, 0);
+        return 0;
     }
 
-    /// @dev `redeem(shares, to, this)`. For a teller, whose redemption is refused when the
-    ///      receiver is not allowlisted, a refused attempt is retried as `redeem(shares, this,
-    ///      this)`, which only needs the vault itself to be allowlisted. `toVault` is the USDC
-    ///      that arrived in the vault that way, measured by balance.
-    function _tryRedeem(address strategy, uint256 shares, address to, bool teller)
+    /// @dev Guarded `redeem(shares, this, this)`: this vault is always receiver and holder.
+    ///      `received` is the USDC that arrived, measured by balance (never the reported value).
+    function _tryRedeem(address strategy, uint256 shares)
         private
-        returns (bool ok, uint256 assets, uint256 toVault)
+        returns (bool ok, uint256 received)
     {
-        (ok, assets) = _callUint(
-            strategy, abi.encodeCall(IERC4626.redeem, (shares, to, address(this)))
-        );
-        if (ok) return (true, assets, 0);
-        if (!teller) return (false, 0, 0);
-
-        uint256 idleBefore = asset.balanceOf(address(this));
-        (ok, assets) = _callUint(
+        uint256 before = asset.balanceOf(address(this));
+        (ok,) = _callUint(
             strategy, abi.encodeCall(IERC4626.redeem, (shares, address(this), address(this)))
         );
-        if (!ok) return (false, 0, 0);
-        uint256 idleAfter = asset.balanceOf(address(this));
-        toVault = idleAfter > idleBefore ? idleAfter - idleBefore : 0;
+        if (!ok) return (false, 0);
+        uint256 afterRedeem = asset.balanceOf(address(this));
+        received = afterRedeem > before ? afterRedeem - before : 0;
     }
 
     /// @dev Moves the share tokens that are still in the vault to `to`. Returns how many shares
@@ -875,20 +819,6 @@ contract HoddieVault is Ownable2Step, ReentrancyGuard, Pausable, EIP712, Nonces 
         assembly ("memory-safe") {
             let out := mload(0x40)
             ok := staticcall(gas(), target, add(data, 0x20), mload(data), out, 0x20)
-            if lt(returndatasize(), 0x20) { ok := 0 }
-            if ok { value := mload(out) }
-        }
-    }
-
-    /// @dev {_staticUint} with a gas cap for the callee (used for the `share()` probe).
-    function _staticUintCapped(address target, bytes memory data, uint256 gasCap)
-        private
-        view
-        returns (bool ok, uint256 value)
-    {
-        assembly ("memory-safe") {
-            let out := mload(0x40)
-            ok := staticcall(gasCap, target, add(data, 0x20), mload(data), out, 0x20)
             if lt(returndatasize(), 0x20) { ok := 0 }
             if ok { value := mload(out) }
         }

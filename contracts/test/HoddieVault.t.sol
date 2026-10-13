@@ -78,12 +78,16 @@ contract HoddieVaultTest is Base {
     function test_constructor_revertsWhenA24hLimitDoesNotFitUint64() public {
         HoddieVault.Limits memory l = _limits();
         l.depositLimit24h = uint256(type(uint64).max) + 1;
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.depositLimit24h));
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.depositLimit24h)
+        );
         new HoddieVault(IERC20(address(usdc)), owner, operator, l, new address[](0));
 
         l = _limits();
         l.paymentLimit24h = uint256(type(uint64).max) + 1;
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.paymentLimit24h));
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.paymentLimit24h)
+        );
         new HoddieVault(IERC20(address(usdc)), owner, operator, l, new address[](0));
 
         // exactly uint64 max is fine ("effectively unlimited")
@@ -183,7 +187,7 @@ contract HoddieVaultTest is Base {
         bytes[12] memory ownerCalls = [
             abi.encodeCall(vault.pause, ()),
             abi.encodeCall(vault.unpause, ()),
-            abi.encodeCall(vault.setLimits, (1, 2,1, 2)),
+            abi.encodeCall(vault.setLimits, (1, 2, 1, 2)),
             abi.encodeCall(vault.setOperator, (stranger)),
             abi.encodeCall(vault.revokeOperator, ()),
             abi.encodeCall(vault.allowStrategy, (address(strat))),
@@ -525,7 +529,6 @@ contract HoddieVaultTest is Base {
         vault.pay(recipient, 1e6, REF);
     }
 
-
     /*//////////////////////////////////////////////////////////////
                               PAUSE / UNPAUSE
     //////////////////////////////////////////////////////////////*/
@@ -569,7 +572,7 @@ contract HoddieVaultTest is Base {
         vm.startPrank(owner);
         vault.pause();
 
-        vault.setLimits(1, 2,1, 2);
+        vault.setLimits(1, 2, 1, 2);
         vault.setOperator(stranger);
         vault.setOperator(operator);
         vault.addRecipient(recipient2, type(uint256).max);
@@ -1011,7 +1014,10 @@ contract HoddieVaultTest is Base {
         vault.pause();
         uint256 deadline = block.timestamp + 1 hours;
         vault.addRecipientWithSig(
-            recipient, NO_CAP, deadline, _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline)
+            recipient,
+            NO_CAP,
+            deadline,
+            _sign(OWNER_PK, address(vault), recipient, NO_CAP, 0, deadline)
         );
         assertTrue(vault.isRecipient(recipient));
     }
@@ -1061,7 +1067,9 @@ contract HoddieVaultTest is Base {
         uint256 deadline = block.timestamp + 1 hours;
 
         vm.expectRevert(HoddieVault.InvalidSignature.selector);
-        v.addRecipientWithSig(recipient, NO_CAP, deadline, _sign(0xBAD, address(v), recipient, NO_CAP, 0, deadline));
+        v.addRecipientWithSig(
+            recipient, NO_CAP, deadline, _sign(0xBAD, address(v), recipient, NO_CAP, 0, deadline)
+        );
 
         bytes memory good = _sign(controllerPk, address(v), recipient, NO_CAP, 0, deadline);
         account.setRejectAll(true);
@@ -1516,7 +1524,9 @@ contract HoddieVaultTest is Base {
         assertTrue(ok);
         rs.setHook(address(op));
 
-        (ok,) = op.call(abi.encodeCall(HoddieVault.withdrawFromStrategy, (address(rs), 50e6, type(uint256).max)));
+        (ok,) = op.call(
+            abi.encodeCall(HoddieVault.withdrawFromStrategy, (address(rs), 50e6, type(uint256).max))
+        );
         assertTrue(ok);
         assertTrue(op.reentered());
         assertFalse(op.reenterOk());

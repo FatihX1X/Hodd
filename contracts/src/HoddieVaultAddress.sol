@@ -38,7 +38,10 @@ library HoddieVaultAddress {
         );
         bytes32 hash = keccak256(
             abi.encodePacked(
-                bytes1(0xff), factory, salt(asset, owner, operator, limits, strategies), initCodeHash
+                bytes1(0xff),
+                factory,
+                salt(asset, owner, operator, limits, strategies),
+                initCodeHash
             )
         );
         return address(uint160(uint256(hash)));

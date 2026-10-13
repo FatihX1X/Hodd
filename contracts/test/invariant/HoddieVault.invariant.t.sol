@@ -7,13 +7,14 @@ import {MockUSDC} from "../mocks/MockUSDC.sol";
 import {MockStrategy} from "../mocks/MockStrategy.sol";
 import {HostileStrategy} from "../mocks/HostileStrategy.sol";
 import {MockUSYC, MockTeller} from "../mocks/MockTeller.sol";
+import {HoddUSYCVault} from "../../src/HoddUSYCVault.sol";
 import {VaultHandler} from "./VaultHandler.sol";
 
 /// @dev Stateful fuzzing: a handler lets the operator, the owner and a stranger call random
 ///      functions with random arguments against OZ ERC-4626 mocks (one of which can be set to
-///      Morpho-V2 behaviour, capped, blocked or share-locked), a hostile strategy and a
-///      permissioned USYC-style teller whose allowlist, price, fees, limits and liquidity change
-///      at random.
+///      Morpho-V2 behaviour, capped, blocked or share-locked), a hostile strategy and Hodd's USYC
+///      pool (the real HoddUSYCVault over a permissioned mock Teller) whose Circle allowlist,
+///      price, fees, limits and liquidity change at random.
 contract HoddieVaultInvariantTest is Test {
     VaultHandler internal handler;
     HoddieVault internal vault;
@@ -24,6 +25,7 @@ contract HoddieVaultInvariantTest is Test {
     HostileStrategy internal hostile;
     MockUSYC internal usyc;
     MockTeller internal teller;
+    HoddUSYCVault internal usycPool;
 
     function setUp() public {
         handler = new VaultHandler();
@@ -35,9 +37,10 @@ contract HoddieVaultInvariantTest is Test {
         hostile = handler.hostile();
         usyc = handler.usyc();
         teller = handler.teller();
+        usycPool = handler.usycPool();
 
         targetContract(address(handler));
-        bytes4[] memory selectors = new bytes4[](32);
+        bytes4[] memory selectors = new bytes4[](33);
         selectors[0] = VaultHandler.opDeposit.selector;
         selectors[1] = VaultHandler.opWithdraw.selector;
         selectors[2] = VaultHandler.opRedeem.selector;
@@ -70,12 +73,13 @@ contract HoddieVaultInvariantTest is Test {
         selectors[29] = VaultHandler.moveTreasury.selector;
         selectors[30] = VaultHandler.pauseAuthority.selector;
         selectors[31] = VaultHandler.opDeposit.selector; // deposits get twice the weight
+        selectors[32] = VaultHandler.opRedeemToOwner.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
-    /// (1) USDC, strategy shares and USYC only ever leave the vault to the owner, an approved
-    ///     recipient (USDC only) or an allowlisted strategy. Nobody else ever holds anything, and
-    ///     nothing is created or lost on the way.
+    /// (1) USDC and strategy shares only ever leave the vault to the owner, an approved
+    ///     recipient (USDC only) or an allowlisted strategy. Nobody else ever holds anything,
+    ///     USYC only ever sits in the pool, and nothing is created or lost on the way.
     function invariant_1_fundsOnlyReachOwnerApprovedRecipientsOrStrategies() public view {
         address operator = handler.operator();
         address stranger = handler.stranger();
@@ -95,6 +99,9 @@ contract HoddieVaultInvariantTest is Test {
             assertEq(good1.balanceOf(nobody[i]), 0, "shares reached an unauthorised address");
             assertEq(good2.balanceOf(nobody[i]), 0, "shares reached an unauthorised address");
             assertEq(usyc.balanceOf(nobody[i]), 0, "USYC reached an unauthorised address");
+            assertEq(
+                usycPool.balanceOf(nobody[i]), 0, "pool shares reached an unauthorised address"
+            );
         }
         assertEq(usdc.balanceOf(address(hostile)), 0, "USDC reached the hostile strategy");
         assertEq(usdc.balanceOf(address(teller)), 0, "the teller keeps no USDC");
@@ -103,10 +110,13 @@ contract HoddieVaultInvariantTest is Test {
         uint256 poolTotal;
         for (uint256 i; i < pool.length; ++i) {
             uint256 bal = usdc.balanceOf(pool[i]);
-            if (bal != 0) assertTrue(handler.everApproved(pool[i]), "paid a never-approved address");
+            if (bal != 0) {
+                assertTrue(handler.everApproved(pool[i]), "paid a never-approved address");
+            }
             assertEq(good1.balanceOf(pool[i]), 0);
             assertEq(good2.balanceOf(pool[i]), 0);
             assertEq(usyc.balanceOf(pool[i]), 0);
+            assertEq(usycPool.balanceOf(pool[i]), 0);
             poolTotal += bal;
         }
 
@@ -117,15 +127,15 @@ contract HoddieVaultInvariantTest is Test {
         assertEq(
             good2.totalSupply(), good2.balanceOf(address(vault)) + good2.balanceOf(handler.owner())
         );
-        assertEq(
-            usyc.totalSupply(), usyc.balanceOf(address(vault)) + usyc.balanceOf(handler.owner())
-        );
+        // the vault never holds USYC itself: it all sits in the pool, whose shares only the vault holds
+        assertEq(usyc.totalSupply(), usyc.balanceOf(address(usycPool)), "USYC outside the pool");
+        assertEq(usycPool.totalSupply(), usycPool.balanceOf(address(vault)), "pool shares moved");
 
         // conservation: every USDC in existence sits with an authorised holder
         uint256 authorised = usdc.balanceOf(address(vault)) + usdc.balanceOf(handler.owner())
             + poolTotal + usdc.balanceOf(address(good1)) + usdc.balanceOf(address(good2))
             + usdc.balanceOf(handler.donor()) + usdc.balanceOf(handler.treasury())
-            + usdc.balanceOf(handler.feeRecipient());
+            + usdc.balanceOf(handler.feeRecipient()) + usdc.balanceOf(address(usycPool));
         assertEq(usdc.totalSupply(), authorised, "USDC is missing or sits somewhere unexpected");
         assertEq(usdc.totalSupply(), handler.minted());
 
@@ -135,6 +145,7 @@ contract HoddieVaultInvariantTest is Test {
         assertEq(usdc.allowance(address(vault), address(never)), 0);
         assertEq(usdc.allowance(address(vault), address(hostile)), 0);
         assertEq(usdc.allowance(address(vault), address(teller)), 0);
+        assertEq(usdc.allowance(address(vault), address(usycPool)), 0);
         assertEq(address(vault).balance, 0);
     }
 
@@ -151,8 +162,9 @@ contract HoddieVaultInvariantTest is Test {
     }
 
     /// (3) `withdrawAll()` never reverts, leaves no USDC in the vault, and the owner receives all
-    ///     idle USDC plus everything redeemable (plus the rest as share tokens). A vault that is
-    ///     not allowlisted by the teller keeps the plain strategies and all USDC fully withdrawable.
+    ///     idle USDC plus everything redeemable (plus the rest as share tokens where they can be
+    ///     transferred). The USYC pool pays exactly its own preview for the shares it burns; while
+    ///     Circle does not permit the pool its shares stay put and everything else still leaves.
     function invariant_3_withdrawAllDeliversEverything() public view {
         assertFalse(handler.withdrawAllReverted(), "withdrawAll reverted");
         assertFalse(handler.withdrawAllViolation(), "withdrawAll postcondition violated");
@@ -174,5 +186,11 @@ contract HoddieVaultInvariantTest is Test {
     ///     the vault's real balances.
     function invariant_5_slippageBoundsAreHonoured() public view {
         assertFalse(handler.slippageViolation(), "a slippage bound was not honoured");
+    }
+
+    /// (6) `redeemToOwner` sends exactly the redeemed USDC to the owner and never touches the
+    ///     vault's idle USDC or the budgets.
+    function invariant_6_redeemToOwnerForwardsExactly() public view {
+        assertFalse(handler.redeemToOwnerViolation(), "redeemToOwner moved the wrong amount");
     }
 }

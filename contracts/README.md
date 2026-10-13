@@ -36,13 +36,13 @@ allowed:
 
 | Who | Can do |
 | --- | --- |
-| **Operator** (Hodd agent wallet) | `depositToStrategy` into an owner-allowlisted ERC-4626 strategy (limited); `withdrawFromStrategy` / `redeemFromStrategy` back **into the vault** (not limited, funds stay in custody); `transferToOwner` (not limited); `pay` an owner-approved recipient with a bill reference (limited). All of these stop while the vault is paused. |
+| **Operator** (Hodd agent wallet) | `depositToStrategy` into an owner-allowlisted ERC-4626 strategy (deposit budget); `withdrawFromStrategy` / `redeemFromStrategy` back **into the vault** (not limited, funds stay in custody); `redeemToOwner`: redeem and forward the USDC **straight to the owner** in the same transaction (not limited); `transferToOwner` (not limited); `pay` an owner-approved recipient, within that recipient's own cap, with a bill reference (payment budget). Every strategy call carries a slippage bound checked on the vault's real balances. All of these stop while the vault is paused. |
 | **Owner** (user wallet, EOA or ERC-1271 smart account) | Everything else, also when paused and also when there is no operator: `pause`/`unpause`, `setLimits`, `setOperator`/`revokeOperator`, `allowStrategy`/`disallowStrategy`, `addRecipient`/`removeRecipient`, `invalidateNonce`, **`withdrawAll`**, `exitStrategy`, `rescueToken`, and two-step ownership transfer (`Ownable2Step`). |
 | **Anyone** (Hodd's server pays the gas) | `addRecipientWithSig`: submit an owner-signed EIP-712 `AddRecipient` message. Nothing else. |
 
 What the operator can **never** do: choose a receiver other than the vault, the owner or an
 approved recipient; touch a strategy that is not allowlisted; exceed the per-transaction or
-per-UTC-day limit on deposits and payments; change any setting; or stop the owner from
+rolling-24-hour limit on deposits or on payments, or a recipient's cap; change any setting; or stop the owner from
 withdrawing. What the owner can **always** do, regardless of Hodd being up, down or hostile:
 `withdrawAll()`.
 
@@ -51,21 +51,26 @@ not be renounced (that would lock the funds), `renounceOwnership()` reverts.
 
 ### Limits
 
-`maxPerTx` and `dailyLimit` (USDC base units) apply to operator outflows of idle USDC:
-strategy deposits and payments share one budget. The window is the UTC day
-`block.timestamp / 1 days`; `spentInDay` is reset implicitly when the day changes (no carry-over,
-no rolling window). `setLimits` does not reset what was already spent today. `withdraw`, `redeem`
-and `transferToOwner` are not limited because the money stays with the owner or in the vault.
-Setting either limit to `0` freezes limited outflows.
+Two separate budgets (USDC base units): **strategy deposits** (`maxDepositPerTx`, `depositLimit24h`)
+and **payments** (`maxPaymentPerTx`, `paymentLimit24h`), plus a **per-recipient cap** set when the
+owner approves a recipient (`addRecipient(recipient, maxPerPayment)` or the signed variant). The
+24-hour limits are a **rolling window** in hourly buckets (`src/RollingWindow.sol`): a spend counts for
+at least 24 hours and less than 25, so no amount can be spent twice around midnight or any other
+boundary. `setLimits` does not reset what was already spent. Withdrawals, redemptions and
+`transferToOwner`/`redeemToOwner` are not limited because the money stays with the owner or in the
+vault. Setting a limit to `0` freezes that budget; the 24-hour limits must fit in `uint64`.
 
 ### `withdrawAll()` and Morpho Vault V2
 
-For every allowlisted strategy the vault holds shares of, it (1) tries to **redeem all shares with
-the owner as receiver**, (2) if that reverts, redeems `maxRedeem` shares, (3) sends whatever is
-left to the owner **as share tokens** so the owner can redeem later. Then all idle USDC goes to
-the owner. Every strategy interaction is a guarded low-level call that never copies more than 32
-bytes of return data: a strategy that reverts, returns garbage, has no code or returns a huge
-payload is skipped (`StrategyExitFailed`) and cannot block the others.
+For every allowlisted strategy the vault holds shares of, it (1) tries to **redeem all shares into
+the vault**, (2) if that reverts, redeems `maxRedeem` shares, and forwards exactly the USDC that
+arrived (measured by balance) to the owner in the same call, (3) sends whatever shares are left to
+the owner **as share tokens** where they can be transferred, so the owner can redeem later. Then all
+idle USDC goes to the owner. Redeeming into the vault (never to a foreign receiver) is what Hodd's
+USYC pool requires: it pays only the share holder and its shares can not be moved. Every strategy
+interaction is a guarded low-level call that never copies more than 32 bytes of return data: a
+strategy that reverts, returns garbage, has no code or returns a huge payload is skipped
+(`StrategyExitFailed`) and cannot block the others.
 
 Step (1) comes first on purpose: the allowlisted Morpho vault is a **Vault V2**, and V2 returns
 `0` from `maxDeposit/maxMint/maxWithdraw/maxRedeem`. A `maxRedeem`-first implementation would
@@ -138,9 +143,9 @@ not validate signatures.
 
 ### `HoddieVaultFactory`
 
-`createVault(owner, operator, maxPerTx, dailyLimit, strategies)` deploys
-`new HoddieVault{salt}(...)` with `salt = keccak256(abi.encode(owner, operator, maxPerTx,
-dailyLimit, strategies))`. The CREATE2 address commits to the factory, the asset and every
+`createVault(owner, operator, limits, strategies)` deploys
+`new HoddieVault{salt}(...)` with `salt = keccak256(abi.encode(owner, operator, limits,
+strategies))` (see `HoddieVaultAddress`). The CREATE2 address commits to the factory, the asset and every
 constructor argument, so a front-runner can not occupy the address Hodd predicts with other
 parameters: other parameters give another address. Creation is permissionless, anyone can create
 the same vault for an owner (it is exactly the vault the owner asked for) and a second creation of
@@ -149,7 +154,7 @@ before it exists, `isVault(address)` tells whether the factory created it.
 
 **Never trust "created by the factory" alone.** Anyone can create a vault that names *you* as owner
 with a hostile operator or strategy. Before showing a vault to a user or asking for a deposit,
-read `owner()`, `operator()`, `maxPerTx()`, `dailyLimit()`, `strategies()` on-chain and compare
+read `owner()`, `operator()`, the four limits, `strategies()` on-chain and compare
 them with what the user agreed to. Index `VaultCreated` only for predicted addresses.
 
 ## Tests
@@ -168,17 +173,20 @@ forge test --match-contract Fork --fork-url https://rpc.testnet.arc.network     
 
 | Suite | File | What it covers |
 | --- | --- | --- |
-| Unit | `test/HoddieVault.t.sol`, `test/HoddieVaultFactory.t.sol` | every function, every permission failure (owner / operator / stranger), pause, limits incl. day rollover with `vm.warp`, events, native value, signatures (EOA, ERC-1271 mock, wrong signer, expired, replay, wrong vault/chain), ownership migration, reentrancy, hostile strategies |
+| Unit | `test/HoddieVault.t.sol`, `test/HoddieVaultFactory.t.sol`, `test/pool/HoddieVaultUsycPool.t.sol` | every function, every permission failure (owner / operator / stranger), pause, both budgets and the rolling window with `vm.warp`, recipient caps, slippage bounds, events, native value, signatures (EOA, ERC-1271 mock, wrong signer, expired, replay, wrong vault/chain, wrong cap), ownership migration, reentrancy, hostile strategies; with the real HoddUSYCVault: `redeemToOwner`, exits without the operator, a blocked pool, a partial exit under Circle's daily limit |
 | Fuzz | `test/HoddieVault.fuzz.t.sol` (1000 runs) | amounts, limits, timestamps vs a model, signatures, strangers |
-| Invariant | `test/invariant/` (500 runs x depth 100, 4 properties) | random operator/owner/stranger calls against OZ ERC-4626 mocks (normal, Morpho-V2-like, capped, blocked, share-locked) and a hostile strategy |
-| Fork | `test/fork/HoddieVault.fork.t.sol` | real Arc USDC + real Morpho Vault V2 |
+| Invariant | `test/invariant/` (6 properties) | random operator/owner/stranger calls against OZ ERC-4626 mocks (normal, Morpho-V2-like, capped, blocked, share-locked), a hostile strategy and the real HoddUSYCVault over the mock Teller (Circle allowlist, prices, fees, limits and liquidity changing at random) |
+| Fork | `test/fork/HoddieVault.fork.t.sol`, `test/pool/HoddUSYCVaultHoddie.fork.t.sol` | real Arc USDC + real Morpho Vault V2; a `HoddieVault` using the pool on the real Teller (`redeemToOwner`, `withdrawAll` without the operator, a pool removed from Circle's allowlist and restored) |
 | Script | `test/DeployFactory.t.sol` | the deploy script |
 
 Invariants: (1) USDC and shares only ever reach the owner, approved recipients or allowlisted
-strategies, and the supply is conserved; (2) operator outflow per UTC day never exceeds
-`dailyLimit`, no single outflow exceeds `maxPerTx`; (3) `withdrawAll` never reverts, leaves no USDC
-in the vault and delivers all idle USDC plus everything redeemable to the owner; (4) a stranger
-never changes state. The suites were checked with deliberate bugs (mutation checks): removing a
+strategies, USYC only sits in the pool, and the supply is conserved; (2) over any 24 hours
+deposits and payments each stay within their limit, no call exceeds its per-call cap or a
+recipient's cap, and the windows equal an independent model; (3) `withdrawAll` never reverts, leaves
+no USDC in the vault and delivers all idle USDC plus everything redeemable to the owner (the pool
+pays exactly its own preview); (4) a stranger never changes state and only valid owner signatures
+count; (5) every slippage bound holds on real balances; (6) `redeemToOwner` forwards exactly the
+redeemed USDC and never touches idle USDC or the budgets. The suites were checked with deliberate bugs (mutation checks): removing a
 limit check, an access check, the idle sweep, the day reset, or the guarded strategy call each
 makes an invariant fail.
 
@@ -334,7 +342,7 @@ These commands were prepared and syntax-checked locally but not run against a de
 
 1. `cast call $FACTORY "asset()(address)"` is `0x3600...0000`.
 2. `predictVault(...)` equals the address returned by `createVault(...)`.
-3. On the new vault: `owner()`, `operator()`, `maxPerTx()`, `dailyLimit()`, `strategies()` are exactly
+3. On the new vault: `owner()`, `operator()`, the four limits and `strategies()` are exactly
    what was agreed; `paused()` is false.
 4. Smoke test with a few cents of testnet USDC: ERC-20 `transfer` into the vault, operator
    `depositToStrategy`, `withdrawFromStrategy`, owner `withdrawAll`. Also test the signature path with
@@ -460,21 +468,16 @@ by the virtual shares (see above and `testFuzz_inflationAttackNeverPays`).
 
 ## Using it as a `HoddieVault` strategy
 
-`depositToStrategy(pool, assets)` works as is (`deposit(assets, vault)`), and so does the operator's
-`redeemFromStrategy(pool, shares)`, because it redeems to the vault itself (holder == receiver ==
-the `HoddieVault`). `withdrawFromStrategy` reverts (`NotSupported`).
-
-**Exit path.** The pool pays only the holder and its shares can not be moved, so a `HoddieVault` can
-only leave the pool by **redeeming to itself and then sweeping the idle USDC to its owner**. The clean
-Morpho-only `HoddieVault` (commit `fa2be29`) does not do that in `withdrawAll()` / `exitStrategy()`:
-it tries `redeem(shares, owner, vault)` (refused: receiver != holder) and then a share transfer
-(refused: non-transferable), so the pool shares stay in the `HoddieVault` (`StrategyExitFailed`) and
-only the operator can get them out (`redeemFromStrategy`, then the owner's `withdrawAll`). The fix for
-the final `HoddieVault`, shown to work end to end in
-`test/pool/HoddUSYCVaultHoddie.fork.t.sol::test_fork_redeemToSelfThenSweepIsAllTheExitPathNeeds`:
-when a strategy refuses a foreign receiver, `redeem(shares, address(this), address(this))`, measure
-the exact USDC delta and forward it to the owner in the same call. `redeem` returns precisely that
-delta, so the vault can verify it by its own balance.
+The final `HoddieVault` treats the pool like any ERC-4626 strategy and never holds USYC itself:
+`depositToStrategy(pool, assets, minShares)` (`deposit(assets, vault)`), `redeemFromStrategy` into the
+vault, and `redeemToOwner(pool, shares, minAssets)`, which redeems to the vault and forwards exactly the
+USDC that arrived to the owner in the same transaction. `withdrawFromStrategy` reverts
+(`NotSupported`). The owner's `withdrawAll` / `exitStrategy` redeem the pool shares to the vault and
+forward the USDC, without the operator and while paused. While Circle does not permit the pool (or
+USYC is paused) the pool shares stay in the `HoddieVault` (`StrategyExitFailed`) and everything else
+still leaves; once Circle restores the pool, `exitStrategy(pool)` takes them out. Only the pool needs
+Circle's allowlist: neither the `HoddieVault` nor its owner does. Mind the pool's per-deposit cap
+(`maxDepositPerTx`, 1,000 USDC by default) when sizing operator deposits.
 
 ## Tests
 

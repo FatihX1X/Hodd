@@ -80,9 +80,9 @@ contract HoddieVaultFuzzTest is Base {
         uint256 spend,
         uint256 cap
     ) public {
-        maxPerTx = bound(maxPerTx, 1, 5_000e6);
-        limit24h = bound(limit24h, 1, 5_000e6);
-        cap = bound(cap, 1, 5_000e6);
+        maxPerTx = bound(maxPerTx, 1, 5000e6);
+        limit24h = bound(limit24h, 1, 5000e6);
+        cap = bound(cap, 1, 5000e6);
         uint256 room = maxPerTx < limit24h ? maxPerTx : limit24h;
         spend = bound(spend, 1, room < cap ? room : cap);
         vm.startPrank(owner);
@@ -422,7 +422,7 @@ contract HoddieVaultFuzzTest is Base {
         _depositAs(address(strat), 100e6);
         bytes32 before = _stateHash();
 
-        bytes memory data = _privilegedCall(selectorSeed % 17, target, amount);
+        bytes memory data = _privilegedCall(selectorSeed % 18, target, amount);
         vm.prank(caller);
         (bool ok,) = address(vault).call(data);
         assertFalse(ok);
@@ -456,7 +456,7 @@ contract HoddieVaultFuzzTest is Base {
                                  HELPERS
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Calldata of one of the 17 operator/owner functions, to be sent by a stranger.
+    /// @dev Calldata of one of the 18 operator/owner functions, to be sent by a stranger.
     function _privilegedCall(uint256 i, address target, uint256 amount)
         internal
         view
@@ -480,11 +480,12 @@ contract HoddieVaultFuzzTest is Base {
         if (i == 13) return abi.encodeCall(vault.setRecipientCap, (target, amount));
         if (i == 14) return abi.encodeCall(vault.withdrawAll, ());
         if (i == 15) return abi.encodeCall(vault.rescueToken, (IERC20(address(usdc)), amount));
+        if (i == 16) return abi.encodeCall(vault.redeemToOwner, (target, amount, 1));
         return abi.encodeCall(vault.transferOwnership, (target));
     }
 
     function _stateHash() internal view returns (bytes32) {
-        return keccak256(
+        bytes32 settings = keccak256(
             abi.encode(
                 vault.owner(),
                 vault.pendingOwner(),
@@ -492,7 +493,12 @@ contract HoddieVaultFuzzTest is Base {
                 vault.maxDepositPerTx(),
                 vault.depositLimit24h(),
                 vault.maxPaymentPerTx(),
-                vault.paymentLimit24h(),
+                vault.paymentLimit24h()
+            )
+        );
+        return keccak256(
+            abi.encode(
+                settings,
                 vault.depositSpentLast24h(),
                 vault.paymentSpentLast24h(),
                 vault.paused(),

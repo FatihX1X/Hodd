@@ -55,7 +55,8 @@ contract PredictAddresses is Script {
         address[] memory strategies
     ) public view returns (address factory, address vault) {
         factory = vm.computeCreateAddress(deployer, nonce);
-        vault = HoddieVaultAddress.predict(factory, IERC20(asset), owner, operator, limits, strategies);
+        vault =
+            HoddieVaultAddress.predict(factory, IERC20(asset), owner, operator, limits, strategies);
 
         console.log("deployer", deployer);
         console.log("factory nonce", nonce);

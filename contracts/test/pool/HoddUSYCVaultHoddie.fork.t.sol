@@ -7,16 +7,14 @@ import {HoddieVaultFactory} from "../../src/HoddieVaultFactory.sol";
 import {HoddUSYCVault} from "../../src/HoddUSYCVault.sol";
 import {PoolForkBase} from "./PoolForkBase.sol";
 
-/// @notice The CLEAN, Morpho-only HoddieVault (commit fa2be29) using the pooled HoddUSYCVault as an
-///         ordinary ERC-4626 strategy, on the real Arc Testnet Teller. Neither the HoddieVault nor
-///         its owner is allowlisted by Circle: only the pool is.
+/// @notice A user's HoddieVault using Hodd's pooled HoddUSYCVault as an ordinary ERC-4626
+///         strategy next to Morpho, on the real Arc Testnet Teller. Neither the HoddieVault nor
+///         its owner is allowlisted by Circle: only the pool is. The HoddieVault never holds USYC.
 ///
-///         What this documents: the pool pays only the share holder and its shares can not be
-///         transferred, so the HoddieVault can only exit it by redeeming to ITSELF. The operator
-///         functions already do that (`redeemFromStrategy` redeems to the vault), but
-///         `withdrawAll`/`exitStrategy` of fa2be29 try `redeem(shares, owner, vault)` and then a
-///         share transfer, both of which the pool refuses: the pool shares stay in the HoddieVault
-///         and the owner can not get them out without the operator. See the last tests.
+///         The pool pays only the share holder and its shares can not be transferred, so the
+///         HoddieVault always redeems to itself and forwards the USDC that arrived: the operator's
+///         `redeemToOwner` and the owner's `withdrawAll` / `exitStrategy` do it in one transaction,
+///         without the operator in the owner's case.
 contract HoddUSYCVaultHoddieForkTest is PoolForkBase {
     HoddieVaultFactory internal factory;
     HoddieVault internal hv;
@@ -34,8 +32,18 @@ contract HoddUSYCVaultHoddieForkTest is PoolForkBase {
         address[] memory strategies = new address[](2);
         strategies[0] = address(pool);
         strategies[1] = MORPHO;
-        hv = HoddieVault(factory.createVault(owner, operator, 1000e6, 2500e6, strategies));
+        hv = HoddieVault(
+            factory.createVault(
+                owner, operator, HoddieVault.Limits(1000e6, 2500e6, 1000e6, 2500e6), strategies
+            )
+        );
         _fund(address(hv), FUNDS);
+    }
+
+    function _depositToPool(uint256 assets) internal returns (uint256 shares) {
+        uint256 minShares = pool.previewDeposit(assets) * 995 / 1000;
+        vm.prank(operator);
+        shares = hv.depositToStrategy(address(pool), assets, minShares);
     }
 
     function test_fork_hoddieVaultAcceptsThePoolAsAStrategy() public view {
@@ -50,109 +58,128 @@ contract HoddUSYCVaultHoddieForkTest is PoolForkBase {
     }
 
     function test_fork_operatorDepositsIntoThePoolAndRedeemsBackIntoTheVault() public {
-        vm.prank(operator);
-        uint256 shares = hv.depositToStrategy(address(pool), 500e6);
+        uint256 shares = _depositToPool(500e6);
 
         assertEq(pool.balanceOf(address(hv)), shares, "the HoddieVault holds the pool shares");
         assertEq(_usdc(address(hv)), FUNDS - 500e6);
         assertEq(_usyc(address(hv)), 0, "the HoddieVault never holds USYC");
         assertGt(_usyc(address(pool)), 0);
         assertEq(IERC20(USDC).allowance(address(hv), address(pool)), 0, "allowance reset");
+        assertEq(hv.depositSpentLast24h(), 500e6, "counted against the deposit budget");
 
-        // redeem half: the HoddieVault is the holder AND the receiver, which the pool allows
+        // redeem half into the vault: the HoddieVault is the holder AND the receiver
         uint256 before = _usdc(address(hv));
+        uint256 expected = pool.previewRedeem(shares / 2);
         vm.prank(operator);
-        uint256 assets = hv.redeemFromStrategy(address(pool), shares / 2);
+        uint256 assets = hv.redeemFromStrategy(address(pool), shares / 2, expected);
+        assertEq(assets, expected);
         assertEq(_usdc(address(hv)) - before, assets, "the returned figure is the exact USDC delta");
         assertApproxEqAbs(assets, 250e6, 0.5e6);
         assertEq(pool.balanceOf(address(hv)), shares - shares / 2);
     }
 
-    function test_fork_exactAssetWithdrawalsAreNotSupportedByThePool() public {
+    function test_fork_redeemToOwnerForwardsThePoolsUsdcInTheSameTransaction() public {
+        uint256 shares = _depositToPool(800e6);
+        uint256 idle = _usdc(address(hv));
+        uint256 ownerBefore = _usdc(owner);
+        uint256 expected = pool.previewRedeem(shares);
+
         vm.prank(operator);
-        hv.depositToStrategy(address(pool), 500e6);
-        vm.prank(operator);
-        vm.expectRevert(HoddUSYCVault.NotSupported.selector);
-        hv.withdrawFromStrategy(address(pool), 10e6);
+        uint256 assets = hv.redeemToOwner(address(pool), shares, expected * 995 / 1000);
+
+        assertEq(assets, expected, "the pool's own preview");
+        assertEq(_usdc(owner) - ownerBefore, assets, "straight to the owner");
+        assertEq(_usdc(address(hv)), idle, "idle USDC untouched");
+        assertEq(pool.balanceOf(address(hv)), 0);
+        assertApproxEqAbs(assets, 800e6, 0.5e6);
+        assertEq(hv.paymentSpentLast24h(), 0, "not a payment");
     }
 
-    /// @dev THE FINDING: fa2be29's withdrawAll can not pull the pool shares out.
-    function test_fork_fa2be29_withdrawAllLeavesThePoolSharesBehind() public {
-        vm.startPrank(operator);
-        uint256 poolShares = hv.depositToStrategy(address(pool), 600e6);
-        hv.depositToStrategy(MORPHO, 700e6);
-        vm.stopPrank();
+    function test_fork_redeemToOwnerHonoursTheMinimum() public {
+        uint256 shares = _depositToPool(500e6);
+        uint256 expected = pool.previewRedeem(shares);
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.InsufficientAssets.selector, expected, expected + 1)
+        );
+        hv.redeemToOwner(address(pool), shares, expected + 1);
+    }
+
+    function test_fork_exactAssetWithdrawalsAreNotSupportedByThePool() public {
+        _depositToPool(500e6);
+        vm.prank(operator);
+        vm.expectRevert(HoddUSYCVault.NotSupported.selector);
+        hv.withdrawFromStrategy(address(pool), 10e6, type(uint256).max);
+    }
+
+    /// @dev The owner gets everything back without the operator: pool shares are redeemed to the
+    ///      vault and the USDC forwarded, Morpho is redeemed, the idle USDC swept.
+    function test_fork_withdrawAllPullsThePoolOutWithoutTheOperator() public {
+        uint256 poolShares = _depositToPool(600e6);
+        vm.prank(operator);
+        hv.depositToStrategy(MORPHO, 700e6, 1);
+        uint256 fromPool = pool.previewRedeem(poolShares);
+
+        vm.prank(owner);
+        hv.revokeOperator();
+        vm.prank(owner);
+        hv.pause();
+
+        uint256 ownerBefore = _usdc(owner);
+        vm.expectEmit(true, false, false, true, address(hv));
+        emit HoddieVault.StrategyExited(address(pool), poolShares, fromPool, 0);
+        vm.prank(owner);
+        hv.withdrawAll();
+
+        assertApproxEqAbs(_usdc(owner) - ownerBefore, FUNDS, 0.5e6, "everything reaches the owner");
+        assertEq(pool.balanceOf(address(hv)), 0);
+        assertEq(IERC20(MORPHO).balanceOf(address(hv)), 0);
+        assertEq(_usdc(address(hv)), 0);
+        assertEq(_usyc(address(hv)), 0);
+    }
+
+    function test_fork_exitStrategyForwardsOnlyThePoolsUsdc() public {
+        uint256 poolShares = _depositToPool(600e6);
+        uint256 idle = _usdc(address(hv));
+        uint256 fromPool = pool.previewRedeem(poolShares);
+        uint256 ownerBefore = _usdc(owner);
+
+        vm.prank(owner);
+        hv.exitStrategy(address(pool));
+
+        assertEq(_usdc(owner) - ownerBefore, fromPool);
+        assertEq(_usdc(address(hv)), idle, "idle USDC stays");
+        assertEq(pool.balanceOf(address(hv)), 0);
+    }
+
+    /// @dev While Circle does not permit the pool the shares stay put, but nothing else is blocked.
+    function test_fork_withdrawAllStillReturnsEverythingElseWhenThePoolIsBlocked() public {
+        uint256 poolShares = _depositToPool(600e6);
+        _allowlist(address(pool), false);
 
         uint256 ownerBefore = _usdc(owner);
         vm.expectEmit(true, false, false, true, address(hv));
         emit HoddieVault.StrategyExitFailed(address(pool), poolShares);
         vm.prank(owner);
         hv.withdrawAll();
+        assertEq(_usdc(owner) - ownerBefore, FUNDS - 600e6);
+        assertEq(pool.balanceOf(address(hv)), poolShares, "kept for later");
 
-        // the idle USDC and the Morpho position arrive ...
-        assertApproxEqAbs(_usdc(owner) - ownerBefore, FUNDS - 600e6, 3);
-        assertEq(_usdc(address(hv)), 0);
-        // ... the pool shares do not: redeem(shares, owner, vault) is refused (receiver != holder)
-        // and the pool shares are not transferable, so they stay in the HoddieVault
-        assertEq(pool.balanceOf(address(hv)), poolShares, "stuck without the operator");
-        assertEq(pool.balanceOf(owner), 0);
-
+        // Circle restores the pool: the owner exits the rest
+        _allowlist(address(pool), true);
         vm.prank(owner);
-        hv.exitStrategy(address(pool)); // same story
-        assertEq(pool.balanceOf(address(hv)), poolShares);
-    }
-
-    /// @dev With the operator alive the owner is not stuck: redeem to the vault, then sweep.
-    function test_fork_operatorAssistedExitWorksWithTheCleanVault() public {
-        vm.startPrank(operator);
-        uint256 poolShares = hv.depositToStrategy(address(pool), 600e6);
-        vm.stopPrank();
-
-        vm.prank(operator);
-        uint256 assets = hv.redeemFromStrategy(address(pool), poolShares);
-        assertGt(assets, 0);
-
-        uint256 ownerBefore = _usdc(owner);
-        vm.prank(owner);
-        hv.withdrawAll();
-        assertApproxEqAbs(_usdc(owner) - ownerBefore, FUNDS, 0.5e6, "everything reaches the owner");
+        hv.exitStrategy(address(pool));
         assertEq(pool.balanceOf(address(hv)), 0);
-    }
-
-    /// @dev WHAT THE EXIT PATH NEEDS: "redeem to the vault itself, then sweep the idle USDC". The
-    ///      pool supports exactly that (holder == receiver == the HoddieVault), without the
-    ///      operator and without anybody being allowlisted besides the pool. This test plays the
-    ///      fallback by hand, as the HoddieVault would execute it.
-    function test_fork_redeemToSelfThenSweepIsAllTheExitPathNeeds() public {
-        vm.startPrank(operator);
-        uint256 poolShares = hv.depositToStrategy(address(pool), 600e6);
-        hv.depositToStrategy(MORPHO, 700e6);
-        vm.stopPrank();
-
-        // 1) the fallback: the vault redeems its own shares to itself (what an owner-only
-        //    `withdrawAll` would do after the owner-receiver attempt was refused) ...
-        uint256 idleBefore = _usdc(address(hv));
-        vm.prank(address(hv));
-        uint256 got = pool.redeem(poolShares, address(hv), address(hv));
-        assertEq(_usdc(address(hv)) - idleBefore, got, "exact delta, atomic");
-
-        // 2) ... and the normal exit then sweeps all idle USDC and the Morpho position
-        uint256 ownerBefore = _usdc(owner);
-        vm.prank(owner);
-        hv.withdrawAll();
         assertApproxEqAbs(_usdc(owner) - ownerBefore, FUNDS, 0.5e6);
-        assertEq(pool.balanceOf(address(hv)), 0);
-        assertEq(_usdc(address(hv)), 0);
     }
 
-    /// @dev The pool's views the HoddieVault (or its operator) can use to size a redemption.
+    /// @dev The pool's views the operator uses to size a redemption.
     function test_fork_poolViewsGuideTheOperator() public {
-        vm.prank(operator);
-        uint256 shares = hv.depositToStrategy(address(pool), 800e6);
+        uint256 shares = _depositToPool(800e6);
         assertEq(pool.maxRedeem(address(hv)), shares);
         uint256 expected = pool.previewRedeem(shares);
         vm.prank(operator);
-        uint256 assets = hv.redeemFromStrategy(address(pool), shares);
+        uint256 assets = hv.redeemFromStrategy(address(pool), shares, expected);
         assertEq(assets, expected);
     }
 }

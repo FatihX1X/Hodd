@@ -8,7 +8,7 @@ import {HoddieVault} from "../../src/HoddieVault.sol";
 import {ForkBase} from "./ForkBase.sol";
 
 /// @notice The vault against the REAL Arc Testnet USDC and the REAL allowlisted Morpho Vault V2
-///         (the Teller has its own suite in `HoddieVaultTeller.fork.t.sol`). See {ForkBase}.
+///         (the USYC pool has its own suite in `test/pool/HoddUSYCVaultHoddie.fork.t.sol`). See {ForkBase}.
 contract HoddieVaultForkTest is ForkBase {
     HoddieVault internal vault;
     address internal owner;
@@ -45,7 +45,6 @@ contract HoddieVaultForkTest is ForkBase {
         assertEq(IERC4626(MORPHO).maxDeposit(address(vault)), 0);
         assertEq(_usdc(address(vault)), FUNDS);
         // Morpho has no separate share token, so the vault's position is its own share balance
-        assertEq(vault.shareTokenOf(MORPHO), MORPHO);
     }
 
     function test_fork_factoryAndVaultConfiguration() public view {
@@ -125,7 +124,9 @@ contract HoddieVaultForkTest is ForkBase {
 
         // not yet approved
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.RecipientNotApproved.selector, recipient));
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.RecipientNotApproved.selector, recipient)
+        );
         vault.pay(recipient, 100e6, REF);
 
         vm.prank(stranger); // Hodd's server pays the gas
@@ -143,7 +144,9 @@ contract HoddieVaultForkTest is ForkBase {
 
         // above the recipient's signed cap
         vm.prank(operator);
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.ExceedsRecipientCap.selector, 151e6, 150e6));
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.ExceedsRecipientCap.selector, 151e6, 150e6)
+        );
         vault.pay(recipient, 151e6, REF);
 
         // replay
@@ -201,7 +204,7 @@ contract HoddieVaultForkTest is ForkBase {
     /// owner USDC (not share tokens), with the operator revoked and the vault paused.
     function test_fork_withdrawAllReturnsUsdcFromRealMorphoVault() public {
         vm.startPrank(operator);
-        vault.depositToStrategy(MORPHO, 1_000e6, 1);
+        vault.depositToStrategy(MORPHO, 1000e6, 1);
         vault.depositToStrategy(MORPHO, 800e6, 1);
         vm.stopPrank();
         uint256 shares = _morphoShares(address(vault));

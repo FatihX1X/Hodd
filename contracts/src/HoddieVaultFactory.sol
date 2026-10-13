@@ -14,8 +14,7 @@ import {HoddieVaultAddress} from "./HoddieVaultAddress.sol";
 ///      produce a different address. Because anyone can create vaults for any `owner`, clients
 ///      must never treat "created by the factory" as trusted. They must read the vault's
 ///      `owner`, `operator`, limits and strategies and compare them with what the user agreed to
-///      before the user sends funds. The address is also known before deployment, which matters
-///      for permissioned strategies (Circle's USYC): the vault address can be allowlisted first.
+///      before the user sends funds. The address is also known before deployment.
 contract HoddieVaultFactory {
     /// @notice The ERC-20 every vault of this factory holds (USDC).
     IERC20 public immutable asset;
@@ -39,7 +38,7 @@ contract HoddieVaultFactory {
     /// @param owner The user's wallet (EOA or ERC-1271 smart account).
     /// @param operator Hodd's agent wallet, or `address(0)` for none.
     /// @param limits Deposit and payment limits, see {HoddieVault.Limits}.
-    /// @param strategies Initial strategy allowlist (ERC-4626 vaults or tellers over `asset`).
+    /// @param strategies Initial strategy allowlist (ERC-4626 vaults over `asset`).
     /// @return vault The vault address (equal to {predictVault} for the same parameters).
     function createVault(
         address owner,
@@ -47,8 +46,9 @@ contract HoddieVaultFactory {
         HoddieVault.Limits calldata limits,
         address[] calldata strategies
     ) external returns (address vault) {
-        address predicted =
-            HoddieVaultAddress.predict(address(this), asset, owner, operator, limits, strategies);
+        address predicted = HoddieVaultAddress.predict(
+            address(this), asset, owner, operator, limits, strategies
+        );
         if (predicted.code.length != 0) revert VaultAlreadyDeployed(predicted);
 
         bytes32 salt = HoddieVaultAddress.salt(asset, owner, operator, limits, strategies);

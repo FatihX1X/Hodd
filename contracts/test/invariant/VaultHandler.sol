@@ -10,12 +10,16 @@ import {MockUSDC} from "../mocks/MockUSDC.sol";
 import {MockStrategy} from "../mocks/MockStrategy.sol";
 import {HostileStrategy} from "../mocks/HostileStrategy.sol";
 import {MockRolesAuthority, MockUSYC, MockTeller} from "../mocks/MockTeller.sol";
+import {HoddUSYCVault} from "../../src/HoddUSYCVault.sol";
+import {ITeller} from "../../src/interfaces/ITeller.sol";
+import {IRolesAuthority} from "../../src/interfaces/IRolesAuthority.sol";
 
 /// @dev Lets the operator, the owner and a stranger call random vault functions with random
 ///      arguments, and records every property violation in a ghost flag that the invariant
 ///      contract asserts to be false. Strategies: two OZ ERC-4626 mocks that can behave like
-///      Morpho Vault V2 / capped / blocked / share-locked, a hostile one, and a permissioned
-///      teller (USYC) whose allowlist the handler flips at random.
+///      Morpho Vault V2 / capped / blocked / share-locked, a hostile one, and Hodd's USYC pool
+///      (HoddUSYCVault over a permissioned mock Teller) whose Circle allowlist, prices, fees,
+///      limits and liquidity change at random. Only the pool is ever allowlisted by Circle.
 contract VaultHandler is CommonBase, StdCheats, StdUtils {
     uint256 internal constant OWNER_PK = 0xA11CE;
     uint256 internal constant STRANGER_PK = 0xBAD;
@@ -31,6 +35,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     MockRolesAuthority public auth;
     MockUSYC public usyc;
     MockTeller public teller;
+    HoddUSYCVault public usycPool;
     address public treasury;
     address public feeRecipient;
 
@@ -64,6 +69,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     bool public badSignatureAccepted;
     bool public goodSignatureRejected;
     bool public paidUnapproved;
+    bool public redeemToOwnerViolation; // redeemToOwner moved idle USDC or sent the wrong amount
 
     // call counters (to see that the campaign actually exercised the paths)
     uint256 public okDeposits;
@@ -71,6 +77,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     uint256 public okWithdrawAlls;
     uint256 public okStrangerRejects;
     uint256 public okSignatures;
+    uint256 public okRedeemsToOwner;
 
     constructor() {
         vm.warp(START);
@@ -90,6 +97,16 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         usyc = new MockUSYC(auth);
         teller = new MockTeller(IERC20(address(usdc)), usyc, auth, treasury, feeRecipient);
         usyc.setMinter(address(teller), true);
+        address poolAdmin = makeAddr("poolAdmin");
+        usycPool = new HoddUSYCVault(
+            IERC20(address(usdc)),
+            ITeller(address(teller)),
+            IERC20(address(usyc)),
+            IRolesAuthority(address(auth)),
+            poolAdmin
+        );
+        vm.prank(poolAdmin);
+        usycPool.setDepositCaps(1_000_000e6, 100_000_000e6);
 
         for (uint256 i; i < 4; ++i) {
             pool.push(makeAddr(string.concat("recipient", vm.toString(i))));
@@ -101,7 +118,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         list[0] = address(hostile);
         list[1] = address(good1);
         list[2] = address(good2);
-        list[3] = address(teller);
+        list[3] = address(usycPool);
         vault = new HoddieVault(
             IERC20(address(usdc)),
             owner,
@@ -112,7 +129,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         everAllowed[address(hostile)] = true;
         everAllowed[address(good1)] = true;
         everAllowed[address(good2)] = true;
-        everAllowed[address(teller)] = true;
+        everAllowed[address(usycPool)] = true;
 
         _mint(address(vault), 50_000e6);
         _mint(donor, 1_000_000e6);
@@ -124,9 +141,8 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         vm.prank(treasury);
         usdc.approve(address(teller), type(uint256).max);
 
-        // Circle has allowlisted the vault and the owner
-        auth.setUserRole(address(vault), 0, true);
-        auth.setUserRole(owner, 0, true);
+        // Circle allowlists the pool only: neither the vault nor the owner needs it
+        auth.setUserRole(address(usycPool), 0, true);
 
         // A realistic starting point: two approved recipients and money already invested, so
         // that payments, withdrawals and withdrawAll have something to work on from call one.
@@ -139,7 +155,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         vm.startPrank(operator);
         vault.depositToStrategy(address(good1), 900e6, 1);
         vault.depositToStrategy(address(good2), 600e6, 1);
-        vault.depositToStrategy(address(teller), 400e6, 1);
+        vault.depositToStrategy(address(usycPool), 400e6, 1);
         vm.stopPrank();
         _logDeposit(900e6);
         _logDeposit(600e6);
@@ -208,7 +224,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         amount = bound(amount, 0, 800e6);
         uint256 expected = _previewDeposit(s, amount);
         uint256 minShares = _tightness(expected, boundSeed, true);
-        IERC20 shareToken = IERC20(vault.shareTokenOf(s));
+        IERC20 shareToken = IERC20(s);
         uint256 sharesBefore = shareToken.balanceOf(address(vault));
 
         vm.prank(operator);
@@ -227,8 +243,9 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         address s = _strategy(stratSeed);
         amount = bound(amount, 0, 800e6);
         uint256 expected = _previewWithdraw(s, amount);
-        uint256 maxShares = boundSeed % 3 == 0 ? type(uint256).max : _tightness(expected, boundSeed, false);
-        IERC20 shareToken = IERC20(vault.shareTokenOf(s));
+        uint256 maxShares =
+            boundSeed % 3 == 0 ? type(uint256).max : _tightness(expected, boundSeed, false);
+        IERC20 shareToken = IERC20(s);
         uint256 sharesBefore = shareToken.balanceOf(address(vault));
         uint256 usdcBefore = usdc.balanceOf(address(vault));
         uint256 depBefore = vault.depositSpentLast24h();
@@ -252,7 +269,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     function opRedeem(uint256 stratSeed, uint256 shares, uint256 boundSeed) external {
         address s = _strategy(stratSeed);
         // the hostile strategy reverts on balanceOf, so do not ask it
-        uint256 held = s == address(hostile) ? 100e6 : IERC20(vault.shareTokenOf(s)).balanceOf(address(vault));
+        uint256 held = s == address(hostile) ? 100e6 : IERC20(s).balanceOf(address(vault));
         shares = bound(shares, 0, held + 1);
         uint256 minAssets = _tightness(_previewRedeem(s, shares), boundSeed, true);
         uint256 usdcBefore = usdc.balanceOf(address(vault));
@@ -262,6 +279,30 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         vm.prank(operator);
         try vault.redeemFromStrategy(s, shares, minAssets) {
             if (usdc.balanceOf(address(vault)) < usdcBefore + minAssets) slippageViolation = true;
+            _checkBudgetUntouched(depBefore, payBefore);
+        } catch {
+            revert("vault call reverted");
+        }
+    }
+
+    /// @dev The USDC must go straight on to the owner: exactly what was redeemed, while the
+    ///      vault's idle USDC and both budgets stay as they were.
+    function opRedeemToOwner(uint256 stratSeed, uint256 shares, uint256 boundSeed) external {
+        address s = _strategy(stratSeed);
+        uint256 held = s == address(hostile) ? 100e6 : IERC20(s).balanceOf(address(vault));
+        shares = bound(shares, 0, held + 1);
+        uint256 minAssets = _tightness(_previewRedeem(s, shares), boundSeed, true);
+        uint256 idleBefore = usdc.balanceOf(address(vault));
+        uint256 ownerBefore = usdc.balanceOf(owner);
+        uint256 depBefore = vault.depositSpentLast24h();
+        uint256 payBefore = vault.paymentSpentLast24h();
+
+        vm.prank(operator);
+        try vault.redeemToOwner(s, shares, minAssets) returns (uint256 assets) {
+            okRedeemsToOwner++;
+            if (usdc.balanceOf(address(vault)) != idleBefore) redeemToOwnerViolation = true;
+            if (usdc.balanceOf(owner) != ownerBefore + assets) redeemToOwnerViolation = true;
+            if (assets < minAssets) slippageViolation = true;
             _checkBudgetUntouched(depBefore, payBefore);
         } catch {
             revert("vault call reverted");
@@ -316,7 +357,9 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
             limitViolation = true;
         }
         // ... and the contract's own window equals the independent hour-bucket model
-        if (vault.depositSpentLast24h() != bucketedDeposits(block.timestamp)) limitViolation = true;
+        if (vault.depositSpentLast24h() != bucketedDeposits(block.timestamp)) {
+            limitViolation = true;
+        }
         if (bucketedDeposits(block.timestamp) > vault.depositLimit24h()) limitViolation = true;
     }
 
@@ -327,13 +370,19 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         if (_trailing24h(payTs, payAmt, block.timestamp) > vault.paymentLimit24h()) {
             limitViolation = true;
         }
-        if (vault.paymentSpentLast24h() != bucketedPayments(block.timestamp)) limitViolation = true;
+        if (vault.paymentSpentLast24h() != bucketedPayments(block.timestamp)) {
+            limitViolation = true;
+        }
         if (bucketedPayments(block.timestamp) > vault.paymentLimit24h()) limitViolation = true;
     }
 
     /// @dev 0: no protection beyond the minimum (1); 1: exact expectation; 2: one unit too
     ///      demanding (for a minimum), or one unit too little (for a maximum).
-    function _tightness(uint256 expected, uint256 seed, bool isMinimum) internal pure returns (uint256) {
+    function _tightness(uint256 expected, uint256 seed, bool isMinimum)
+        internal
+        pure
+        returns (uint256)
+    {
         uint256 mode = seed % 3;
         if (isMinimum) {
             if (mode == 0 || expected == 0) return 1;
@@ -344,28 +393,19 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function _previewDeposit(address s, uint256 amount) internal view returns (uint256) {
-        if (s == address(teller)) {
-            (uint256 sh,,) = teller.previewDepositData(address(vault), amount);
-            return sh;
-        }
+        if (s == address(usycPool)) return usycPool.previewDeposit(amount);
         if (s == address(never) || s == address(hostile)) return 0;
         return MockStrategy(s).previewDeposit(amount);
     }
 
     function _previewWithdraw(address s, uint256 amount) internal view returns (uint256) {
-        if (s == address(teller)) {
-            (uint256 sh,,) = teller.previewWithdrawData(address(vault), amount);
-            return sh;
-        }
+        if (s == address(usycPool)) return 0; // `withdraw` is not supported: always reverts
         if (s == address(never) || s == address(hostile)) return 0;
         return MockStrategy(s).previewWithdraw(amount);
     }
 
     function _previewRedeem(address s, uint256 shares) internal view returns (uint256) {
-        if (s == address(teller)) {
-            (uint256 a,,) = teller.previewRedeemData(address(vault), shares);
-            return a;
-        }
+        if (s == address(usycPool)) return usycPool.previewRedeem(shares);
         if (s == address(never) || s == address(hostile)) return 0;
         return MockStrategy(s).previewRedeem(shares);
     }
@@ -434,7 +474,8 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function ownerAllowStrategy(uint256 seed) external {
-        address s = seed % 3 == 0 ? address(good1) : seed % 3 == 1 ? address(good2) : address(teller);
+        address s =
+            seed % 3 == 0 ? address(good1) : seed % 3 == 1 ? address(good2) : address(usycPool);
         vm.prank(owner);
         try vault.allowStrategy(s) {
             everAllowed[s] = true;
@@ -447,7 +488,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         // good strategies are removed less often than the hostile one, to keep the vault busy
         address s = seed % 8 == 0
             ? address(good1)
-            : seed % 8 == 1 ? address(good2) : seed % 8 == 2 ? address(teller) : address(hostile);
+            : seed % 8 == 1 ? address(good2) : seed % 8 == 2 ? address(usycPool) : address(hostile);
         vm.prank(owner);
         try vault.disallowStrategy(s) {}
         catch {
@@ -500,13 +541,14 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         uint256[2] ownerSharesBefore;
         uint256[2] expectVaultAfter;
         uint256[2] expectOwnerGain;
-        // teller
+        // the USYC pool (its shares can not be transferred, only redeemed by the vault itself)
         bool tListed;
         uint256 tShares;
-        uint256 ownerUsycBefore;
-        bool vaultOk;
-        bool ownerOk;
+        bool poolOk;
         bool fullOk;
+        uint256 fullPayout;
+        uint256 maxShares;
+        uint256 maxPayout;
     }
 
     /// @dev Acts on one call in three: it empties the vault, so it must not run all the time.
@@ -557,16 +599,22 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         }
 
         for (uint256 i; i < list.length; ++i) {
-            if (list[i] == address(teller)) s.tListed = true;
+            if (list[i] == address(usycPool)) s.tListed = true;
         }
-        s.tShares = usyc.balanceOf(address(vault));
-        s.ownerUsycBefore = usyc.balanceOf(owner);
-        s.vaultOk = !auth.paused() && auth.investor(address(vault));
-        s.ownerOk = auth.investor(owner);
+        s.tShares = usycPool.balanceOf(address(vault));
+        s.poolOk = !auth.paused() && auth.investor(address(usycPool));
         if (s.tListed && s.tShares != 0) {
-            (uint256 assets, uint256 fee,) = teller.previewRedeemData(address(vault), s.tShares);
-            uint256 remaining = teller.redemptionLimitRemaining(address(vault), teller.todayTimestamp());
-            s.fullOk = s.vaultOk && remaining >= assets && teller.totalAssets(address(vault)) >= assets + fee;
+            s.fullPayout = usycPool.previewRedeem(s.tShares);
+            (uint256 assets, uint256 fee,) =
+                teller.previewRedeemData(address(usycPool), usycPool.usycOf(s.tShares));
+            uint256 remaining =
+                teller.redemptionLimitRemaining(address(usycPool), teller.todayTimestamp());
+            s.fullOk = s.poolOk && assets != 0 && remaining >= assets
+                && teller.totalAssets(address(usycPool)) >= assets + fee;
+            s.maxShares = usycPool.maxRedeem(address(vault));
+            if (s.maxShares != 0 && s.maxShares < s.tShares) {
+                s.maxPayout = usycPool.previewRedeem(s.maxShares);
+            }
         }
     }
 
@@ -589,40 +637,31 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
             withdrawAllViolation = true;
             return;
         }
-        uint256 fromTeller = ownerGain - s.idle - s.expectedOutGood;
+        uint256 fromPool = ownerGain - s.idle - s.expectedOutGood;
 
-        uint256 vaultAfter = usyc.balanceOf(address(vault));
-        uint256 ownerAfter = usyc.balanceOf(owner);
+        // pool shares never leave the vault; the owner gets exactly what the pool paid for the
+        // shares it burned, forwarded in the same call
+        if (usycPool.balanceOf(owner) != 0) withdrawAllViolation = true;
+        uint256 vaultAfter = usycPool.balanceOf(address(vault));
         if (!s.tListed || s.tShares == 0) {
-            // nothing to do with the teller: nothing may have moved
-            if (fromTeller != 0 || vaultAfter != s.tShares || ownerAfter != s.ownerUsycBefore) {
-                withdrawAllViolation = true;
-            }
+            if (fromPool != 0 || vaultAfter != s.tShares) withdrawAllViolation = true;
             return;
         }
-        if (vaultAfter > s.tShares || ownerAfter < s.ownerUsycBefore) {
+        if (vaultAfter > s.tShares) {
             withdrawAllViolation = true;
             return;
         }
-        uint256 moved = ownerAfter - s.ownerUsycBefore;
-        if (vaultAfter + moved > s.tShares) {
-            withdrawAllViolation = true;
-            return;
+        uint256 burned = s.tShares - vaultAfter;
+        if (s.fullOk) {
+            // unconstrained: the whole position is redeemed
+            if (burned != s.tShares || fromPool != s.fullPayout) withdrawAllViolation = true;
+        } else if (burned == 0) {
+            if (fromPool != 0) withdrawAllViolation = true;
+        } else if (burned != s.maxShares || fromPool != s.maxPayout) {
+            withdrawAllViolation = true; // only the pool's own `maxRedeem` may be taken partly
         }
-        uint256 burned = s.tShares - vaultAfter - moved;
-
-        // what the owner got from the teller is exactly what the teller pays for those shares
-        (uint256 payout,,) = teller.previewRedeemData(address(vault), burned);
-        if (burned == 0 ? fromTeller != 0 : fromTeller != payout) withdrawAllViolation = true;
-
-        // frozen: if the vault is not allowlisted (or the authority is paused) nothing moves
-        if (!s.vaultOk && (burned != 0 || moved != 0 || fromTeller != 0)) withdrawAllViolation = true;
-        // both allowlisted: whatever was not redeemed is handed to the owner as USYC
-        if (s.vaultOk && s.ownerOk && vaultAfter != 0) withdrawAllViolation = true;
-        // the owner is never sent USYC it is not allowed to hold
-        if (s.vaultOk && !s.ownerOk && moved != 0) withdrawAllViolation = true;
-        // unconstrained: the whole position is redeemed
-        if (s.fullOk && burned != s.tShares) withdrawAllViolation = true;
+        // Circle does not permit the pool (or paused USYC): nothing moves
+        if (!s.poolOk && burned != 0) withdrawAllViolation = true;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -641,13 +680,15 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         uint256 submittedCap = tamper ? (cap == 0 ? 1 : cap - 1) : cap;
         uint256 deadline = stale ? block.timestamp - 1 : block.timestamp + 1 days;
 
-        bytes memory sig = _sign(ownerKey ? OWNER_PK : STRANGER_PK, r, cap, vault.nonces(owner), deadline);
+        bytes memory sig =
+            _sign(ownerKey ? OWNER_PK : STRANGER_PK, r, cap, vault.nonces(owner), deadline);
 
         bool expectValid = ownerKey && !tamper && !stale;
         vm.prank(stranger); // the stranger (Hodd's server) submits
         try vault.addRecipientWithSig(r, submittedCap, deadline, sig) {
-            if (!expectValid) badSignatureAccepted = true;
-            else {
+            if (!expectValid) {
+                badSignatureAccepted = true;
+            } else {
                 okSignatures++;
                 everApproved[r] = true;
                 if (vault.recipientCap(r) != cap) badSignatureAccepted = true;
@@ -693,7 +734,7 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
     {
         address target = allActors[targetSeed % allActors.length];
         if (targetSeed % 5 == 0) target = _strategy(targetSeed);
-        bytes memory data = _strangerCalldata(fnSeed % 23, target, amount, ref);
+        bytes memory data = _strangerCalldata(fnSeed % 24, target, amount, ref);
 
         bytes32 beforeHash = _stateHash(target);
         vm.prank(stranger);
@@ -730,8 +771,11 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         if (fn == 19) return abi.encodeCall(vault.transferOwnership, (stranger));
         if (fn == 20) return abi.encodeCall(vault.acceptOwnership, ());
         if (fn == 21) return abi.encodeCall(vault.renounceOwnership, ());
+        if (fn == 22) return abi.encodeCall(vault.redeemToOwner, (target, amount, 1));
         // an unsigned/garbage signature path: must fail
-        return abi.encodeCall(vault.addRecipientWithSig, (stranger, amount, block.timestamp + 1 days, hex"1234"));
+        return abi.encodeCall(
+            vault.addRecipientWithSig, (stranger, amount, block.timestamp + 1 days, hex"1234")
+        );
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -769,12 +813,11 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         (seed % 2 == 0 ? good1 : good2).donate(amount);
     }
 
-    // ---- the permissioned teller's world ----
+    // ---- the permissioned Teller's world behind the USYC pool ----
 
-    /// @dev Circle (de)allowlists the vault (rarely) and the owner (sometimes).
+    /// @dev Circle removes the pool from its allowlist (rarely) and restores it.
     function setTellerAccess(uint256 seed) external {
-        auth.setUserRole(address(vault), 0, seed % 8 != 0);
-        auth.setUserRole(owner, 0, (seed / 8) % 4 != 0);
+        auth.setUserRole(address(usycPool), 0, seed % 8 != 0);
     }
 
     function setTellerEconomics(uint256 priceSeed, uint256 feeSeed, bool nextPrice) external {
@@ -818,12 +861,12 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
         minted += amount;
     }
 
-    /// @dev 2/10 good1, 2/10 good2, 4/10 teller, 1/10 never-allowlisted, 1/10 hostile.
+    /// @dev 2/10 good1, 2/10 good2, 4/10 USYC pool, 1/10 never-allowlisted, 1/10 hostile.
     function _strategy(uint256 seed) internal view returns (address) {
         uint256 i = seed % 10;
         if (i < 2) return address(good1);
         if (i < 4) return address(good2);
-        if (i < 8) return address(teller);
+        if (i < 8) return address(usycPool);
         if (i == 8) return address(never);
         return address(hostile);
     }
@@ -864,7 +907,9 @@ contract VaultHandler is CommonBase, StdCheats, StdUtils {
                 h, vault.isRecipient(target), vault.recipientCap(target), vault.isStrategy(target)
             )
         );
+        h = keccak256(abi.encode(h, usycPool.balanceOf(address(vault)), usycPool.totalSupply()));
         for (uint256 i; i < allActors.length; ++i) {
+            h = keccak256(abi.encode(h, usycPool.balanceOf(allActors[i])));
             h = keccak256(
                 abi.encode(
                     h,

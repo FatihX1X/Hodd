@@ -153,7 +153,9 @@ contract HoddieVaultFactoryTest is Test {
 
         HoddieVault.Limits memory l = _limits();
         l.depositLimit24h = uint256(type(uint64).max) + 1;
-        vm.expectRevert(abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.depositLimit24h));
+        vm.expectRevert(
+            abi.encodeWithSelector(HoddieVault.LimitTooLarge.selector, l.depositLimit24h)
+        );
         factory.createVault(owner, operator, l, _strategies());
     }
 

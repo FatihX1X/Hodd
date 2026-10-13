@@ -56,7 +56,8 @@ contract CreateVault is Script {
         HoddieVault.Limits memory limits,
         address[] memory strategies
     ) public returns (address vault) {
-        address predicted = HoddieVaultFactory(factory).predictVault(owner, operator, limits, strategies);
+        address predicted = HoddieVaultFactory(factory)
+            .predictVault(owner, operator, limits, strategies);
         console.log("predicted vault", predicted);
 
         vm.startBroadcast(key);

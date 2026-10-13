@@ -108,8 +108,9 @@ abstract contract Base is Test {
         uint256 nonce,
         uint256 deadline
     ) internal view returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) =
-            vm.sign(pk, _typedDigest(vault_, recipient_, maxPerPayment, nonce, deadline));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            pk, _typedDigest(vault_, recipient_, maxPerPayment, nonce, deadline)
+        );
         return abi.encodePacked(r, s, v);
     }
 }

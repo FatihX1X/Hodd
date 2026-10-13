@@ -37,10 +37,7 @@ interface IRealTeller {
         view
         returns (uint256 shares, uint256 fee, int256 price);
     function maxRedeem(address account) external view returns (uint256);
-    function redemptionLimitRemaining(address account, uint256 date)
-        external
-        view
-        returns (uint256);
+    function redemptionLimitRemaining(address account, uint256 date) external view returns (uint256);
     function setLimits(address account, uint56 subscribe, uint56 redeem) external;
     function treasury(address account) external view returns (address);
 }
@@ -58,7 +55,7 @@ interface IRealTeller {
 ///      balance / 1e12, so funding is done with `vm.deal` (Foundry's ERC-20 `deal` can not find a
 ///      storage slot for a token without balance storage). Without a fork URL every test skips.
 abstract contract ForkBase is Test {
-    uint256 internal constant ARC_TESTNET = 5042002;
+    uint256 internal constant ARC_TESTNET = 5_042_002;
     address internal constant USDC = 0x3600000000000000000000000000000000000000;
     address internal constant MORPHO = 0xAabbeF1D3971c710276ed41eC791BbE14CdB8E88;
     address internal constant TELLER = 0x9fdF14c5B14173D74C08Af27AebFf39240dC105A;
@@ -71,9 +68,9 @@ abstract contract ForkBase is Test {
     address internal constant BLOCKLIST_PRECOMPILE = 0x1800000000000000000000000000000000000001;
 
     uint256 internal constant OWNER_PK = 0xA11CE;
-    uint256 internal constant MAX_TX = 1_000e6;
-    uint256 internal constant DAILY = 2_500e6;
-    uint256 internal constant FUNDS = 3_000e6;
+    uint256 internal constant MAX_TX = 1000e6;
+    uint256 internal constant DAILY = 2500e6;
+    uint256 internal constant FUNDS = 3000e6;
     uint256 internal constant NO_CAP = type(uint256).max;
     bytes32 internal constant REF = keccak256("invoice-2026-10-001");
 
