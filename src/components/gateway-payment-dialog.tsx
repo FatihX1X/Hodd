@@ -2,17 +2,20 @@
 
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, Hourglass, Info, RefreshCw, ShieldCheck, Waypoints, Wallet, X } from "lucide-react";
 import { gatewayChainByKey } from "@/lib/gateway/chains";
 import { gatewayPaymentResponseSchema, type GatewayPaymentResponse } from "@/lib/gateway/payment-models";
 import { formatMoney } from "@/lib/treasury/format";
 import type { Obligation } from "@/lib/treasury/models";
 import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
+import { Field, PaymentSteps, StatusChip } from "./ledger-visuals";
 import { buttonClass, inputClass, labelClass } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { useUnifiedUsdc } from "./use-unified-usdc";
+import { InfoTip, moneyColor } from "./visuals";
 
 type Ready = Extract<GatewayPaymentResponse, { status: "READY" }>;
+const stateMeta = (state: Ready["record"]["state"]) => state === "CONFIRMED" ? { icon: CheckCircle2, color: moneyColor.safe } : state === "FAILED" || state === "CANCELLED" || state === "EXPIRED" ? { icon: AlertTriangle, color: moneyColor.danger } : state === "REVIEW_REQUIRED" ? { icon: ShieldCheck, color: moneyColor.deployable } : { icon: Hourglass, color: moneyColor.protected };
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 /**
@@ -66,38 +69,45 @@ export function GatewayPaymentDialog({ obligation }: { obligation: Obligation })
 
   const gateway = job?.record.proposal.gateway;
   const source = gateway ? gatewayChainByKey(gateway.sourceKey) : null;
+  const meta = job ? stateMeta(job.record.state) : null;
+  const secondary = "inline-flex min-h-11 items-center justify-center rounded-[2px] border border-white/25 px-3 text-xs font-medium text-[#f4f1e8] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40";
   return <Dialog.Root open={open} onOpenChange={(value) => { if (busy && !value) return; setOpen(value); if (!value) { setJob(null); setError(""); } }}>
-    <Dialog.Trigger asChild><button disabled={!connection || connection.accountType !== "EOA" || !obligation.recipientAddress || !active} aria-label={`Pay ${obligation.title} from another chain`} title={connection && connection.accountType !== "EOA" ? "Needs a MetaMask or Rabby wallet" : undefined} className="min-h-10 border border-[#7fa6ff]/50 px-3 text-xs text-[#b9ccff] disabled:opacity-35">Pay from another chain</button></Dialog.Trigger>
+    <Dialog.Trigger asChild><button disabled={!connection || connection.accountType !== "EOA" || !obligation.recipientAddress || !active} aria-label={`Pay ${obligation.title} from another chain`} title={connection && connection.accountType !== "EOA" ? "Needs a MetaMask or Rabby wallet" : undefined} className="inline-flex min-h-11 items-center gap-2 rounded-[2px] border border-[#7fa6ff]/50 px-3 text-xs font-medium text-[#b9ccff] transition-colors hover:bg-[#7fa6ff]/10 disabled:cursor-not-allowed disabled:opacity-35"><Waypoints aria-hidden="true" className="size-3.5" />Pay from another chain</button></Dialog.Trigger>
     <Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" /><Dialog.Content className="fixed inset-y-0 right-0 z-50 w-full max-w-lg overflow-y-auto bg-[#101319] p-5 text-[#f4f1e8] focus:outline-none">
-      <div className="flex items-center justify-between gap-4"><Dialog.Title className="text-xl font-semibold">Pay from another chain</Dialog.Title><Dialog.Close disabled={busy} aria-label="Close" className="grid size-10 place-items-center border border-white/20"><X className="size-4" /></Dialog.Close></div>
-      <Dialog.Description className="mt-3 text-sm leading-6 text-white/65">Uses your Circle Gateway balance on any supported testnet. Circle mints the exact amount straight to the recipient on Arc. Your Arc wallet and Morpho position are not touched.</Dialog.Description>
-      <p className="mt-5 font-semibold">{obligation.title} · {formatMoney(obligation.amount)}</p><p className="mt-1 break-all text-xs text-white/65">Arc recipient: {obligation.recipientAddress}</p>
+      <div className="flex items-center justify-between gap-4"><div className="flex min-w-0 items-center gap-3"><span aria-hidden="true" className="grid size-10 shrink-0 place-items-center border border-[#7fa6ff]/40 text-[#b9ccff]"><Waypoints className="size-4" /></span><Dialog.Title className="text-xl font-semibold">Pay from another chain</Dialog.Title></div><Dialog.Close disabled={busy} aria-label="Close" className="grid size-11 shrink-0 place-items-center border border-white/20"><X aria-hidden="true" className="size-4" /></Dialog.Close></div>
+      <div className="mt-3 flex items-center gap-1"><Dialog.Description className="text-sm leading-6 text-white/65">Pays from your Circle Gateway balance on a supported testnet.</Dialog.Description><InfoTip label="About paying from another chain">Uses your Circle Gateway balance on any supported testnet. Circle mints the exact amount straight to the recipient on Arc. Your Arc wallet and Morpho position are not touched.</InfoTip></div>
+      <div className="mt-5 border border-white/[0.14] p-4">
+        <p className="font-semibold [overflow-wrap:anywhere]">{obligation.title}</p>
+        <p className="mono mt-1 text-2xl tabular-nums">{formatMoney(obligation.amount)}</p>
+        <p className="mt-2 flex items-start gap-2 break-all text-xs text-white/65"><Wallet aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>Arc recipient: {obligation.recipientAddress}</span></p>
+      </div>
+      <div className="mt-5"><PaymentSteps state={job?.record.state ?? null} labels={["Review", "Confirm", "Sign", "Minted"]} /></div>
 
       {!job && <div className="mt-5">
-        <label className={`${labelClass} block`}>Pay from Gateway balance on
-          <select value={sourceKey} onChange={(event) => setSourceKey(event.target.value)} disabled={busy || !view} className={inputClass}>
+        <Field label="Pay from Gateway balance on" labelClassName={labelClass}>{(id) => (
+          <select id={id} value={sourceKey} onChange={(event) => setSourceKey(event.target.value)} disabled={busy || !view} className={inputClass}>
             <option value="">{view ? sources.length ? "Choose a chain" : "No Gateway balance covers this bill" : "Reading Gateway balances…"}</option>
-            {sources.map((item) => <option key={item.key} value={item.key}>{item.label} · {formatMoney(item.gateway!, { fractionDigits: 6 })}</option>)}
+            {sources.map((item) => <option key={item.key} value={item.key}>{item.label} ({formatMoney(item.gateway!, { fractionDigits: 6 })})</option>)}
           </select>
-        </label>
-        {view && !sources.length && <p className="mt-2 text-xs leading-5 text-white/55">Add USDC to Gateway from Overview → USDC on every chain → Bring USDC to Arc (step 1), then come back.</p>}
-        <div className="mt-4 flex gap-2"><button disabled={busy || !sourceKey} onClick={() => void review()} className={`${buttonClass.primary} flex-1`}>Review payment</button><button disabled={busy} onClick={() => void reload()} className={buttonClass.ghost}>Refresh</button></div>
+        )}</Field>
+        {view && !sources.length && <p className="mt-2 flex items-start gap-2 text-xs leading-5 text-white/55"><Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />Add USDC to Gateway first: Overview, USDC on every chain, Bring USDC to Arc. Then come back.</p>}
+        <div className="mt-4 flex gap-2"><button disabled={busy || !sourceKey} onClick={() => void review()} className={`${buttonClass.primary} flex-1`}>Review payment</button><button disabled={busy} onClick={() => void reload()} className={buttonClass.ghost}><RefreshCw aria-hidden="true" className="size-3.5" />Refresh</button></div>
       </div>}
 
-      {job && <div className="mt-5 space-y-4 text-sm">
-        <p role="status" className="border border-white/20 p-3">{job.record.state.replaceAll("_", " ")}</p>
-        {gateway && <dl className="grid grid-cols-2 gap-4"><div><dt className={labelClass}>From</dt><dd className="mt-1">{source?.label ?? gateway.sourceKey} Gateway</dd></div><div><dt className={labelClass}>Max fees</dt><dd className="mono mt-1">{formatMoney({ currency: "USDC", decimals: 6, minorUnits: gateway.feeMinor }, { fractionDigits: 6 })}</dd></div><div><dt className={labelClass}>Recipient gets</dt><dd className="mono mt-1">{formatMoney(job.record.proposal.amount, { fractionDigits: 6 })}</dd></div><div><dt className={labelClass}>Gateway after</dt><dd className="mono mt-1">{formatMoney(job.record.proposal.balanceAfter, { fractionDigits: 6 })}</dd></div></dl>}
-        <p>{job.record.proposal.policy.status}: {job.record.proposal.policy.reason}</p>
-        <p className="text-xs text-white/65">{job.record.proposal.executionReason}</p>
+      {job && meta && <div className="mt-5 space-y-4 text-sm">
+        <p role="status" className="border border-white/20 p-3"><StatusChip icon={meta.icon} label={job.record.state.replaceAll("_", " ")} color={meta.color} className="text-sm" /></p>
+        {gateway && <dl className="grid grid-cols-2 gap-px border border-white/[0.14] bg-white/[0.14]"><div className="bg-[#101319] p-3"><dt className={labelClass}>From</dt><dd className="mt-1">{source?.label ?? gateway.sourceKey} Gateway</dd></div><div className="bg-[#101319] p-3"><dt className={labelClass}>Max fees</dt><dd className="mono mt-1 tabular-nums">{formatMoney({ currency: "USDC", decimals: 6, minorUnits: gateway.feeMinor }, { fractionDigits: 6 })}</dd></div><div className="bg-[#101319] p-3"><dt className={labelClass}>Recipient gets</dt><dd className="mono mt-1 tabular-nums">{formatMoney(job.record.proposal.amount, { fractionDigits: 6 })}</dd></div><div className="bg-[#101319] p-3"><dt className={labelClass}>Gateway after</dt><dd className="mono mt-1 tabular-nums">{formatMoney(job.record.proposal.balanceAfter, { fractionDigits: 6 })}</dd></div></dl>}
+        <p className="flex items-start gap-2"><StatusChip icon={job.record.proposal.policy.status === "PASS" ? ShieldCheck : AlertTriangle} label={job.record.proposal.policy.status} color={job.record.proposal.policy.status === "PASS" ? moneyColor.safe : moneyColor.danger} className="shrink-0" /><span className="text-white/80">{job.record.proposal.policy.reason}</span></p>
+        <p className="flex items-start gap-2 text-xs text-white/65"><Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>{job.record.proposal.executionReason}</span></p>
         {job.record.state === "REVIEW_REQUIRED" && <button disabled={busy || !job.record.proposal.executionEnabled || job.record.proposal.policy.status !== "PASS"} onClick={() => void confirm()} className={`${buttonClass.primary} w-full`}>Confirm and sign (free)</button>}
         {job.gateway.transferId && <p className="mono break-all text-[10px] text-white/50">Gateway transfer {job.gateway.transferId}</p>}
-        {job.record.txHash && <a className="mono block break-all text-[10px] text-[#8fb0ff] underline" href={`https://testnet.arcscan.app/tx/${job.record.txHash}`} target="_blank" rel="noreferrer">Arc mint to recipient: {job.record.txHash}</a>}
+        {job.record.txHash && <a className="mono flex items-start gap-2 break-all text-[10px] text-[#8fb0ff] underline" href={`https://testnet.arcscan.app/tx/${job.record.txHash}`} target="_blank" rel="noreferrer"><ExternalLink aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span>Arc mint to recipient: {job.record.txHash}</span></a>}
         {["SUBMITTED", "UNKNOWN", "AWAITING_SIGNATURE"].includes(job.record.state) && !busy && <div role="group" aria-label="Resolve payment" className="space-y-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs text-[#ffd27f]">
           <p>{job.record.state === "UNKNOWN" ? "Outcome unknown. The bill stays locked until Hodd verifies the mint or proves it cannot happen. Never pay it again by hand." : "Waiting for Circle to mint on Arc."}</p>
-          <button onClick={() => void recheck()} className="border border-white/20 p-2 text-[#f4f1e8]">Check status (sends nothing)</button>
-          <button onClick={() => void release()} className="ml-2 border border-white/20 p-2 text-[#f4f1e8]">Release if it can no longer be minted</button>
+          <div className="flex flex-wrap gap-2"><button onClick={() => void recheck()} className={secondary}>Check status (sends nothing)</button>
+          <button onClick={() => void release()} className={secondary}>Release if it can no longer be minted</button></div>
         </div>}
-        {job.record.state === "CONFIRMED" && <p className="text-[#7fe3a8]">Verified on Arc: Circle minted the exact amount to the recipient. The bill is PAID.</p>}
+        {job.record.state === "CONFIRMED" && <p className="flex items-start gap-2 text-[#7fe3a8]"><CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Verified on Arc: Circle minted the exact amount to the recipient. The bill is PAID.</p>}
       </div>}
       {error && <p role="alert" className="mt-4 border border-[#ff9a92]/30 bg-[#d03b3b]/15 p-3 text-xs text-[#ff9a92]">{error}</p>}
     </Dialog.Content></Dialog.Portal>
