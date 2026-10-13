@@ -1,4 +1,5 @@
 import { usdc } from "./fixtures";
+import { USYC_STRATEGY_NAME } from "./live";
 import { treasuryWorkspaceSchema, type TreasuryWorkspace } from "./models";
 
 /** An empty user treasury. LOCAL_DEMO is the schema's disconnected-wallet state. */
@@ -19,14 +20,14 @@ export function createLiveStarterWorkspace(now: Date | string = new Date()): Tre
     strategies: [
       { id: "liquid-usdc", name: "Liquid USDC", kind: "LIQUID", balance: usdc("0"), redeemable: usdc("0"), apyBps: null, risk: "LOW", liquidity: "INSTANT", integration: "UNAVAILABLE" },
       { id: "morpho-usdc", name: "Morpho USDC Vault", kind: "MORPHO", balance: usdc("0"), redeemable: usdc("0"), apyBps: null, risk: "MODERATE", liquidity: "VARIABLE", integration: "UNAVAILABLE" },
-      { id: "usyc-reserve", name: "USYC Reserve · Not available on Arc Testnet", kind: "USYC", balance: usdc("0"), redeemable: usdc("0"), apyBps: null, risk: "LOW", liquidity: "RESTRICTED", integration: "UNAVAILABLE" },
+      { id: "usyc-reserve", name: USYC_STRATEGY_NAME, kind: "USYC", balance: usdc("0"), redeemable: usdc("0"), apyBps: null, risk: "LOW", liquidity: "RESTRICTED", integration: "UNAVAILABLE" },
       { id: "btc-reserve", name: "BTC Reserve · Not available on Arc Testnet", kind: "BTC_RESERVE", balance: usdc("0"), redeemable: usdc("0"), apyBps: null, risk: "HIGH", liquidity: "VARIABLE", integration: "UNAVAILABLE" },
     ],
     integrations: [
       { name: "User wallet", status: "NOT_CONNECTED", message: "Connect your own wallet. Your wallet signs every transaction; Hodd stores public metadata only." },
       { name: "Arc Testnet", status: "NOT_CONNECTED", message: "Arc Testnet only · chain 5042002 · USDC. Live balances appear after you connect a wallet." },
       { name: "Morpho", status: "NOT_CONNECTED", message: "Live vault APY and positions load after wallet connection. Deposits require your wallet approval." },
-      { name: "USYC / BTC", status: "UNAVAILABLE", message: "Not available on Arc Testnet. Allocation targets and caps are zero." },
+      { name: "USYC / BTC", status: "UNAVAILABLE", message: `${USYC_STRATEGY_NAME}. Your wallet buys and redeems it itself; Hodd never holds it. BTC is not available on Arc Testnet. Caps and targets stay zero until you enable USYC in Policy.` },
     ],
     activities: [{ id: "workspace-created", occurredAt: updatedAt, actor: "SYSTEM", action: "Workspace created", summary: "Your live Arc Testnet treasury starts empty.", reason: "Connect your own wallet and add your bills to begin.", policy: { status: "NOT_EVALUATED", label: "Wallet required", reason: "Financial calculations wait for a verified live balance." }, approval: "NOT_REQUIRED", execution: "NOT_STARTED" }],
   });

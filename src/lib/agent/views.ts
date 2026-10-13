@@ -1,11 +1,30 @@
 import { assessPayment } from "@/lib/payments/policy";
 import { assessTreasury, effectiveProtectionLeadDays, getProtectedObligations, liquiditySources, protectionPlan, previewAllocation, type ProtectionContext } from "@/lib/treasury/engine";
+import { usycRedeemableMinor } from "@/lib/treasury/live";
 import type { Money, Obligation, TreasuryWorkspace } from "@/lib/treasury/models";
 import { moneyToInput } from "@/lib/treasury/money";
+import type { UsycPosition } from "@/lib/usyc/models";
 
 // Pure, JSON-friendly views returned to Claude. Amounts are decimal USDC strings.
 
 export const usdc = (money: Money) => `${moneyToInput(money)} ${money.currency}`;
+const units6 = (minorUnits: string) => moneyToInput({ currency: "USDC", decimals: 6, minorUnits });
+
+/**
+ * The wallet's own USYC for Claude and Hoddie, or null when it holds none. USYC is bought, held and redeemed from the
+ * user's own allowlisted wallet; Hodd and Autopilot never hold or move it, and it counts as liquidity only while the
+ * wallet may redeem within today's limits.
+ */
+export function usycView(position: UsycPosition | null) {
+  if (!position || BigInt(position.balanceShares) === 0n) return null;
+  const canRedeem = position.allowlisted.redeem && position.authority === "OK";
+  return {
+    holding: `${units6(position.balanceShares)} USYC`, value: `${units6(position.valueUsdc)} USDC`,
+    redeemableNow: canRedeem ? `${units6(usycRedeemableMinor(position).toString())} USDC` : "0 USDC",
+    allowlistedToRedeem: canRedeem,
+    note: canRedeem ? "Held in the user's own allowlisted wallet. Redemptions are instant, within today's limit, and signed by the user's wallet." : position.authority === "PAUSED" ? "Circle's USYC access is paused right now, so it is not counted as available liquidity." : "This wallet is not allowlisted to redeem USYC, so it is not counted as available liquidity.",
+  };
+}
 const pct = (bps: number | null) => bps === null ? null : `${(bps / 100).toFixed(bps % 100 ? 2 : 0)}%`;
 const day = (iso: string) => iso.slice(0, 10);
 
@@ -60,15 +79,18 @@ export function paymentCheckView(workspace: TreasuryWorkspace, obligation: Oblig
   const reserved = [workspace.policy.safetyBuffer, workspace.pendingTransactions, ...earlier.map((item) => item.amount)].reduce((sum, item) => sum + BigInt(item.minorUnits), 0n);
   const required = reserved + BigInt(obligation.amount.minorUnits) + BigInt(fee.minorUnits);
   const liquid = BigInt(workspace.liquidUsdc.minorUnits);
-  const redeemable = liquiditySources(workspace, evaluatedAt).filter((item) => item.source === "MORPHO").reduce((sum, item) => sum + BigInt(item.available.minorUnits), 0n);
+  const available = (source: "MORPHO" | "USYC") => liquiditySources(workspace, evaluatedAt).filter((item) => item.source === source).reduce((sum, item) => sum + BigInt(item.available.minorUnits), 0n);
+  const redeemable = available("MORPHO"), fromUsyc = available("USYC");
   const shortfall = required > liquid ? required - liquid : 0n;
   const money = (minorUnits: bigint): Money => ({ currency: "USDC", decimals: 6, minorUnits: minorUnits.toString() });
   const funding = shortfall === 0n ? { action: "NONE" as const, message: "Liquid USDC already covers this payment and everything that must stay protected." }
     : shortfall <= redeemable ? { action: "WITHDRAW_FROM_MORPHO" as const, amount: usdc(money(shortfall)), message: `Withdraw at least ${usdc(money(shortfall))} from Morpho first, then pay.` }
-    : { action: "INSUFFICIENT" as const, missing: usdc(money(shortfall - redeemable)), message: `Even after withdrawing everything redeemable from Morpho, ${usdc(money(shortfall - redeemable))} is missing.` };
+    // Morpho is used first (waterfall order); the rest comes from the wallet's own USYC, redeemed on the Strategies page.
+    : shortfall <= redeemable + fromUsyc ? { action: "REDEEM_USYC" as const, amount: usdc(money(shortfall - redeemable)), message: `${redeemable > 0n ? `Withdraw ${usdc(money(redeemable))} from Morpho and r` : "R"}edeem at least ${usdc(money(shortfall - redeemable))} of USYC on the Strategies page (your own wallet signs it) first, then pay.` }
+    : { action: "INSUFFICIENT" as const, missing: usdc(money(shortfall - redeemable - fromUsyc)), message: `Even after withdrawing everything redeemable from Morpho${fromUsyc > 0n ? " and USYC" : ""}, ${usdc(money(shortfall - redeemable - fromUsyc))} is missing.` };
   return {
     obligation: obligationView(workspace, obligation, evaluatedAt, context), canPayNow: policy.status === "PASS", policy,
-    estimatedFee: usdc(fee), keptProtected: usdc(money(reserved)), requiredLiquid: usdc(money(required)), liquidUsdc: usdc(workspace.liquidUsdc), redeemableFromMorpho: usdc(money(redeemable)), funding,
-    nextStep: policy.status === "PASS" ? "Ask Hodd to request this payment, then confirm and sign it in Hodd." : funding.action === "WITHDRAW_FROM_MORPHO" ? "Request a Morpho withdrawal first; after it settles, request the payment." : "Payment is not possible with current funds.",
+    estimatedFee: usdc(fee), keptProtected: usdc(money(reserved)), requiredLiquid: usdc(money(required)), liquidUsdc: usdc(workspace.liquidUsdc), redeemableFromMorpho: usdc(money(redeemable)), redeemableFromUsyc: usdc(money(fromUsyc)), funding,
+    nextStep: policy.status === "PASS" ? "Ask Hodd to request this payment, then confirm and sign it in Hodd." : funding.action === "WITHDRAW_FROM_MORPHO" ? "Request a Morpho withdrawal first; after it settles, request the payment." : funding.action === "REDEEM_USYC" ? "Free the cash first: withdraw from Morpho if needed and redeem USYC on the Strategies page; then request the payment." : "Payment is not possible with current funds.",
   };
 }
