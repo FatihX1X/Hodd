@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Coins, LoaderCircle, TriangleAlert } from "lucide-react";
 import { formatUnits } from "viem";
 import { ARCSCAN_TX } from "@/lib/usyc/constants";
 import { usycErrorSchema, usycQuoteResponseSchema, usycVerifySchema, type UsycPosition, type UsycQuote, type UsycStep } from "@/lib/usyc/models";
@@ -12,7 +12,8 @@ import { getActiveWalletRuntime, isSignerFor } from "@/lib/wallet/runtime";
 import { useHasActiveSigner } from "@/lib/wallet/use-active-signer";
 import { WalletPreflightError } from "@/lib/wallet/preflight";
 import { ProgressRail, type RailOutcome, type Step } from "./progress-rail";
-import { SectionCard, SectionHeading, StatusPill, inputClass, labelClass } from "./primitives";
+import { Meter, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass, labelClass } from "./primitives";
+import { InfoTip, Ring, moneyColor } from "./visuals";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
 type Kind = UsycQuote["kind"];
@@ -133,31 +134,52 @@ export function UsycPoolCard() {
     : position.depositsPaused ? "New deposits are paused by Hodd. Withdrawals still work."
     : null;
   const progress = run ? usycProgress(run) : null;
+  // The typed amount against what the pool can take, so the capacity bar answers "will this fit?" while typing.
+  const typed = Number(amount.replace(",", "."));
+  const capacity = position ? Number(formatUnits(BigInt(position.maxDepositUsdc), 6)) : 0;
+  const enteredRatio = amount.trim() !== "" && Number.isFinite(typed) && typed > 0 && capacity > 0 ? typed / capacity : null;
 
   return <SectionCard>
-    <SectionHeading index="02.3" title="USYC via Hodd's pool" description="Deposit and withdraw USDC only · the pool holds Circle's USYC" action={<StatusPill label={!position ? (usycState.status === "ERROR" ? "Unavailable" : usycState.status === "READY" ? "Not live" : "Loading") : position.circle === "OK" ? "Circle enabled" : position.circle === "PAUSED" ? "Circle paused" : "Awaiting Circle"} tone={position?.circle === "OK" ? "success" : usycState.status === "ERROR" ? "danger" : position ? "warning" : "info"} />} />
-    {!position ? <div role="status" className="p-5 text-sm leading-6 text-white/60">{usycState.status === "ERROR" ? usycState.message : usycState.status === "READY" ? "Hodd's USYC pool is not live on Arc Testnet yet. It opens once the pool contract is deployed and Circle enables it." : workspace.walletConnection ? "Loading the USYC pool…" : "Connect your wallet to see the USYC pool."}</div> : <PoolBody position={position} />}
+    <SectionHeading icon={<Coins className="size-4" />} title="USYC via Hodd's pool" action={<div className="flex items-center gap-2"><StatusPill label={!position ? (usycState.status === "ERROR" ? "Unavailable" : usycState.status === "READY" ? "Not live" : "Loading") : position.circle === "OK" ? "Circle enabled" : position.circle === "PAUSED" ? "Circle paused" : "Awaiting Circle"} tone={position?.circle === "OK" ? "success" : usycState.status === "ERROR" ? "danger" : position ? "warning" : "info"} /><InfoTip label="About this pool">Deposit and withdraw USDC only; the pool holds Circle&apos;s USYC. Your wallet signs every step. Deposits ask for an exact USDC approval, then the deposit; withdrawals pay USDC straight back to this wallet. Each transaction carries a 0.5% minimum so a price move cannot take more.</InfoTip></div>} />
+    {!position ? <div role="status" className="p-5 text-sm leading-6 text-white/60">{usycState.status === "ERROR" ? usycState.message : usycState.status === "READY" ? "Hodd's USYC pool is not live on Arc Testnet yet. It opens once the pool contract is deployed and Circle enables it." : workspace.walletConnection ? "Loading the USYC pool…" : "Connect your wallet to see the USYC pool."}</div> : <PoolBody position={position} entered={enteredRatio} />}
     {position && <div className="border-t border-white/10 p-5">
-      <label className="block text-[10px] font-semibold uppercase tracking-[0.1em] text-white/60">Amount (USDC)<input aria-label="USYC pool amount" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="1.00" disabled={busy} className={`${inputClass} mono`} /></label>
+      <label className={`block ${labelClass}`}>Amount (USDC)<input aria-label="USYC pool amount" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="1.00" disabled={busy} className={`${inputClass} mono`} /></label>
       <div className="mt-4 flex flex-wrap gap-2">
-        <button onClick={() => void start("DEPOSIT")} disabled={!canDeposit || busy || !amount} className="flex items-center gap-2 bg-[#f4f1e8] px-4 py-3 text-xs font-semibold text-[#0b0b0d] disabled:cursor-not-allowed disabled:opacity-35">{busy && run?.kind === "DEPOSIT" && <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />}Deposit</button>
-        <button onClick={() => void start("WITHDRAW")} disabled={!canWithdraw || busy || !amount} className="border border-white/20 px-4 py-3 text-xs font-semibold hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-35">Withdraw</button>
-        <button onClick={() => void start("WITHDRAW", true)} disabled={!canWithdraw || busy} className="border border-white/20 px-4 py-3 text-xs font-semibold hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-35">Withdraw all</button>
+        <button onClick={() => void start("DEPOSIT")} disabled={!canDeposit || busy || !amount} className={buttonClass.primary}>{busy && run?.kind === "DEPOSIT" ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" /> : <ArrowDownToLine aria-hidden="true" className="size-4" />}Deposit</button>
+        <button onClick={() => void start("WITHDRAW")} disabled={!canWithdraw || busy || !amount} className={buttonClass.ghost}><ArrowUpFromLine aria-hidden="true" className="size-4" />Withdraw</button>
+        <button onClick={() => void start("WITHDRAW", true)} disabled={!canWithdraw || busy} className={buttonClass.ghost}>Withdraw all</button>
       </div>
-      {note && <p role="note" className="mt-4 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]">{note}</p>}
-      {open && !hasSigner && <p role="note" className="mt-4 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]">Signer session: reconnect required. Use “Reconnect signer” in the wallet panel first.</p>}
-      <p className="mt-4 text-[11px] leading-5 text-white/50">Your wallet signs every step. Deposits ask for an exact USDC approval, then the deposit; withdrawals pay USDC straight back to this wallet. Each transaction carries a 0.5% minimum so a price move cannot take more.</p>
+      {note && <p role="note" className="mt-4 flex items-start gap-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>{note}</span></p>}
+      {open && !hasSigner && <p role="note" className="mt-4 flex items-start gap-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>Signer session: reconnect required. Use “Reconnect signer” in the wallet panel first.</span></p>}
     </div>}
     {progress && run && <ProgressRail label={`${progress.verb} progress`} steps={progress.steps} active={progress.active} outcome={run.outcome} caption={progress.caption} link={run.hash ? { href: `${ARCSCAN_TX}${run.hash}`, text: "Open transaction" } : null} />}
   </SectionCard>;
 }
 
-function PoolBody({ position }: { position: UsycPosition }) {
+function PoolBody({ position, entered }: { position: UsycPosition; entered: number | null }) {
   const cell = "bg-[#101319] p-4";
-  return <div className="grid grid-cols-2 gap-px bg-white/10 sm:grid-cols-4">
-    <div className={cell}><p className={labelClass}>Your balance</p><p className="mono mt-2 text-lg">{show(position.valueUsdc)}</p><p className="mt-1 text-[11px] text-white/50">≈ {formatUnits(BigInt(position.usycMinor), 6)} USYC</p></div>
-    <div className={cell}><p className={labelClass}>Withdrawable now</p><p className="mono mt-2 text-lg">{show(position.maxWithdrawUsdc)}</p></div>
-    <div className={cell}><p className={labelClass}>Deposit up to</p><p className="mono mt-2 text-lg">{formatMoney(usdc(position.maxDepositUsdc))}</p></div>
-    <div className={cell}><p className={labelClass}>USYC price</p><p className="mono mt-2 text-lg">{price(position.priceUsdcPerUsyc)}</p>{position.afterHoursPricing && <p className="mt-1 text-[11px] text-white/50">Deposits now buy at the next price ({price(position.subscribePriceUsdcPerUsyc)})</p>}</div>
+  const value = BigInt(position.valueUsdc);
+  const withdrawable = value > 0n ? Number(BigInt(position.maxWithdrawUsdc)) / Number(value) : null;
+  return <div className="grid grid-cols-1 gap-px bg-white/10 sm:grid-cols-[1.6fr_1fr_1fr]">
+    <div className={`${cell} flex items-center gap-4`}>
+      <Ring ratio={withdrawable} label="Withdrawable now, as a share of your balance" color={moneyColor.USYC} size={84} stroke={7}><span className="mono text-sm tabular-nums">{withdrawable === null ? "—" : `${Math.round(Math.min(withdrawable, 1) * 100)}%`}</span></Ring>
+      <div className="min-w-0">
+        <p className={labelClass}>Your balance</p>
+        <p className="mono mt-1 text-lg">{show(position.valueUsdc)}</p>
+        <p className="mt-0.5 text-[11px] text-white/50">≈ {formatUnits(BigInt(position.usycMinor), 6)} USYC</p>
+        <p className={`${labelClass} mt-3`}>Withdrawable now</p>
+        <p className="mono mt-1 text-sm" style={{ color: moneyColor.USYC }}>{show(position.maxWithdrawUsdc)}</p>
+      </div>
+    </div>
+    <div className={cell}>
+      <p className={labelClass}>Deposit up to</p>
+      <p className="mono mt-2 text-lg">{formatMoney(usdc(position.maxDepositUsdc))}</p>
+      <Meter ratio={entered} label="Typed amount against deposit capacity" className="mt-3" />
+    </div>
+    <div className={cell}>
+      <p className={labelClass}>USYC price</p>
+      <p className="mono mt-2 text-lg">{price(position.priceUsdcPerUsyc)}</p>
+      {position.afterHoursPricing && <p className="mt-1 text-[11px] text-white/50">Deposits now buy at the next price ({price(position.subscribePriceUsdcPerUsyc)})</p>}
+    </div>
   </div>;
 }
