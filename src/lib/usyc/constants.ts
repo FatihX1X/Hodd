@@ -64,14 +64,59 @@ export const usdcAbi = parseAbi([
  */
 export const USDC_ALLOWANCE_MAPPING_SLOT = 10n;
 
-/**
- * Gas used when the deposit cannot be simulated (the node rejects the state override). Measured on Arc Testnet:
- * a first subscription used 243,799 gas (tx 0x6d5c173e…bfeb15); a repeat subscription simulated at about
- * 215,262. 300,000 keeps ~23% over the worst case seen; the usual 20% buffer is added on top.
- */
-export const USYC_DEPOSIT_GAS_FALLBACK = 300_000n;
-
 /** The oracle price has 18 decimals; USYC and USDC have 6. */
 export const PRICE_SCALE = 10n ** 18n;
 export const ARCSCAN_TX = "https://testnet.arcscan.app/tx/";
 export const USYC_DOCS_URL = "https://developers.circle.com/tokenized/usyc/subscribe-and-redeem";
+
+/**
+ * HoddUSYCVault: Hodd's pooled USYC vault. Circle allowlists this one contract, so users deposit and withdraw
+ * only USDC and never need allowlisting. Set at deployment (`contracts/script/DeployHoddUSYCVault.s.sol`);
+ * `HODD_USYC_POOL_ADDRESS` can override it. Until then the USYC pool is shown as not deployed.
+ */
+const DEPLOYED_POOL: string | null = null;
+export function usycPoolAddress(value = process.env.HODD_USYC_POOL_ADDRESS ?? DEPLOYED_POOL): `0x${string}` | null {
+  const configured = value?.trim();
+  return configured && /^0x[0-9a-fA-F]{40}$/.test(configured) ? getAddress(configured) : null;
+}
+
+/** Shares have 12 decimals (USYC's 6 + a virtual-share offset of 6). */
+export const POOL_SHARE_DECIMALS = 12;
+/** Deposits and withdrawals are bounded to at most this loss against the pool's own preview (0.5%). */
+export const POOL_SLIPPAGE_BPS = 50n;
+
+export const poolAbi = parseAbi([
+  "function balanceOf(address account) view returns (uint256)",
+  "function totalSupply() view returns (uint256)",
+  "function totalAssets() view returns (uint256)",
+  "function usycHeld() view returns (uint256)",
+  "function usycOf(uint256 shares) view returns (uint256)",
+  "function previewDeposit(uint256 assets) view returns (uint256)",
+  "function previewRedeem(uint256 shares) view returns (uint256)",
+  "function maxDeposit(address receiver) view returns (uint256)",
+  "function maxRedeem(address holder) view returns (uint256)",
+  "function depositsPaused() view returns (bool)",
+  "function maxDepositPerTx() view returns (uint256)",
+  "function maxTotalAssets() view returns (uint256)",
+  "function deposit(uint256 assets, address receiver, uint256 minShares) returns (uint256 shares)",
+  "function redeem(uint256 shares, address receiver, address holder, uint256 minAssets) returns (uint256 assets)",
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event UsycSubscribed(address indexed user, address indexed receiver, uint256 usdcIn, uint256 usycIn, uint256 shares)",
+  "event UsycRedeemed(address indexed user, uint256 shares, uint256 usycOut, uint256 usdcOut)",
+  "error DepositsArePaused()",
+  "error NotPermittedByCircle()",
+  "error ExceedsMaxDepositPerTx(uint256 amount, uint256 max)",
+  "error ExceedsMaxTotalAssets(uint256 totalAfter, uint256 max)",
+  "error InsufficientShares(uint256 received, uint256 minShares)",
+  "error InsufficientAssets(uint256 received, uint256 minAssets)",
+  "error RedeemOnlyByAndToTheHolder()",
+  "error ZeroShares()",
+  "error ZeroAssets()",
+]);
+
+/**
+ * Gas used when the pool deposit cannot be simulated (the node refuses the state override that pretends the
+ * approval is mined). Measured on an Arc Testnet fork: about 331,000 gas for a pool deposit through the real
+ * Teller. 400,000 keeps ~20% headroom; the usual 20% buffer is added on top.
+ */
+export const POOL_DEPOSIT_GAS_FALLBACK = 400_000n;

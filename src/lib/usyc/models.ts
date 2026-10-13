@@ -1,57 +1,55 @@
 import { z } from "zod";
 
-// The /api/usyc contract, shared by the server routes, the treasury engine and the console. Amounts are
-// integer strings in token base units: USDC and USYC both have 6 decimals; prices have 18.
-const units = z.string().regex(/^\d{1,40}$/);
+// The /api/usyc contract, shared by the server routes, the treasury engine and the console. Users deal only in
+// USDC through Hodd's pooled vault (HoddUSYCVault); the pool holds the USYC. Amounts are integer strings in base
+// units: USDC and USYC have 6 decimals, pool shares 12, prices 18.
+const units = z.string().regex(/^\d{1,48}$/);
 const address = z.string().regex(/^0x[a-fA-F0-9]{40}$/);
 const hex = z.string().regex(/^0x[0-9a-fA-F]*$/);
 const hash = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 
 export const usycPositionSchema = z.object({
   wallet: address,
-  /** PAUSED: Circle's entitlements are paused and every allowlist check reverts. Treat USYC as temporarily unavailable. */
-  authority: z.enum(["OK", "PAUSED"]),
-  allowlisted: z.object({
-    /** Allowed to call `deposit` and to receive USYC. */
-    subscribe: z.boolean(),
-    /** Allowed to call `redeem` and to hold or move USYC. */
-    redeem: z.boolean(),
-    /** Allowed to receive USYC (`transfer` entitlement). */
-    receive: z.boolean(),
-  }),
-  balanceShares: units,
-  /** `balance × latest price` via the Teller's convertToAssets, in USDC. */
+  pool: address,
+  /**
+   * Circle's side of the pool. OK: Circle allowlists the pool. NOT_PERMITTED: the pool is not (or no longer)
+   * allowlisted, so nothing can be bought or redeemed until Circle restores it. PAUSED: Circle paused USYC.
+   */
+  circle: z.enum(["OK", "NOT_PERMITTED", "PAUSED"]),
+  /** Hodd paused new deposits (withdrawals are never paused by Hodd). */
+  depositsPaused: z.boolean(),
+  /** The most USDC one deposit can bring right now (caps, Circle's daily limit), 0 when deposits are closed. */
+  maxDepositUsdc: units,
+  /** The user's pool shares (12 decimals), the USYC they stand for and their USDC value if redeemed now. */
+  shares: units,
+  usycMinor: units,
   valueUsdc: units,
-  /** Latest oracle price (used for redemptions and valuation), 18 decimals. */
+  /** The most the user could withdraw right now (Circle's daily limit and fund liquidity are shared by the pool). */
+  maxWithdrawShares: units,
+  maxWithdrawUsdc: units,
+  /** Latest USYC price (redemptions, valuation) and the price a deposit gets now, 18 decimals. */
   priceUsdcPerUsyc: units,
-  /** Price a subscription gets right now; differs from the latest price when the next price applies. */
   subscribePriceUsdcPerUsyc: units,
-  /** Subscriptions after the 14:00 New York cutoff, or with a stale oracle price, use the next price. */
+  /** Deposits after the 14:00 New York cutoff, or on a stale oracle price, buy at the next price. */
   afterHoursPricing: z.boolean(),
-  /** Fee rates as decimal percentages ("0.04" = 0.04%). A quote shows the actual fee for its amount. */
-  fees: z.object({ subscribePercent: z.string(), redeemPercent: z.string() }),
-  /** What today's (UTC) per-wallet limits still allow, in USDC. */
-  limitsRemaining: z.object({ subscribe: units, redeem: units }),
-  /** Most USYC the Teller would redeem for this wallet right now (balance, daily limit and fund liquidity), and its USDC value. */
-  maxRedeemShares: units,
-  maxRedeemValueUsdc: units,
   observedAt: z.string().datetime(),
 });
 export type UsycPosition = z.infer<typeof usycPositionSchema>;
 
 export const usycStatusResponseSchema = z.object({
   status: z.literal("READY"),
-  position: usycPositionSchema,
+  /** null while the pool is not deployed yet. */
+  position: usycPositionSchema.nullable(),
   /** Whether quotes can be requested now (kill switch on, host allowed). Reads always work. */
   executionEnabled: z.boolean(),
   /** Why quotes are closed, in plain English; null while open. */
   executionNote: z.string().nullable(),
-  /** False for wallets that cannot sign USYC transactions in Hodd (Circle PIN wallets). */
+  /** False for wallets that cannot sign these transactions in Hodd (Circle PIN wallets). */
   walletCanSign: z.boolean(),
 });
 export type UsycStatusResponse = z.infer<typeof usycStatusResponseSchema>;
 
-export const usycStageSchema = z.enum(["APPROVE", "SUBSCRIBE", "REDEEM"]);
+export const usycStageSchema = z.enum(["APPROVE", "DEPOSIT", "WITHDRAW"]);
 export type UsycStage = z.infer<typeof usycStageSchema>;
 
 const callSchema = z.object({ to: address, data: hex, value: z.literal("0") });
@@ -60,25 +58,24 @@ export const usycStepSchema = z.object({ stage: usycStageSchema, call: callSchem
 export type UsycStep = z.infer<typeof usycStepSchema>;
 
 export const usycQuoteSchema = z.object({
-  kind: z.enum(["SUBSCRIBE", "REDEEM"]),
+  kind: z.enum(["DEPOSIT", "WITHDRAW"]),
   wallet: address,
-  /** Subscribe: USDC to spend. Redeem: USYC to redeem. */
+  /** Deposit: USDC put in. Withdraw: pool shares redeemed. */
   amountMinor: units,
-  /** In signing order: approve then subscribe, or the single redeem. */
+  /** In signing order: approve then deposit, or the single withdrawal. */
   steps: z.array(usycStepSchema).min(1).max(2),
   preview: z.object({
-    /** Subscribe: USYC expected. Redeem: USYC redeemed. */
-    sharesMinor: units,
-    /** Subscribe: USDC spent including any fee. Redeem: USDC received after any fee. */
-    assetsMinor: units,
-    feeMinor: units,
-    /** Price used by the Teller for this action, 18 decimals. */
-    priceUsdcPerUsyc: units,
+    /** USDC in (deposit) or expected out (withdraw). */
+    usdcMinor: units,
+    /** Pool shares expected (deposit) or redeemed (withdraw). */
+    shares: units,
+    /** The bound written into the transaction: minimum shares (deposit) or minimum USDC (withdraw). */
+    minimum: units,
     afterHoursPricing: z.boolean(),
   }),
   /** Network fee ceiling across all steps, in USDC (Arc's gas token). */
   networkFeeMinor: units,
-  /** True when every step's gas was measured by the node (the deposit with a simulated approval); false when the documented fallback was used for the deposit. */
+  /** False when the deposit's gas could not be simulated and the documented fallback was used. */
   gasSimulated: z.boolean(),
   observedAt: z.string().datetime(),
 });
@@ -90,22 +87,23 @@ export const usycVerifySchema = z.object({
   status: z.enum(["PENDING", "CONFIRMED", "REVERTED", "UNRELATED"]),
   step: usycStageSchema,
   txHash: hash,
-  /** CONFIRMED subscribe: the exact USYC minted to the wallet and the USDC spent. */
-  mintedSharesMinor: units.optional(),
-  spentAssetsMinor: units.optional(),
-  /** CONFIRMED redeem: the exact USYC burned and the USDC sent to the wallet. */
-  burnedSharesMinor: units.optional(),
-  receivedAssetsMinor: units.optional(),
+  /** CONFIRMED deposit: USDC put in and pool shares received. */
+  depositedUsdcMinor: units.optional(),
+  receivedShares: units.optional(),
+  /** CONFIRMED withdrawal: pool shares burned and USDC received. */
+  burnedShares: units.optional(),
+  receivedUsdcMinor: units.optional(),
 });
 export type UsycVerification = z.infer<typeof usycVerifySchema>;
 
 export const usycErrorSchema = z.object({ status: z.literal("ERROR"), code: z.string(), message: z.string() });
 
+const usdcAmount = z.string().regex(/^[1-9]\d{0,15}$/);
 /** Request bodies for POST /api/usyc. The wallet is always the signed-in session's wallet, never a field. */
 export const usycRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("QUOTE_SUBSCRIBE"), amountMinor: z.string().regex(/^[1-9]\d{0,15}$/) }).strict(),
-  z.object({ action: z.literal("QUOTE_REDEEM"), sharesMinor: z.string().regex(/^[1-9]\d{0,15}$/).optional(), all: z.literal(true).optional() }).strict()
-    .refine((value) => (value.sharesMinor === undefined) !== (value.all === undefined), "Give either sharesMinor or all"),
-  z.object({ action: z.literal("VERIFY"), step: usycStageSchema, txHash: hash, amountMinor: z.string().regex(/^[1-9]\d{0,15}$/).optional() }).strict(),
+  z.object({ action: z.literal("QUOTE_DEPOSIT"), amountMinor: usdcAmount }).strict(),
+  z.object({ action: z.literal("QUOTE_WITHDRAW"), amountMinor: usdcAmount.optional(), all: z.literal(true).optional() }).strict()
+    .refine((value) => (value.amountMinor === undefined) !== (value.all === undefined), "Give either amountMinor or all"),
+  z.object({ action: z.literal("VERIFY"), step: usycStageSchema, txHash: hash, amountMinor: z.string().regex(/^[1-9]\d{0,40}$/).optional() }).strict(),
 ]);
 export type UsycRequest = z.infer<typeof usycRequestSchema>;

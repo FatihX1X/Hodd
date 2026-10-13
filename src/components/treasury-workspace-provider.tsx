@@ -68,8 +68,9 @@ export function operationalInput(workspace: TreasuryWorkspace, walletState: Wall
   const zero = { currency: "USDC" as const, minorUnits: "0", decimals: 6 };
   const withWallet = applyWalletSnapshot({ ...workspace, strategies: workspace.strategies.map((strategy) => strategy.kind === "LIQUID" ? strategy : { ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" }) }, walletState.snapshot);
   const withEarn = earnState?.status === "READY" ? applyEarnPortfolio(withWallet, { ...earnState.portfolio, positions: earnState.portfolio.positions.filter((position) => position.walletAddress.toLowerCase() === workspace.walletConnection?.address.toLowerCase()) }) : withWallet;
-  // USYC is the connected wallet's own holding: only a fresh read for exactly this wallet counts.
-  return usycState?.status === "READY" && usycState.data.position.wallet.toLowerCase() === workspace.walletConnection.address.toLowerCase() ? applyUsycPosition(withEarn, usycState.data.position) : withEarn;
+  // The wallet's share of Hodd's USYC pool: only a fresh read for exactly this wallet counts.
+  const usyc = usycState?.status === "READY" ? usycState.data.position : null;
+  return usyc && usyc.wallet.toLowerCase() === workspace.walletConnection.address.toLowerCase() ? applyUsycPosition(withEarn, usyc) : withEarn;
 }
 
 // Per-tab memory: a reload must not silently drop a smoke test back into the
@@ -291,7 +292,7 @@ export function TreasuryWorkspaceProvider({ children }: { children: React.ReactN
     return () => { active = false; controller.abort(); window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
   }, [earnRefreshSequence, hydrated, walletAddress]);
 
-  // The wallet's own USYC position (allowlist, balance, value, limits) from the signed-in session; read-only.
+  // The wallet's share of Hodd's USYC pool (value, what can move now, Circle's side) from the signed-in session; read-only.
   useEffect(() => {
     if (!hydrated || !walletAddress || !userId) return;
     let active = true; let controller: AbortController | null = null;

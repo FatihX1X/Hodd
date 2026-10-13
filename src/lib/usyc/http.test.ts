@@ -5,14 +5,14 @@ import { WALLET } from "@/test/usyc-chain";
 
 const m = vi.hoisted(() => ({
   controls: new Map<string, boolean>() as ReadonlyMap<string, boolean> | null, provider: "INJECTED_METAMASK", authError: null as unknown,
-  ready: vi.fn(), quoteSubscribe: vi.fn(), quoteRedeem: vi.fn(), status: vi.fn(), verify: vi.fn(),
+  ready: vi.fn(), quoteDeposit: vi.fn(), quoteWithdraw: vi.fn(), status: vi.fn(), verify: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/earn/live-controls", () => ({ liveControls: async () => m.controls }));
 vi.mock("@/lib/earn/server-context", () => ({ earnServerContext: async () => { if (m.authError) throw m.authError; return { client: {}, userId: "user", wallet: { address: WALLET, provider: m.provider } }; } }));
 vi.mock("@/lib/execution/live-readiness", async (original) => ({ ...await original<typeof import("@/lib/execution/live-readiness")>(), assertLiveReady: m.ready }));
 vi.mock("./status", () => ({ readUsycStatus: m.status }));
-vi.mock("./quotes", () => ({ quoteSubscribe: m.quoteSubscribe, quoteRedeem: m.quoteRedeem }));
+vi.mock("./quotes", () => ({ quoteDeposit: m.quoteDeposit, quoteWithdraw: m.quoteWithdraw }));
 vi.mock("./verify", () => ({ verifyUsycTransaction: m.verify }));
 import { usycHttp } from "./http";
 import { UsycError } from "./errors";
@@ -20,15 +20,15 @@ import { UsycError } from "./errors";
 const origin = "https://app.hoddfinance.xyz";
 const post = (body: unknown, headers: Record<string, string> = { origin, "content-type": "application/json" }) => usycHttp(new Request(`${origin}/api/usyc`, { method: "POST", headers, body: typeof body === "string" ? body : JSON.stringify(body) }));
 const get = () => usycHttp(new Request(`${origin}/api/usyc`));
-const position = { wallet: WALLET, authority: "OK" };
+const position = { wallet: WALLET, circle: "OK" };
 const hash = `0x${"c".repeat(64)}`;
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("VERCEL", "1"); vi.stubEnv("VERCEL_ENV", "production"); vi.stubEnv("HODD_TESTNET_LIVE", "true"); vi.stubEnv("NODE_ENV", "production");
   m.controls = new Map([["EXECUTION", true], ["USYC", true]]); m.provider = "INJECTED_METAMASK"; m.authError = null;
-  m.ready.mockResolvedValue(undefined); m.status.mockResolvedValue(position); m.verify.mockResolvedValue({ status: "PENDING", step: "REDEEM", txHash: hash });
-  m.quoteSubscribe.mockResolvedValue({ kind: "SUBSCRIBE" }); m.quoteRedeem.mockResolvedValue({ kind: "REDEEM" });
+  m.ready.mockResolvedValue(undefined); m.status.mockResolvedValue(position); m.verify.mockResolvedValue({ status: "PENDING", step: "WITHDRAW", txHash: hash });
+  m.quoteDeposit.mockResolvedValue({ kind: "DEPOSIT" }); m.quoteWithdraw.mockResolvedValue({ kind: "WITHDRAW" });
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -48,6 +48,11 @@ describe("GET /api/usyc", () => {
     expect(body).toMatchObject({ status: "READY", executionEnabled: false, executionNote: expect.stringContaining("switched off by the operator") });
     m.controls = null;
     expect((await (await get()).json()).executionEnabled).toBe(false);
+  });
+
+  it("answers with no position while the pool is not deployed", async () => {
+    m.status.mockResolvedValue(null);
+    expect(await (await get()).json()).toMatchObject({ status: "READY", position: null });
   });
 
   it("tells the page when the wallet type cannot sign USYC transactions", async () => {
@@ -76,29 +81,29 @@ describe("GET /api/usyc", () => {
 });
 
 describe("POST /api/usyc quotes", () => {
-  it("quotes a subscription for the session wallet after the provider, ownership and usage checks", async () => {
-    const response = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "5000000" });
+  it("quotes a deposit for the session wallet after the provider, ownership and usage checks", async () => {
+    const response = await post({ action: "QUOTE_DEPOSIT", amountMinor: "5000000" });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "READY", quote: { kind: "SUBSCRIBE" } });
+    expect(await response.json()).toEqual({ status: "READY", quote: { kind: "DEPOSIT" } });
     expect(m.ready).toHaveBeenCalledWith(expect.objectContaining({ userId: "user" }), "TESTNET_LIVE", "QUOTE");
-    expect(m.quoteSubscribe).toHaveBeenCalledWith(WALLET, 5_000_000n);
+    expect(m.quoteDeposit).toHaveBeenCalledWith(WALLET, 5_000_000n);
   });
 
-  it("quotes a redemption by amount or for everything", async () => {
-    await post({ action: "QUOTE_REDEEM", sharesMinor: "2000000" });
-    expect(m.quoteRedeem).toHaveBeenLastCalledWith(WALLET, { sharesMinor: 2_000_000n });
-    await post({ action: "QUOTE_REDEEM", all: true });
-    expect(m.quoteRedeem).toHaveBeenLastCalledWith(WALLET, { all: true });
+  it("quotes a withdrawal by USDC amount or for everything", async () => {
+    await post({ action: "QUOTE_WITHDRAW", amountMinor: "2000000" });
+    expect(m.quoteWithdraw).toHaveBeenLastCalledWith(WALLET, { amountMinor: 2_000_000n });
+    await post({ action: "QUOTE_WITHDRAW", all: true });
+    expect(m.quoteWithdraw).toHaveBeenLastCalledWith(WALLET, { all: true });
   });
 
   it("takes the wallet from the session, never from the request", async () => {
-    const response = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000", wallet: "0x00000000000000000000000000000000000000aa" });
+    const response = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000", wallet: "0x00000000000000000000000000000000000000aa" });
     expect(response.status).toBe(400);
-    expect(m.quoteSubscribe).not.toHaveBeenCalled();
+    expect(m.quoteDeposit).not.toHaveBeenCalled();
   });
 
-  it("refuses malformed amounts and both-or-neither redeem fields before any check", async () => {
-    for (const body of [{ action: "QUOTE_SUBSCRIBE", amountMinor: "0" }, { action: "QUOTE_SUBSCRIBE", amountMinor: "1.5" }, { action: "QUOTE_SUBSCRIBE" }, { action: "QUOTE_REDEEM" }, { action: "QUOTE_REDEEM", all: true, sharesMinor: "1" }, { action: "NOPE" }, "not json"]) {
+  it("refuses malformed amounts and both-or-neither withdrawal fields before any check", async () => {
+    for (const body of [{ action: "QUOTE_DEPOSIT", amountMinor: "0" }, { action: "QUOTE_DEPOSIT", amountMinor: "1.5" }, { action: "QUOTE_DEPOSIT" }, { action: "QUOTE_WITHDRAW" }, { action: "QUOTE_WITHDRAW", all: true, amountMinor: "1" }, { action: "NOPE" }, "not json"]) {
       const response = await post(body);
       expect(response.status).toBe(400);
       expect((await response.json()).code).toBe("INVALID_REQUEST");
@@ -109,62 +114,62 @@ describe("POST /api/usyc quotes", () => {
   it("is closed, with a plain message, while the operator's USYC switch is missing or off", async () => {
     for (const controls of [new Map([["EXECUTION", true]]), new Map([["EXECUTION", true], ["USYC", false]]), null]) {
       m.controls = controls;
-      const response = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" });
+      const response = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" });
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ status: "ERROR", code: "USYC_PAUSED" });
     }
     expect(m.ready).not.toHaveBeenCalled();
-    expect(m.quoteSubscribe).not.toHaveBeenCalled();
+    expect(m.quoteDeposit).not.toHaveBeenCalled();
   });
 
   it("fails closed on a production host that is not the live app host, whatever the body", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
-    for (const body of [{}, { action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" }]) {
+    for (const body of [{}, { action: "QUOTE_DEPOSIT", amountMinor: "1000000" }]) {
       const response = await post(body);
       expect(response.status).toBe(403);
       expect((await response.json()).code).toBe("PRODUCTION_DISABLED");
     }
-    expect(m.quoteSubscribe).not.toHaveBeenCalled();
+    expect(m.quoteDeposit).not.toHaveBeenCalled();
   });
 
   it("rejects a cross-origin or non-JSON request", async () => {
-    expect((await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" }, { origin: "https://evil.example", "content-type": "application/json" })).status).toBe(403);
-    expect((await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" }, { origin, "content-type": "text/plain" })).status).toBe(415);
-    expect(m.quoteSubscribe).not.toHaveBeenCalled();
+    expect((await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" }, { origin: "https://evil.example", "content-type": "application/json" })).status).toBe(403);
+    expect((await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" }, { origin, "content-type": "text/plain" })).status).toBe(415);
+    expect(m.quoteDeposit).not.toHaveBeenCalled();
   });
 
   it("refuses wallets that cannot sign these transactions before using up a quote", async () => {
     m.provider = "CIRCLE_USER_CONTROLLED";
-    const response = await post({ action: "QUOTE_REDEEM", all: true });
+    const response = await post({ action: "QUOTE_WITHDRAW", all: true });
     expect(response.status).toBe(409);
     expect((await response.json()).code).toBe("USYC_WALLET_UNSUPPORTED");
     expect(m.ready).not.toHaveBeenCalled();
-    expect(m.quoteRedeem).not.toHaveBeenCalled();
+    expect(m.quoteWithdraw).not.toHaveBeenCalled();
   });
 
-  it("applies the live demo's 1,000 USDC cap to subscriptions only", async () => {
-    const response = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000001" });
+  it("applies the live demo's 1,000 USDC cap to deposits only", async () => {
+    const response = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000001" });
     expect(response.status).toBe(409);
     expect((await response.json()).code).toBe("LIVE_AMOUNT_LIMIT");
     expect(m.ready).not.toHaveBeenCalled();
-    expect((await post({ action: "QUOTE_REDEEM", sharesMinor: "5000000000" })).status).toBe(200);
+    expect((await post({ action: "QUOTE_WITHDRAW", amountMinor: "5000000000" })).status).toBe(200);
   });
 
   it("stops at the usage limit or an unproven wallet owner without quoting", async () => {
     m.ready.mockRejectedValue(new EarnAccessError("OWNERSHIP_REQUIRED", "Verify that you control this wallet before live testnet operations.", 403));
-    const response = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" });
+    const response = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" });
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe("OWNERSHIP_REQUIRED");
-    expect(m.quoteSubscribe).not.toHaveBeenCalled();
+    expect(m.quoteDeposit).not.toHaveBeenCalled();
   });
 
   it("returns a refusal from the quote builder as it is, and hides anything unexpected", async () => {
-    m.quoteSubscribe.mockRejectedValueOnce(new UsycError("USYC_NOT_ALLOWLISTED", "This wallet is not allowlisted for USYC yet.", 403));
-    const refused = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" });
-    expect(refused.status).toBe(403);
-    expect(await refused.json()).toEqual({ status: "ERROR", code: "USYC_NOT_ALLOWLISTED", message: "This wallet is not allowlisted for USYC yet." });
-    m.quoteSubscribe.mockRejectedValueOnce(new Error("viem: HTTP request failed secret-detail"));
-    const broken = await post({ action: "QUOTE_SUBSCRIBE", amountMinor: "1000000" });
+    m.quoteDeposit.mockRejectedValueOnce(new UsycError("USYC_POOL_NOT_PERMITTED", "Circle has not enabled Hodd's USYC pool yet.", 409));
+    const refused = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ status: "ERROR", code: "USYC_POOL_NOT_PERMITTED", message: "Circle has not enabled Hodd's USYC pool yet." });
+    m.quoteDeposit.mockRejectedValueOnce(new Error("viem: HTTP request failed secret-detail"));
+    const broken = await post({ action: "QUOTE_DEPOSIT", amountMinor: "1000000" });
     expect(broken.status).toBe(503);
     expect(JSON.stringify(await broken.json())).not.toContain("secret-detail");
   });
@@ -173,16 +178,16 @@ describe("POST /api/usyc quotes", () => {
 describe("POST /api/usyc verify", () => {
   it("checks a transaction for the session wallet without needing the quote switches or a usage reservation", async () => {
     m.controls = null;
-    const response = await post({ action: "VERIFY", step: "REDEEM", txHash: hash, amountMinor: "770000" });
+    const response = await post({ action: "VERIFY", step: "WITHDRAW", txHash: hash, amountMinor: "770000" });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "PENDING", step: "REDEEM", txHash: hash });
-    expect(m.verify).toHaveBeenCalledWith({ wallet: WALLET, step: "REDEEM", txHash: hash, amount: 770_000n });
+    expect(await response.json()).toEqual({ status: "PENDING", step: "WITHDRAW", txHash: hash });
+    expect(m.verify).toHaveBeenCalledWith({ wallet: WALLET, step: "WITHDRAW", txHash: hash, amount: 770_000n });
     expect(m.ready).not.toHaveBeenCalled();
   });
 
   it("needs the approved amount to check an approval, and a real hash", async () => {
     expect((await post({ action: "VERIFY", step: "APPROVE", txHash: hash })).status).toBe(400);
-    expect((await post({ action: "VERIFY", step: "SUBSCRIBE", txHash: "0x123" })).status).toBe(400);
+    expect((await post({ action: "VERIFY", step: "DEPOSIT", txHash: "0x123" })).status).toBe(400);
     expect((await post({ action: "VERIFY", step: "APPROVE", txHash: hash, amountMinor: "5000000" })).status).toBe(200);
     expect(m.verify).toHaveBeenCalledTimes(1);
   });

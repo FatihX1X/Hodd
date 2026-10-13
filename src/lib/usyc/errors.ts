@@ -5,5 +5,5 @@ export class UsycError extends Error {
 
 export const usycUnavailable = () => new UsycError("USYC_UNAVAILABLE", "USYC could not be read from Arc Testnet right now. Nothing was sent or changed; try again in a moment.", 503);
 export const usycPaused = () => new UsycError("USYC_PAUSED", "Circle has paused USYC access for now, so nothing can be bought or redeemed. Nothing was sent. Try again later.", 503);
-export const NOT_ALLOWLISTED_MESSAGE = "This wallet is not allowlisted for USYC yet. Circle must approve a wallet before it can buy, hold or redeem USYC. Nothing was sent.";
-export const notAllowlisted = () => new UsycError("USYC_NOT_ALLOWLISTED", NOT_ALLOWLISTED_MESSAGE, 403);
+export const poolNotDeployed = () => new UsycError("USYC_POOL_NOT_DEPLOYED", "Hodd's USYC pool is not live on Arc Testnet yet. Nothing was sent.", 409);
+export const circleNotPermitted = () => new UsycError("USYC_POOL_NOT_PERMITTED", "Circle has not enabled Hodd's USYC pool yet (or has paused it), so nothing can be bought or redeemed right now. Your funds stay where they are. Nothing was sent.", 409);

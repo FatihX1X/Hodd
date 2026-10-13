@@ -27,7 +27,7 @@ export function createLiveStarterWorkspace(now: Date | string = new Date()): Tre
       { name: "User wallet", status: "NOT_CONNECTED", message: "Connect your own wallet. Your wallet signs every transaction; Hodd stores public metadata only." },
       { name: "Arc Testnet", status: "NOT_CONNECTED", message: "Arc Testnet only · chain 5042002 · USDC. Live balances appear after you connect a wallet." },
       { name: "Morpho", status: "NOT_CONNECTED", message: "Live vault APY and positions load after wallet connection. Deposits require your wallet approval." },
-      { name: "USYC / BTC", status: "UNAVAILABLE", message: `${USYC_STRATEGY_NAME}. Your wallet buys and redeems it itself; Hodd never holds it. BTC is not available on Arc Testnet. Caps and targets stay zero until you enable USYC in Policy.` },
+      { name: "USYC / BTC", status: "UNAVAILABLE", message: "USYC through Hodd's pool contract: you deposit and withdraw only USDC from your own wallet, the contract holds the USYC and only you can withdraw your share. BTC is not available on Arc Testnet." },
     ],
     activities: [{ id: "workspace-created", occurredAt: updatedAt, actor: "SYSTEM", action: "Workspace created", summary: "Your live Arc Testnet treasury starts empty.", reason: "Connect your own wallet and add your bills to begin.", policy: { status: "NOT_EVALUATED", label: "Wallet required", reason: "Financial calculations wait for a verified live balance." }, approval: "NOT_REQUIRED", execution: "NOT_STARTED" }],
   });

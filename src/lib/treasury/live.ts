@@ -30,24 +30,25 @@ export function applyEarnPortfolio(workspace: TreasuryWorkspace, portfolio: Port
   return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, morphoBalance, ...usycHeld), strategies };
 }
 
-/** The strategy name for USYC: Circle only lets allowlisted wallets hold or redeem it. */
-export const USYC_STRATEGY_NAME = "USYC · allowlisted wallets only";
+/** The strategy name for USYC: users reach it through Hodd's pool, depositing and withdrawing USDC only. */
+export const USYC_STRATEGY_NAME = "USYC · via Hodd's pool";
 
-/** What a fresh redemption could pay now: the value, capped by today's remaining redemption limit and by what the Teller will pay out. */
-export function usycRedeemableMinor(position: Pick<UsycPosition, "valueUsdc" | "limitsRemaining" | "maxRedeemValueUsdc">): bigint {
-  return [BigInt(position.limitsRemaining.redeem), BigInt(position.maxRedeemValueUsdc)].reduce((least, item) => item < least ? item : least, BigInt(position.valueUsdc));
+/** What a withdrawal could pay now: the position's value, capped by what the pool can pay out (Circle's daily limit, fund liquidity). */
+export function usycRedeemableMinor(position: Pick<UsycPosition, "valueUsdc" | "maxWithdrawUsdc">): bigint {
+  const value = BigInt(position.valueUsdc), most = BigInt(position.maxWithdrawUsdc);
+  return most < value ? most : value;
 }
 
 /**
- * The connected wallet's own USYC, read fresh (never custodied by Hodd), as a live position: balance is its value in USDC,
- * redeemable is capped by the limits, and it only counts as ready liquidity while the wallet may redeem and Circle's
- * authority is not paused. Included in the treasury total like Morpho.
+ * The connected wallet's share of Hodd's USYC pool, read fresh, as a live position: balance is its USDC value, redeemable
+ * is what a withdrawal could pay now, and it only counts as ready liquidity while Circle permits the pool and USYC is
+ * not paused. Only the wallet can withdraw it, always to itself. Included in the treasury total like Morpho.
  */
 export function applyUsycPosition(workspace: TreasuryWorkspace, position: UsycPosition): TreasuryWorkspace {
   const zero = moneyLike(workspace.liquidUsdc, 0n);
   const balance = moneyLike(zero, BigInt(position.valueUsdc));
   const redeemable = moneyLike(zero, usycRedeemableMinor(position));
-  const ready = position.allowlisted.redeem && position.authority === "OK";
+  const ready = position.circle === "OK";
   const strategies = workspace.strategies.map((strategy) => strategy.kind === "USYC" ? { ...strategy, name: USYC_STRATEGY_NAME, balance, redeemable, apyBps: null, observedAt: position.observedAt, liquidityStatus: ready ? "READY" as const : "UNAVAILABLE" as const, integration: "LIVE" as const } : strategy);
   const others = strategies.filter((strategy) => strategy.kind !== "LIQUID" && strategy.kind !== "USYC").map((strategy) => strategy.balance);
   return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, ...others, balance), strategies };
