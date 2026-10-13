@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
-import { PageBody, PageHeader, SectionCard, SectionHeading, KpiGrid, Kpi, StatusPill, buttonClass, inputClass } from "./primitives";
+import { ArrowRight, Bot, CircleSlash, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
+import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
+import { Ring, moneyColor } from "./visuals";
+import { Tip } from "./tip";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 import { AutopilotProgress, type AutopilotLocalPhase, type AutopilotProgressInput } from "./autopilot-progress";
 import type { Mandate, Decision } from "@/lib/autopilot/models";
@@ -59,6 +62,94 @@ async function post<T>(action: string, body: unknown, signal: AbortSignal): Prom
   signal.throwIfAborted();
   if (!response.ok) throw new ApiError(data.message ?? "Autopilot could not complete the request.", data.code ?? "ERROR");
   return data;
+}
+
+const usdc = (minor: string) => Number(formatUnits(BigInt(minor), 6));
+const words = (value: string) => { const text = value.toLowerCase().replaceAll("_", " "); return text.charAt(0).toUpperCase() + text.slice(1); };
+const clamp01 = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(value, 1)) : 0;
+const percent = (ratio: number) => Math.round(clamp01(ratio) * 100) + "%";
+
+/** One icon and colour per kind of decision, shared by the history timeline. */
+const decisionKinds: Record<Decision["kind"], { label: string; Icon: LucideIcon; color: string }> = {
+  INVEST: { label: "Invested in Morpho", Icon: TrendingUp, color: moneyColor.MORPHO },
+  LIQUIDITY_TOP_UP: { label: "Topped up cash", Icon: Droplets, color: moneyColor.LIQUID },
+  RESERVE_REFILL: { label: "Refilled the reserve", Icon: ShieldPlus, color: moneyColor.protected },
+  RETURN_ALL: { label: "Returned everything", Icon: Undo2, color: moneyColor.safe },
+  NO_ACTION: { label: "No action needed", Icon: CircleSlash, color: "#8d8b84" },
+};
+const runTone = (state: string) => state === "UNKNOWN" ? "warning" : state === "COMPLETED" ? "success" : state === "FAILED" ? "danger" : state === "PARTIAL" ? "warning" : "neutral";
+
+/** What the agent holds, as one band: cash on the left, Morpho on the right. */
+function HoldingsBar({ balances }: { balances: Status["balances"] }) {
+  if (!balances) return <p className="mono mt-2 text-2xl font-medium tracking-[-0.03em] text-white/55">Unavailable</p>;
+  const cash = usdc(balances.cashMinor), position = usdc(balances.positionMinor), total = cash + position;
+  const sum = (BigInt(balances.cashMinor) + BigInt(balances.positionMinor)).toString();
+  const parts = [{ key: "cash", label: "Cash", minor: balances.cashMinor, color: moneyColor.LIQUID }, { key: "morpho", label: "In Morpho", minor: balances.positionMinor, color: moneyColor.MORPHO }];
+  return <>
+    <p className="mono mt-2 text-3xl font-medium tabular-nums tracking-[-0.03em]">{display(sum)}</p>
+    <div role="img" aria-label={`Your agent holds ${display(balances.cashMinor)} as cash and ${display(balances.positionMinor)} in Morpho`} className="mt-4 flex h-3 overflow-hidden bg-white/[0.08]">
+      {total > 0 && <><div style={{ width: (cash / total) * 100 + "%", background: moneyColor.LIQUID }} /><div className="flex-1" style={{ background: moneyColor.MORPHO }} /></>}
+    </div>
+    <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[13px]">{parts.map(part => <li key={part.key} className="inline-flex items-center gap-2 text-white/70"><span aria-hidden="true" className="size-2.5" style={{ background: part.color }} />{part.label}<span className="mono tabular-nums text-white/90">{display(part.minor)}</span></li>)}</ul>
+  </>;
+}
+
+/** Spent against the mandate's budget. Without a mandate the ring stays empty. */
+function BudgetCard({ mandate, spentMinor }: { mandate: Mandate | null; spentMinor: string }) {
+  const budget = mandate ? usdc(mandate.budgetMinor) : 0, spent = usdc(spentMinor);
+  const ratio = mandate && budget > 0 ? spent / budget : null;
+  const color = ratio !== null && ratio >= 1 ? moneyColor.danger : ratio !== null && ratio > 0.85 ? moneyColor.protected : moneyColor.deployable;
+  return <div className="flex items-center justify-between gap-4 bg-[#101319] p-5">
+    <div className="min-w-0">
+      <p className="flex items-center gap-1 text-[12px] text-white/55">Budget used<Tip label="About the budget">The most this agent may use in total. Each run also stays within the per-run limit, and the reserve stays untouched.</Tip></p>
+      {mandate ? <>
+        <p className="mono mt-2 text-xl font-medium tabular-nums tracking-[-0.03em]">{display(spentMinor)}</p>
+        <p className="mono mt-1 text-[12px] tabular-nums text-white/55">of {display(mandate.budgetMinor)}</p>
+        <ul className="mt-3 space-y-1 text-[12px] text-white/55">
+          <li>Reserve <span className="mono tabular-nums text-white/80">{display(mandate.reserveMinor)}</span></li>
+          <li>Per run <span className="mono tabular-nums text-white/80">{display(mandate.maxPerRunMinor)}</span></li>
+          {mandate.paused && <li className="pt-1"><StatusPill label="Paused" tone="warning" /></li>}
+        </ul>
+      </> : <p className="mt-2 text-[13px] text-white/55">No budget set yet</p>}
+    </div>
+    <Ring ratio={ratio} label="Mandate budget used" color={color} size={84}><span className="mono text-sm tabular-nums">{ratio === null ? "-" : percent(ratio)}</span></Ring>
+  </div>;
+}
+
+/** The ceiling for Morpho as a ring; the number beside it is the one Invest sends. */
+function MorphoShareCard({ value, onChange, capBps, disabled }: { value: string; onChange: (next: string) => void; capBps: number; disabled: boolean }) {
+  const ratio = value.trim() === "" ? null : Number(value) / 100;
+  return <div className="flex items-center justify-between gap-4 bg-[#101319] p-5">
+    <div className="min-w-0">
+      <p className="flex items-center gap-1 text-[12px] text-white/55">Most in Morpho<Tip align="end" label="About the Morpho share">The share of the agent&apos;s USDC that may be put into Morpho when you invest. Your policy allows up to {capBps / 100}%; the rest stays ready as cash.</Tip></p>
+      <label className="mt-2 block text-[12px] text-white/60">Morpho share (%)<input className={inputClass + " mono !mt-1 max-w-32 tabular-nums"} type="number" min="0" max={capBps / 100} step="0.01" value={value} onChange={event => onChange(event.target.value)} disabled={disabled} /></label>
+      <p className="mt-2 text-[12px] text-white/50">Policy limit <span className="mono tabular-nums text-white/75">{capBps / 100}%</span></p>
+    </div>
+    <Ring ratio={ratio} label="Morpho share" color={moneyColor.MORPHO} size={84}><span className="mono text-sm tabular-nums">{ratio === null ? "-" : percent(ratio)}</span></Ring>
+  </div>;
+}
+
+/** Runs as a timeline: an icon per kind of decision, the money that moved, and the steps behind it on demand. */
+function RunTimeline({ runs, steps }: { runs: Run[]; steps: Status["steps"] }) {
+  return <ol className="p-5 pt-2">{runs.map((item, index) => {
+    const kind = decisionKinds[item.decision.kind] ?? decisionKinds.NO_ACTION, Icon = kind.Icon;
+    const moved = [["Deposit", item.decision.depositMinor], ["Withdraw", item.decision.withdrawMinor], ["Return", item.decision.transferMinor]].filter(([, minor]) => BigInt(minor) > 0n);
+    const own = steps.filter(step => step.run_id === item.id);
+    return <li key={item.id} className="relative flex gap-4 pb-6 last:pb-0">
+      {index < runs.length - 1 && <span aria-hidden="true" className="absolute bottom-0 left-4 top-9 w-px bg-white/10" />}
+      <span aria-hidden="true" className="relative grid size-8 shrink-0 place-items-center rounded-full border bg-[#101319]" style={{ borderColor: kind.color, color: kind.color }}><Icon className="size-4" /></span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"><p className="text-sm font-medium">{kind.label}</p><StatusPill label={item.state} tone={runTone(item.state)} /></div>
+        <p className="mono mt-0.5 text-[11px] text-white/45">{new Date(item.created_at).toLocaleString()}</p>
+        <p className="mt-2 text-[13px] leading-5 text-white/65">{item.decision.explanation}</p>
+        {moved.length > 0 && <ul className="mt-2 flex flex-wrap gap-2">{moved.map(([label, minor]) => <li key={label} className="border border-white/15 px-2 py-1 text-[12px] text-white/60">{label} <span className="mono tabular-nums text-white/90">{display(minor)}</span></li>)}</ul>}
+        {item.failure && <p className="mt-2 text-[12px] text-[#ffd27f]">{outcome(item.failure)}</p>}
+        {own.length > 0 && <details className="mt-2"><summary className="inline-flex min-h-11 cursor-pointer items-center text-[12px] text-white/55 hover:text-white">Steps ({own.length})</summary>
+          <ul className="space-y-2 pb-2">{own.map(step => <li key={step.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]"><span className="text-white/80">{words(step.stage)}</span><StatusPill label={step.state} tone={step.state === "VERIFIED" ? "success" : step.state === "FAILED" ? "danger" : step.state === "UNKNOWN" ? "warning" : "neutral"} />{step.tx_hash && <a className="inline-flex min-h-8 items-center gap-1 text-[#9ec5f4] underline underline-offset-4" href={"https://testnet.arcscan.app/tx/" + step.tx_hash} target="_blank" rel="noreferrer">ArcScan receipt<ExternalLink aria-hidden="true" className="size-3" /></a>}{step.circle_transaction_id && <span className="mono break-all text-white/50">Circle {step.circle_transaction_id}</span>}</li>)}</ul>
+        </details>}
+      </div>
+    </li>;
+  })}</ol>;
 }
 
 export function AutopilotView() {
@@ -236,40 +327,48 @@ export function AutopilotView() {
   // Status lists steps newest first; the rail reads them oldest first.
   const progress: AutopilotProgressInput = { flow: intent ?? (returning ? "return" : "invest"), local: phase, run: run ? { ...run, state: run.state as NonNullable<AutopilotProgressInput["run"]>["state"] } : null, steps: [...runSteps].reverse(), error: failure, countdown, result, fundingHash };
   return <>
-    <PageHeader eyebrow="Agent treasury · Arc Testnet" title="Autopilot" description="Invest with your agent or return its USDC to your verified wallet in one click." />
+    <PageHeader eyebrow="Agent treasury" title="Autopilot" description="Invest with your agent, or bring its USDC back to your wallet." />
     <PageBody>
-      <div className="mb-6 flex flex-wrap items-center gap-3 border border-white/15 p-4">
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2 border border-white/15 px-4 py-3">
         <StatusPill label={status?.executionEnabled ? "Testnet execution enabled" : "Autopilot disabled"} tone={status?.executionEnabled ? "info" : "warning"} />
-        <p className="text-sm text-white/60">{!signedIn ? "Sign in and connect a verified wallet to use Autopilot." : !status?.executionEnabled ? "The operator must enable and verify Autopilot before funds can move." : "You sign the funding transfer. Your agent handles the rest within Hodd's limits."}</p>
+        {!signedIn ? <p className="text-sm text-white/60">Sign in and connect a verified wallet to use Autopilot.</p> : !status?.executionEnabled ? <p className="text-sm text-white/60">The operator must enable and verify Autopilot before funds can move.</p> : <Tip label="How Autopilot works">You sign the funding transfer. Your agent handles the rest within Hodd&apos;s limits.</Tip>}
       </div>
       {message && <p role="alert" className="mb-6 border border-[#fab219]/40 p-4 text-sm text-[#ffd27f]">{message}</p>}
       {status?.balanceError && <p className="mb-5 text-sm text-[#ffd27f]">{status.balanceError}</p>}
-      <KpiGrid columns={3} label="Agent balances"><Kpi label="Agent cash" value={status?.balances ? display(status.balances.cashMinor) : "Unavailable"} /><Kpi label="In Morpho" value={status?.balances ? display(status.balances.positionMinor) : "Unavailable"} /><Kpi label="Total with agent" value={total === null ? "Unavailable" : display(total)} /></KpiGrid>
+      <section aria-label="Agent overview" className="grid gap-px border border-white/[0.14] bg-white/[0.14] lg:grid-cols-[1.3fr_1fr_1fr]">
+        <div className="bg-[#101319] p-5"><p className="flex items-center gap-1.5 text-[12px] text-white/55"><Bot aria-hidden="true" className="size-3.5" />Total with agent</p><HoldingsBar balances={status?.balances ?? null} /></div>
+        <BudgetCard mandate={status?.mandate ?? null} spentMinor={status?.spentMinor ?? "0"} />
+        <MorphoShareCard value={share ?? (status ? String(status.policyMorphoCapBps / 100) : "")} onChange={setShare} capBps={status?.policyMorphoCapBps ?? 0} disabled={busy || open} />
+      </section>
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <SectionCard><SectionHeading index="01" title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
-          <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
-          <button className={buttonClass.primary} disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</button>
-          <p className="text-sm text-white/60">Your wallet sends the USDC to your agent; the agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s limits and keeps the rest ready as cash.</p>
+        <SectionCard><SectionHeading icon={<TrendingUp aria-hidden="true" className="size-4" />} title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
+          <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass + " mono tabular-nums"} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className={buttonClass.primary} disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</button>
+            <Tip label="How investing works">Your wallet sends the USDC to your agent; the agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s limits and keeps the rest ready as cash.</Tip>
+          </div>
         </form></SectionCard>
-        <SectionCard><SectionHeading index="02" title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
-          <p>{total === null ? "Balance unavailable" : display(total)} with your agent. A tiny network-fee remainder stays behind.</p>
-          <p className="text-white/60">Destination: {destination ? <span title={destination} className="font-mono">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : "Connect your verified wallet"}</p>
+        <SectionCard><SectionHeading icon={<Undo2 aria-hidden="true" className="size-4" />} title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
+          <div>
+            <p className="flex items-center gap-1 text-[12px] text-white/55">With your agent<Tip align="end" label="About returning">A tiny network-fee remainder stays behind.</Tip></p>
+            <p className="mono mt-1 text-2xl font-medium tabular-nums tracking-[-0.03em]">{total === null ? "Balance unavailable" : display(total)}</p>
+          </div>
+          <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-white/60"><Bot aria-hidden="true" className="size-4 shrink-0" /><ArrowRight aria-hidden="true" className="size-3.5 shrink-0 text-white/40" /><Wallet aria-hidden="true" className="size-4 shrink-0" /><span className="sr-only">Destination:</span>{destination ? <span title={destination} className="mono text-[13px] text-white/80">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : <span>Connect your verified wallet</span>}</p>
           <button className={buttonClass.primary} disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</button>
         </div></SectionCard>
       </div>
-      {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading index="03" title="Progress" />
+      {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading title="Progress" />
         <AutopilotProgress input={progress} />
-        {manualAddress && <div className="space-y-3 px-5 pb-5 text-sm"><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}>Copy agent address</button></div>}
+        {manualAddress && <div className="space-y-3 px-5 pb-5 text-sm"><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}><Copy aria-hidden="true" className="size-3.5" />Copy agent address</button></div>}
       </SectionCard>}
-      <details className="mt-6 border border-white/15"><summary className="cursor-pointer p-5 text-sm">Settings</summary><div className="space-y-4 p-5 text-sm">
-        <label className="block text-xs text-white/60">Morpho share (%)<input className={inputClass} type="number" min="0" max={(status?.policyMorphoCapBps ?? 0) / 100} step="0.01" value={share ?? (status ? String(status.policyMorphoCapBps / 100) : "")} onChange={event => setShare(event.target.value)} disabled={busy || open} /></label>
-        <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}>Pause autopilot</button>
-        {status?.wallet && <><p className="break-all font-mono">{status.wallet.address}</p><a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/address/" + status.wallet.address} target="_blank" rel="noreferrer">View agent on ArcScan</a></>}
+      <details className="mt-6 border border-white/15"><summary className="flex min-h-11 cursor-pointer items-center gap-2 px-5 py-3 text-sm"><Settings2 aria-hidden="true" className="size-4 text-white/55" />Settings</summary><div className="space-y-4 p-5 pt-2 text-sm">
+        <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}><Pause aria-hidden="true" className="size-3.5" />Pause autopilot</button>
+        {status?.wallet && <><p className="break-all font-mono text-[13px]">{status.wallet.address}</p><a className="inline-flex min-h-11 items-center gap-1.5 text-[#9ec5f4] underline underline-offset-4" href={"https://testnet.arcscan.app/address/" + status.wallet.address} target="_blank" rel="noreferrer">View agent on ArcScan<ExternalLink aria-hidden="true" className="size-3.5" /></a></>}
       </div></details>
-      <details className="mt-6 border border-white/15"><summary className="cursor-pointer p-5 text-sm">History</summary>
-        <div className="divide-y divide-white/10">{status?.runs.length?status.runs.map(run=><article className="space-y-3 p-5" key={run.id}><div className="flex flex-wrap justify-between gap-3"><StatusPill label={run.state} tone={run.state==="UNKNOWN"?"warning":run.state==="COMPLETED"?"success":"neutral"}/><span className="text-xs text-white/50">{new Date(run.created_at).toLocaleString()}</span></div><p className="text-sm">{run.decision.explanation}</p><p className="text-xs text-white/60">Deposit {display(run.decision.depositMinor)} · withdraw {display(run.decision.withdrawMinor)} · return {display(run.decision.transferMinor)}</p>{run.failure&&<p className="text-xs text-[#ffd27f]">{outcome(run.failure)}</p>}{status.steps.filter(step=>step.run_id===run.id).map(step=><p className="break-all text-xs text-white/60" key={step.id}>{step.stage} · {step.state}{step.tx_hash&&<> · <a className="text-[#9ec5f4] underline" href={"https://testnet.arcscan.app/tx/"+step.tx_hash} target="_blank" rel="noreferrer">ArcScan receipt</a></>}{step.circle_transaction_id&&<> · Circle {step.circle_transaction_id}</>}</p>)}</article>):<p className="p-5 text-sm text-white/60">No runs yet. Invest to start your agent.</p>}</div>
+      <details className="mt-6 border border-white/15"><summary className="flex min-h-11 cursor-pointer items-center gap-2 px-5 py-3 text-sm"><History aria-hidden="true" className="size-4 text-white/55" />History{status && status.runs.length > 0 && <span className="mono text-[12px] tabular-nums text-white/50">{status.runs.length}</span>}</summary>
+        {status?.runs.length ? <RunTimeline runs={status.runs} steps={status.steps} /> : <p className="p-5 pt-2 text-sm text-white/60">No runs yet. Invest to start your agent.</p>}
       </details>
-            {unknownStep && <SectionCard className="mt-6"><SectionHeading index="05" title="Recover an uncertain submission" description="Paste the hash for the displayed step. Exact sender, calldata and receipt must match; no funds are resent."/><form className="space-y-3 p-5" onSubmit={e=>{e.preventDefault();void act(async signal => { await post("recover", {stepId:unknownStep.id,txHash:candidate}, signal); await load(signal); });}}><p className="break-all text-xs text-white/60">Step {unknownStep.id}</p><label className="text-xs">Transaction hash<input className={inputClass} value={candidate} onChange={e=>setCandidate(e.target.value)} pattern="0x[0-9a-fA-F]{64}" required/></label><button className={buttonClass.ghost} disabled={busy || !signedIn || !status?.executionEnabled}>Verify transaction</button></form></SectionCard>}
+      {unknownStep && <SectionCard className="mt-6"><SectionHeading icon={<LifeBuoy aria-hidden="true" className="size-4" />} title="Recover an uncertain submission" action={<Tip align="end" label="About recovery">Paste the hash for the displayed step. Exact sender, calldata and receipt must match; no funds are resent.</Tip>} /><form className="space-y-3 p-5" onSubmit={e=>{e.preventDefault();void act(async signal => { await post("recover", {stepId:unknownStep.id,txHash:candidate}, signal); await load(signal); });}}><p className="break-all text-xs text-white/60">Step {unknownStep.id}</p><label className="block text-xs">Transaction hash<input className={inputClass} value={candidate} onChange={e=>setCandidate(e.target.value)} pattern="0x[0-9a-fA-F]{64}" required/></label><button className={buttonClass.ghost} disabled={busy || !signedIn || !status?.executionEnabled}>Verify transaction</button></form></SectionCard>}
     </PageBody>
   </>;
 }

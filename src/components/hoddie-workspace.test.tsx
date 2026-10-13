@@ -30,7 +30,7 @@ describe("Hoddie user-only approval UI", () => {
   });
   it("shows source/time and does not apply a result until a keyboard approval", async () => {
     fake.messages = [proposalMessage()]; render(<HoddieWorkspace />);
-    expect(screen.getByText(/NOT CONNECTED ·/)).toBeVisible(); expect(fake.confirm).not.toHaveBeenCalled();
+    expect(screen.getByText("NOT CONNECTED")).toBeVisible(); expect(fake.confirm).not.toHaveBeenCalled();
     const apply = screen.getByRole("button", { name: "Apply change" }); apply.focus(); expect(apply).toHaveFocus(); await userEvent.setup().keyboard("{Enter}");
     expect(fake.confirm).toHaveBeenCalledWith("signed-review");
   });
