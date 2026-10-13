@@ -57,6 +57,8 @@ export function weeklyOutflows(obligations: readonly Obligation[], from: Date, w
 
 /** Ordinal blue ramp, lightest = most liquid. Validated against the dark panel surface. */
 export const liquidityRamp = ["#9ec5f4", "#5598e7", "#256abf", "#184f95"] as const;
+/** One colour per kind of holding, used by every chart and legend in the console. */
+export const strategyColor: Record<StrategyKind, string> = { LIQUID: "#9ec5f4", MORPHO: "#5598e7", USYC: "#a08cf7", BTC_RESERVE: "#e3a35b" };
 export type AllocationRow = Readonly<{ id: string; name: string; kind: StrategyKind; liquidity: StrategyPosition["liquidity"]; balance: number; share: number; color: string }>;
 const liquidityOrder: Record<StrategyPosition["liquidity"], number> = { INSTANT: 0, VARIABLE: 1, RESTRICTED: 2 };
 
@@ -64,7 +66,7 @@ const liquidityOrder: Record<StrategyPosition["liquidity"], number> = { INSTANT:
 export function allocationByLiquidity(strategies: readonly StrategyPosition[]): AllocationRow[] {
   const held = strategies.filter((strategy) => BigInt(strategy.balance.minorUnits) > 0n).sort((a, b) => liquidityOrder[a.liquidity] - liquidityOrder[b.liquidity] || a.name.localeCompare(b.name));
   const total = held.reduce((sum, strategy) => sum + usdcNumber(strategy.balance), 0);
-  return held.map((strategy, index) => ({ id: strategy.id, name: strategy.name, kind: strategy.kind, liquidity: strategy.liquidity, balance: usdcNumber(strategy.balance), share: total === 0 ? 0 : usdcNumber(strategy.balance) / total, color: liquidityRamp[Math.min(index, liquidityRamp.length - 1)] }));
+  return held.map((strategy) => ({ id: strategy.id, name: strategy.name, kind: strategy.kind, liquidity: strategy.liquidity, balance: usdcNumber(strategy.balance), share: total === 0 ? 0 : usdcNumber(strategy.balance) / total, color: strategyColor[strategy.kind] }));
 }
 
 /** Position against its policy cap. The cap is a share of total treasury, matching the Earn deposit limit. */

@@ -1,29 +1,32 @@
 "use client";
 
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ShieldCheck } from "lucide-react";
 import type { Money, PolicyResult } from "@/lib/treasury/models";
 import { formatMoney } from "@/lib/treasury/format";
 
-/** Mono label used for field names, column heads and captions. */
-export const labelClass = "mono text-[10px] uppercase tracking-[0.14em] text-white/55";
+/** Quiet sentence-case label for field names, column heads and captions. */
+export const labelClass = "text-[12px] leading-4 text-white/55";
 
 /** Button recipes for the dark theme. Primary is paper on ink; ghost is a hairline outline. */
 export const buttonClass = {
-  primary: "mono inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-[#f4f1e8] bg-[#f4f1e8] px-4 text-[11px] font-medium uppercase tracking-[0.09em] text-[#0b0b0d] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#0a52e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
-  ghost: "mono inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-white/30 px-4 text-[11px] font-medium uppercase tracking-[0.09em] text-[#f4f1e8] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#f4f1e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
+  primary: "inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-[#f4f1e8] bg-[#f4f1e8] px-4 text-[13px] font-semibold text-[#0b0b0d] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#0a52e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
+  ghost: "inline-flex min-h-11 items-center justify-center gap-2 rounded-[2px] border border-white/30 px-4 text-[13px] font-semibold text-[#f4f1e8] transition duration-150 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0_#f4f1e8] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none",
 } as const;
 
 export const inputClass = "mt-2 w-full border border-white/25 bg-[#0b0b0d] px-3 py-2.5 text-sm text-[#f4f1e8] outline-none placeholder:text-white/35 focus:border-[#7fa6ff]";
 
-export function PageHeader({ eyebrow, title, description, aside, compact = false }: { eyebrow: string; title: string; description: string; aside?: React.ReactNode; compact?: boolean }) {
+/**
+ * Page title with a one-line description. `eyebrow` is kept for the page's accessible name only: the
+ * navigation already says where you are, so it is not repeated on screen.
+ */
+export function PageHeader({ eyebrow, title, description, aside, compact = false }: { eyebrow?: string; title: string; description: string; aside?: React.ReactNode; compact?: boolean }) {
   return (
-    <header className={clsx("ink-grid border-b border-white/10 px-5 text-white md:px-8 lg:px-10", compact ? "py-7 md:py-9" : "py-10 md:py-14")}>
-      <div className="mx-auto flex max-w-[1440px] flex-col gap-7 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="mono text-[10px] uppercase tracking-[0.22em] text-[#7fa6ff]">{eyebrow}</p>
-          <h1 className={clsx("disp mt-4", compact ? "text-[clamp(1.75rem,4.4vw,2.5rem)]" : "text-[clamp(1.75rem,5.4vw,3.25rem)]")}>{title}</h1>
-          <p className={clsx("max-w-2xl text-sm leading-6 text-white/60 md:text-base", compact ? "mt-3" : "mt-5")}>{description}</p>
+    <header aria-label={eyebrow?.replace(/^\d+\s*·\s*/, "")} className={clsx("ink-grid border-b border-white/10 px-5 text-white md:px-8 lg:px-10", compact ? "py-6 md:py-8" : "py-8 md:py-10")}>
+      <div className="mx-auto flex max-w-[1440px] flex-col gap-6 md:flex-row md:items-end md:justify-between">
+        <div className="min-w-0">
+          <h1 className={clsx("disp", compact ? "text-[clamp(1.6rem,4vw,2.25rem)]" : "text-[clamp(1.75rem,4.6vw,2.75rem)]")}>{title}</h1>
+          <p className="mt-3 max-w-xl text-sm leading-6 text-white/55">{description}</p>
         </div>
         {aside}
       </div>
@@ -31,13 +34,14 @@ export function PageHeader({ eyebrow, title, description, aside, compact = false
   );
 }
 
+/** The page's standing reassurance, as one quiet line with a shield instead of a full-width band. */
 export function TreasuryNotice({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="border-b border-white/10 bg-[#101319] px-5 py-3 md:px-8 lg:px-10" role="note">
-      <div className="mx-auto flex max-w-[1440px] items-start gap-3 text-xs leading-5 text-[#c9cbd3]">
-        <span aria-hidden="true" className="mt-1 size-1.5 shrink-0 bg-[#7fa6ff]" />
-        {children ?? "Live Arc Testnet balances · your own wallet signs every transaction."}
-      </div>
+    <div className="px-5 pt-5 md:px-8 lg:px-10" role="note">
+      <p className="mx-auto flex max-w-[1440px] items-start gap-2 text-[12px] leading-5 text-white/50">
+        <ShieldCheck aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-[#7fa6ff]" />
+        <span>{children ?? "Live Arc Testnet balances. Your own wallet signs every transaction."}</span>
+      </p>
     </div>
   );
 }
@@ -51,12 +55,13 @@ export function SectionCard({ children, className = "" }: { children: React.Reac
   return <section className={clsx("border border-white/[0.14] bg-[#101319]", className)}>{children}</section>;
 }
 
-export function SectionHeading({ index, title, description, action }: { index: string; title: string; description?: string; action?: React.ReactNode }) {
+/** Section title, an optional one-line description and an optional action. `index` is accepted for older callers and not shown. */
+export function SectionHeading({ title, description, action, icon }: { index?: string; title: string; description?: string; action?: React.ReactNode; icon?: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-5 border-b border-white/[0.14] px-5 py-4">
-      <div className="flex min-w-0 gap-4">
-        <span className="mono mt-1 text-[10px] text-white/45">{index}</span>
-        <div><h2 className="disp text-[15px]">{title}</h2>{description && <p className="mt-2 text-xs leading-5 text-white/55">{description}</p>}</div>
+      <div className="flex min-w-0 items-start gap-3">
+        {icon && <span aria-hidden="true" className="mt-0.5 text-white/55">{icon}</span>}
+        <div className="min-w-0"><h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>{description && <p className="mt-1 text-[12px] leading-5 text-white/50">{description}</p>}</div>
       </div>
       {action}
     </div>
@@ -80,7 +85,7 @@ const toneStyles: Record<Tone, { text: string; dot: string }> = {
 export function StatusPill({ label, tone = "neutral" }: { label: string; tone?: Tone }) {
   const style = toneStyles[tone];
   return (
-    <span className={clsx("mono inline-flex items-center gap-2 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.12em]", style.text)}>
+    <span className={clsx("inline-flex items-center gap-2 whitespace-nowrap text-[12px] font-medium lowercase first-letter:uppercase", style.text)}>
       <span aria-hidden="true" className={clsx("size-2 shrink-0", tone === "danger" ? "rounded-[1px]" : "rounded-full", style.dot)} />
       {label}
     </span>
@@ -99,10 +104,10 @@ export function KpiGrid({ children, className = "", label, columns = 4 }: { chil
 
 export function Kpi({ label, value, detail, accent = false }: { label: string; value: React.ReactNode; detail?: string; accent?: boolean }) {
   return (
-    <article className="min-h-36 bg-[#101319] p-5">
+    <article className="bg-[#101319] p-5">
       <p className={labelClass}>{label}</p>
-      <div className={clsx("mt-5 block text-3xl font-medium tracking-[-0.04em]", accent && "text-[#9ec5f4]")}>{value}</div>
-      {detail && <p className="mt-3 text-xs text-white/50">{detail}</p>}
+      <div className={clsx("mt-3 block text-2xl font-medium tracking-[-0.04em]", accent && "text-[#9ec5f4]")}>{value}</div>
+      {detail && <p className="mt-2 text-[12px] text-white/45">{detail}</p>}
     </article>
   );
 }
@@ -123,7 +128,7 @@ export function FilterGroup<T extends string>({ label, options, value, onChange 
   return (
     <div role="group" aria-label={label} className="inline-flex flex-wrap border border-white/30">
       {options.map((option, index) => (
-        <button key={option} type="button" onClick={() => onChange(option)} aria-pressed={value === option} className={clsx("mono min-h-11 min-w-12 px-3.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors", index > 0 && "border-l border-white/30", value === option ? "bg-[#f4f1e8] text-[#0b0b0d]" : "text-white/55 hover:text-white")}>{option}</button>
+        <button key={option} type="button" onClick={() => onChange(option)} aria-pressed={value === option} className={clsx("min-h-11 min-w-12 px-3.5 text-[12px] font-medium transition-colors", index > 0 && "border-l border-white/30", value === option ? "bg-[#f4f1e8] text-[#0b0b0d]" : "text-white/55 hover:text-white")}>{option}</button>
       ))}
     </div>
   );
@@ -136,7 +141,7 @@ function pageWindow(page: number, pageCount: number): (number | null)[] {
 }
 
 // The global button:focus-visible rule is unlayered, so the outline colour needs `!` to win over the utility layer.
-const pagerButton = "mono inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 border px-3 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors focus-visible:outline-[#7fa6ff]! disabled:cursor-not-allowed disabled:opacity-40";
+const pagerButton = "inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 border px-3 text-[12px] font-medium transition-colors focus-visible:outline-[#7fa6ff]! disabled:cursor-not-allowed disabled:opacity-40";
 
 /**
  * Previous / numbered / next controls for a client-side paginated list. `page` is 1-based and renders nothing for a single page.
@@ -152,7 +157,7 @@ export function Pagination({ page, pageCount, onChange, label, total, pageSize, 
       {range && <p className="mono text-[11px] tabular-nums text-white/55">{range}</p>}
       <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
         <button type="button" disabled={current <= 1} onClick={() => onChange(current - 1)} className={clsx(pagerButton, step)}><ChevronLeft aria-hidden="true" className="size-3.5" />Previous</button>
-        <p className="mono min-w-0 text-center text-[10px] uppercase tracking-[0.12em] text-white/55 sm:hidden">Page {current} of {pageCount}</p>
+        <p className="min-w-0 text-center text-[12px] text-white/55 sm:hidden">Page {current} of {pageCount}</p>
         <ol className="hidden items-center gap-1 sm:flex">
           {pageWindow(current, pageCount).map((n, index) => n === null
             ? <li key={`gap-${index}`} aria-hidden="true" className="mono min-w-6 text-center text-[11px] text-white/45">…</li>

@@ -46,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="inline-block" aria-label="Hodd overview home">
             <Image src="/brand/hodd-lockup-dark.png" alt="" width={1000} height={318} priority className="h-auto w-[168px]" />
           </Link>
-          <p className="mono mt-4 text-[9px] uppercase tracking-[0.18em] text-white/45">Treasury operations</p>
+          <p className="mt-3 text-[12px] text-white/40">Treasury operations</p>
         </div>
         <nav aria-label="Primary navigation" className="px-3 py-5">
           <ul className="space-y-1">
@@ -54,7 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               const active = isActive(href);
               return (
                 <li key={href}>
-                  <Link href={href} aria-current={active ? "page" : undefined} className={clsx("mono flex min-h-11 items-center gap-3 border-l-2 px-3 text-[11px] uppercase tracking-[0.09em] transition-colors", active ? "border-[#7fa6ff] bg-gradient-to-r from-[#4678ff]/25 to-transparent text-[#f4f1e8]" : "border-transparent text-white/55 hover:bg-white/[0.05] hover:text-white")}>
+                  <Link href={href} aria-current={active ? "page" : undefined} className={clsx("flex min-h-11 items-center gap-3 border-l-2 px-3 text-[14px] transition-colors", active ? "border-[#7fa6ff] bg-gradient-to-r from-[#4678ff]/25 to-transparent text-[#f4f1e8]" : "border-transparent text-white/55 hover:bg-white/[0.05] hover:text-white")}>
                     <Icon aria-hidden="true" className="size-[18px]" />
                     {label}
                   </Link>
@@ -80,7 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Image src="/brand/hodd-lockup-dark.png" alt="" width={1000} height={318} priority className="h-auto w-[112px]" />
           </Link>
           <div className="hidden items-center gap-3 lg:flex">
-            <span className="mono text-[10px] uppercase tracking-[0.18em] text-white/55">{liveMode ? walletLabel : "Wallet not connected"}</span>
+            <span className="text-[12px] font-medium text-white/70">{liveMode ? walletLabel : "Wallet not connected"}</span>
             <span className="h-3 w-px bg-white/20" />
             <span className="text-xs text-white/60">{pathname.startsWith("/autopilot") ? "Agent wallet · bounded server signing" : "Your own wallet signs every transaction"}</span>
           </div>
@@ -99,7 +99,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             const active = isActive(href);
             return (
               <li key={href}>
-                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("mono flex min-h-14 flex-col items-center justify-center gap-1 text-[7px] uppercase tracking-normal min-[400px]:text-[8px] min-[500px]:text-[9px]", active ? "text-[#f4f1e8]" : "text-white/50")}>
+                <Link href={href} aria-current={active ? "page" : undefined} className={clsx("flex min-h-14 flex-col items-center justify-center gap-1 text-[9px] min-[400px]:text-[10px] min-[500px]:text-[11px]", active ? "text-[#f4f1e8]" : "text-white/50")}>
                   <Icon aria-hidden="true" className={clsx("size-[22px]", active && "text-[#7fa6ff]")} />{label}
                 </Link>
               </li>
