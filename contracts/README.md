@@ -500,7 +500,13 @@ like Circle's contracts (caller and receiver checks, two-user checks on redeem, 
 while the authority is paused). The fork tests need the Arc precompile stand-ins described in the
 fork section above.
 
-## Deploying `HoddUSYCVault` (not done yet)
+## Deploying `HoddUSYCVault`
+
+**Deployed on Arc Testnet (2026-10-13):** [`0x97A7BAaA5416e0aC0674C395cec22FF606120b76`](https://explorer.testnet.arc.io/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76)
+(source verified on ArcScan). Admin: `0x93A7F9a958171303DE74Ab7f6778D25F96316564`. Caps raised after
+deployment with `setDepositCaps` to 100,000 USDC per deposit and 1,000,000 USDC in total
+(tx `0x5ac53fd937233179d650a25589b2290d8136fbe1d52167d7c22efde9f6f12650`). Waiting for Circle to
+allowlist it (until then `maxDeposit` is 0 and deposits revert `NotPermittedByCircle`).
 
 ```bash
 cd contracts
