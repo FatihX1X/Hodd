@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
-import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, ReceiptText, Settings2, ShieldPlus, TrendingUp, Undo2, Vault, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, ArrowLeftRight, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LandPlot, LifeBuoy, Pause, ReceiptText, Settings2, ShieldPlus, TrendingUp, Undo2, Vault, Wallet, type LucideIcon } from "lucide-react";
 import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
 import { ConfirmButton } from "./confirm-button";
 import { NeedsYouBanner, VaultBills, VaultCard, type NeedsYou, type VaultBillView, type VaultView } from "./autopilot-vault";
@@ -22,12 +22,12 @@ interface Status {
   advisor?: { available: boolean; model: string | null };
   wallet: { address: string; owner_address: string; account_type: string } | null;
   mandate: Mandate | null; spentMinor: string; returnRequested: boolean;
-  balances: { cashMinor: string; positionMinor: string; redeemableMinor: string; observedAt: string } | null;
+  balances: { cashMinor: string; positionMinor: string; redeemableMinor: string; usycMinor?: string; usycRedeemableMinor?: string; usycAvailable?: boolean; morphoApyBps?: number | null; usycApyBps?: number | null; observedAt: string } | null;
   balanceError: string | null; runs: Run[];
   vault?: VaultView | null; bills?: VaultBillView[]; needsYou?: NeedsYou[];
   steps: { id: string; run_id: string; stage: string; state: string; tx_hash: string | null; circle_transaction_id: string | null }[];
 }
-interface OwnerCall { kind: "CREATE_VAULT" | "AGENT_GAS" | "FUND" | "APPROVE_BILL" | "WITHDRAW_ALL"; call: WalletCall; gasBudgetWei: string; gasCeiling: EarnGasCeiling; amountMinor: string }
+interface OwnerCall { kind: "CREATE_VAULT" | "AGENT_GAS" | "FUND" | "APPROVE_BILL" | "WITHDRAW_ALL" | "LIFT_LIMITS"; call: WalletCall; gasBudgetWei: string; gasCeiling: EarnGasCeiling; amountMinor: string }
 /** Vault mode: the owner signs these in order (create the vault once, a little fee money for the agent, the amount). */
 interface Funding { agentAddress: string; mode?: "VAULT"; vaultAddress?: string; calls?: OwnerCall[]; funding: OwnerCall }
 class ApiError extends Error {
@@ -75,15 +75,18 @@ const usdc = (minor: string) => Number(formatUnits(BigInt(minor), 6));
 const words = (value: string) => { const text = value.toLowerCase().replaceAll("_", " "); return text.charAt(0).toUpperCase() + text.slice(1); };
 const clamp01 = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(value, 1)) : 0;
 const percent = (ratio: number) => Math.round(clamp01(ratio) * 100) + "%";
+/** Everything the vault (or the custodial agent) holds: cash, Morpho and USYC. */
+const held = (b: NonNullable<Status["balances"]>) => BigInt(b.cashMinor) + BigInt(b.positionMinor) + BigInt(b.usycMinor ?? "0");
 
 /** One icon and colour per kind of decision, shared by the history timeline. */
 const decisionKinds: Record<Decision["kind"], { label: string; Icon: LucideIcon; color: string }> = {
-  INVEST: { label: "Invested in Morpho", Icon: TrendingUp, color: moneyColor.MORPHO },
+  INVEST: { label: "Invested", Icon: TrendingUp, color: moneyColor.MORPHO },
+  REBALANCE: { label: "Moved between Morpho and USYC", Icon: ArrowLeftRight, color: moneyColor.USYC },
   LIQUIDITY_TOP_UP: { label: "Topped up cash", Icon: Droplets, color: moneyColor.LIQUID },
-  RESERVE_REFILL: { label: "Refilled the reserve", Icon: ShieldPlus, color: moneyColor.protected },
+  RESERVE_REFILL: { label: "Brought cash back for bills", Icon: ShieldPlus, color: moneyColor.protected },
   RETURN_ALL: { label: "Returned everything", Icon: Undo2, color: moneyColor.safe },
   NO_ACTION: { label: "No action needed", Icon: CircleSlash, color: "#8d8b84" },
-  DE_RISK: { label: "Moved Morpho back to cash", Icon: ArrowDownToLine, color: moneyColor.LIQUID },
+  DE_RISK: { label: "Moved back to cash", Icon: ArrowDownToLine, color: moneyColor.LIQUID },
   PAY_BILL: { label: "Paid a bill", Icon: ReceiptText, color: moneyColor.protected },
   MOVE_TO_VAULT: { label: "Moved into your vault", Icon: Vault, color: moneyColor.safe },
 };
@@ -107,16 +110,16 @@ function AdvisorNote({ decision }: { decision: Decision }) {
 }
 const runTone = (state: string) => state === "UNKNOWN" ? "warning" : state === "COMPLETED" ? "success" : state === "FAILED" ? "danger" : state === "PARTIAL" ? "warning" : "neutral";
 
-/** What the agent holds, as one band: cash on the left, Morpho on the right. */
+/** What the vault holds, as one band: cash, then Morpho, then USYC. */
 function HoldingsBar({ balances }: { balances: Status["balances"] }) {
   if (!balances) return <p className="mono mt-2 text-2xl font-medium tracking-[-0.03em] text-white/55">Unavailable</p>;
-  const cash = usdc(balances.cashMinor), position = usdc(balances.positionMinor), total = cash + position;
-  const sum = (BigInt(balances.cashMinor) + BigInt(balances.positionMinor)).toString();
-  const parts = [{ key: "cash", label: "Cash", minor: balances.cashMinor, color: moneyColor.LIQUID }, { key: "morpho", label: "In Morpho", minor: balances.positionMinor, color: moneyColor.MORPHO }];
+  const usycMinor = balances.usycMinor ?? "0";
+  const total = usdc(held(balances).toString());
+  const parts = [{ key: "cash", label: "Cash", minor: balances.cashMinor, color: moneyColor.LIQUID }, { key: "morpho", label: "In Morpho", minor: balances.positionMinor, color: moneyColor.MORPHO }, ...(balances.usycMinor !== undefined ? [{ key: "usyc", label: "In USYC", minor: usycMinor, color: moneyColor.USYC }] : [])];
   return <>
-    <p className="mono mt-2 text-3xl font-medium tabular-nums tracking-[-0.03em]">{display(sum)}</p>
-    <div role="img" aria-label={`Your agent holds ${display(balances.cashMinor)} as cash and ${display(balances.positionMinor)} in Morpho`} className="mt-4 flex h-3 overflow-hidden bg-white/[0.08]">
-      {total > 0 && <><div style={{ width: (cash / total) * 100 + "%", background: moneyColor.LIQUID }} /><div className="flex-1" style={{ background: moneyColor.MORPHO }} /></>}
+    <p className="mono mt-2 text-3xl font-medium tabular-nums tracking-[-0.03em]">{display(held(balances).toString())}</p>
+    <div role="img" aria-label={parts.map(part => `${display(part.minor)} ${part.label.toLowerCase()}`).join(", ")} className="mt-4 flex h-3 overflow-hidden bg-white/[0.08]">
+      {total > 0 && parts.map(part => <div key={part.key} style={{ width: (usdc(part.minor) / total) * 100 + "%", background: part.color }} />)}
     </div>
     <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[13px]">{parts.map(part => <li key={part.key} className="inline-flex items-center gap-2 text-white/70"><span aria-hidden="true" className="size-2.5" style={{ background: part.color }} />{part.label}<span className="mono tabular-nums text-white/90">{display(part.minor)}</span></li>)}</ul>
   </>;
@@ -144,16 +147,25 @@ function BudgetCard({ mandate, spentMinor }: { mandate: Mandate | null; spentMin
   </div>;
 }
 
-/** The ceiling for Morpho as a ring; the number beside it is the one Invest sends. */
-function MorphoShareCard({ value, onChange, capBps, disabled }: { value: string; onChange: (next: string) => void; capBps: number; disabled: boolean }) {
-  const ratio = value.trim() === "" ? null : Number(value) / 100;
-  return <div className="flex items-center justify-between gap-4 bg-[#101319] p-5">
-    <div className="min-w-0">
-      <p className="flex items-center gap-1 text-[12px] text-white/55">Most in Morpho<Tip align="end" label="About the Morpho share">The share of the agent&apos;s USDC that may be put into Morpho when you invest. Your policy allows up to {capBps / 100}%; the rest stays ready as cash.</Tip></p>
-      <label className="mt-2 block text-[12px] text-white/60">Morpho share (%)<input className={inputClass + " mono !mt-1 max-w-32 tabular-nums"} type="number" min="0" max={capBps / 100} step="0.01" value={value} onChange={event => onChange(event.target.value)} disabled={disabled} /></label>
-      <p className="mt-2 text-[12px] text-white/50">Policy limit <span className="mono tabular-nums text-white/75">{capBps / 100}%</span></p>
-    </div>
-    <Ring ratio={ratio} label="Morpho share" color={moneyColor.MORPHO} size={84}><span className="mono text-sm tabular-nums">{ratio === null ? "-" : percent(ratio)}</span></Ring>
+/** The two yields the agent compares, as bars on one scale. */
+function YieldCard({ balances }: { balances: Status["balances"] }) {
+  const rows = [{ key: "MORPHO", label: "Morpho", bps: balances?.morphoApyBps ?? null, color: moneyColor.MORPHO }, { key: "USYC", label: "USYC", bps: balances?.usycApyBps ?? null, color: moneyColor.USYC }];
+  const top = Math.max(1, ...rows.map(row => row.bps ?? 0));
+  return <div className="bg-[#101319] p-5">
+    <p className="flex items-center gap-1 text-[12px] text-white/55">Recent yield<Tip align="end" label="About the yields">Your agent compares these each run and decides how much goes where; Hodd sets no share for either. Morpho&apos;s comes from the vault, USYC&apos;s from Circle&apos;s price over the last six days. Moving money also weighs bills that are coming and how quickly each can pay out.</Tip></p>
+    <ul className="mt-3 space-y-3">{rows.map(row => <li key={row.key}>
+      <p className="flex items-center justify-between text-[13px] text-white/70"><span className="inline-flex items-center gap-2"><span aria-hidden="true" className="size-2.5" style={{ background: row.color }} />{row.label}</span><span className="mono tabular-nums text-white/90">{row.bps === null ? "Unknown" : (row.bps / 100).toFixed(2) + "%"}</span></p>
+      <div aria-hidden="true" className="mt-1.5 h-1.5 bg-white/[0.08]"><div className="h-full" style={{ width: ((row.bps ?? 0) / top) * 100 + "%", background: row.color }} /></div>
+    </li>)}</ul>
+  </div>;
+}
+
+/** The only places the agent can send money; the vault contract enforces this list, not amounts. */
+function DestinationsCard() {
+  const places = [{ label: "Morpho vault", color: moneyColor.MORPHO }, { label: "Hodd's USYC pool", color: moneyColor.USYC }, { label: "Bill recipients you approved", color: moneyColor.protected }, { label: "Your own wallet", color: moneyColor.safe }];
+  return <div className="bg-[#101319] p-5">
+    <p className="flex items-center gap-1 text-[12px] text-white/55"><LandPlot aria-hidden="true" className="size-3.5" />Where your agent can send money<Tip align="end" label="About the agent's limits">Your vault contract allows the agent nothing else. How much goes to each is the agent&apos;s call; a recipient never gets more per payment than the bill you approved.</Tip></p>
+    <ul className="mt-3 space-y-2 text-[13px] text-white/75">{places.map(place => <li key={place.label} className="flex items-center gap-2"><span aria-hidden="true" className="size-2.5 shrink-0" style={{ background: place.color }} />{place.label}</li>)}</ul>
   </div>;
 }
 
@@ -187,7 +199,6 @@ export function AutopilotView() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [amount, setAmount] = useState("");
-  const [share, setShare] = useState<string | null>(null);
   const [phase, setPhase] = useState<AutopilotLocalPhase | null>(null);
   // A failure before the agent run exists halts the rail at the step it reached (wallet cancel, refusal, revert).
   const [failure, setFailure] = useState<string | null>(null);
@@ -216,7 +227,7 @@ export function AutopilotView() {
     queueMicrotask(() => {
       if (controller.signal.aborted) return;
       setStatus(null); setActiveRun(null); setIntent(null); setPhase(null); setFailure(null); setMessage(""); setBusy(false);
-      setManualAddress(""); setCountdown(null); setShare(null);
+      setManualAddress(""); setCountdown(null);
       if (signedIn) void load(controller.signal).catch(error => {
         if (!controller.signal.aborted) setMessage(errorMessage(error));
       });
@@ -296,14 +307,12 @@ export function AutopilotView() {
     try { amountMinor = decimalStringToMoney(amount).minorUnits; }
     catch { throw new Error("Enter a USDC amount with up to 6 decimal places."); }
     if (BigInt(amountMinor) <= 0n) throw new Error("Enter an amount greater than zero.");
-    const maxMorphoBps = Math.round(Number(share ?? status.policyMorphoCapBps / 100) * 100);
-    if (!Number.isFinite(maxMorphoBps) || maxMorphoBps < 0 || maxMorphoBps > status.policyMorphoCapBps) throw new Error("Choose a Morpho share within your policy limit.");
     setActiveRun(null); setManualAddress(""); setFundingHash(null); setPhase("preparing");
     const before = await load(signal);
     // Balances exist only once a mandate does; a wallet without one starts from zero.
     if (before.balanceError) throw new Error(before.balanceError);
     const baseline = BigInt(before.balances?.cashMinor ?? "0");
-    const result = await post<Funding>("invest", { amountMinor, maxMorphoBps }, signal);
+    const result = await post<Funding>("invest", { amountMinor }, signal);
     signal.throwIfAborted();
     const signer = getActiveWalletRuntime();
     if (result.calls?.length && isSignerFor(signer, workspace.walletConnection) && signer.sendCalls) {
@@ -359,12 +368,12 @@ export function AutopilotView() {
     }
   }
 
-  /** Owner-only vault calls: approve a bill's recipient, or take everything back. Then the page reads the vault again. */
-  async function vaultAction(body: { op: "approve-bill"; obligationId: string } | { op: "withdraw-all" }, signal: AbortSignal) {
+  /** Owner-only vault calls: approve a bill's recipient, remove the old amount limits, or take everything back. Then the page reads the vault again. */
+  async function vaultAction(body: { op: "approve-bill"; obligationId: string } | { op: "withdraw-all" } | { op: "lift-limits" }, signal: AbortSignal) {
     const result = await post<{ status: "READY" | "ALREADY"; call?: OwnerCall }>("vault", body, signal);
     if (result.status === "READY" && result.call) {
       const hash = await signOwner(result.call);
-      setMessage(body.op === "withdraw-all" ? "Sent. Your vault's USDC is on its way to your wallet." : "Approved. Autopilot will pay this bill from your vault.");
+      setMessage(body.op === "withdraw-all" ? "Sent. Your vault's USDC is on its way to your wallet." : body.op === "lift-limits" ? "Sent. Your vault's amount limits are being removed." : "Approved. Autopilot will pay this bill from your vault.");
       for (let attempt = 0; attempt < 20; attempt += 1) {
         await wait(2_000, signal);
         const fresh = await load(signal);
@@ -378,7 +387,8 @@ export function AutopilotView() {
           }
           return;
         }
-        if (body.op === "withdraw-all" && (!fresh.balances || BigInt(fresh.balances.cashMinor) + BigInt(fresh.balances.positionMinor) === 0n)) return;
+        if (body.op === "withdraw-all" && (!fresh.balances || held(fresh.balances) === 0n)) return;
+        if (body.op === "lift-limits" && fresh.vault?.limitsLifted) { setMessage("Done. Your vault has no amount limits now: Autopilot is limited only by where it can send money."); return; }
       }
       setMessage("Sent (" + hash.slice(0, 10) + "…). It has not shown up yet; check again in a moment.");
     } else await load(signal);
@@ -398,12 +408,12 @@ export function AutopilotView() {
   }
 
   const disabled = busy || open || !!status?.runs.some(isOpen) || !signedIn || !status?.executionEnabled;
-  const total = status?.balances ? (BigInt(status.balances.cashMinor) + BigInt(status.balances.positionMinor)).toString() : null;
+  const total = status?.balances ? held(status.balances).toString() : null;
   const unknownStep = status?.steps.find(step => step.state === "UNKNOWN" || step.state === "SUBMITTING");
   const runSteps = status?.steps.filter(step => step.run_id === run?.id) ?? [];
   const returning = run?.decision.kind === "RETURN_ALL" || intent === "return";
   const destination = status?.wallet?.owner_address;
-  const result = run?.state === "COMPLETED" ? returning ? "Done. " + rounded(run.decision.transferMinor) + " sent to your wallet." : status?.balances ? "Done. " + rounded(status.balances.positionMinor) + " in Morpho, " + rounded(status.balances.cashMinor) + " ready as cash." : "Done." : run?.state === "NO_ACTION" ? returning ? "Nothing to return." : run.decision.explanation : run?.state === "FAILED" || run?.state === "PARTIAL" ? (run.failure ? outcome(run.failure) : run.decision.explanation) : null;
+  const result = run?.state === "COMPLETED" ? returning ? "Done. " + rounded(run.decision.transferMinor) + " sent to your wallet." : status?.balances ? "Done. " + rounded(status.balances.positionMinor) + " in Morpho, " + (status.balances.usycMinor !== undefined ? rounded(status.balances.usycMinor) + " in USYC, " : "") + rounded(status.balances.cashMinor) + " ready as cash." : "Done." : run?.state === "NO_ACTION" ? returning ? "Nothing to return." : run.decision.explanation : run?.state === "FAILED" || run?.state === "PARTIAL" ? (run.failure ? outcome(run.failure) : run.decision.explanation) : null;
 
   // Status lists steps newest first; the rail reads them oldest first.
   const progress: AutopilotProgressInput = { flow: intent ?? (returning ? "return" : "invest"), local: phase, run: run ? { ...run, state: run.state as NonNullable<AutopilotProgressInput["run"]>["state"] } : null, steps: [...runSteps].reverse(), error: failure, countdown, result, fundingHash };
@@ -419,27 +429,27 @@ export function AutopilotView() {
       <NeedsYouBanner items={status?.needsYou ?? []} />
       <section aria-label="Agent overview" className="grid gap-px border border-white/[0.14] bg-white/[0.14] lg:grid-cols-[1.3fr_1fr_1fr]">
         <div className="bg-[#101319] p-5"><p className="flex items-center gap-1.5 text-[12px] text-white/55"><Bot aria-hidden="true" className="size-3.5" />{status?.vault?.deployed ? "In your vault" : "Total with agent"}</p><HoldingsBar balances={status?.balances ?? null} /></div>
-        <BudgetCard mandate={status?.mandate ?? null} spentMinor={status?.spentMinor ?? "0"} />
-        <MorphoShareCard value={share ?? (status ? String(status.policyMorphoCapBps / 100) : "")} onChange={setShare} capBps={status?.policyMorphoCapBps ?? 0} disabled={busy || open} />
+        {status?.vault?.deployed ? <YieldCard balances={status.balances} /> : <BudgetCard mandate={status?.mandate ?? null} spentMinor={status?.spentMinor ?? "0"} />}
+        <DestinationsCard />
       </section>
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         <SectionCard><SectionHeading icon={<TrendingUp aria-hidden="true" className="size-4" />} title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
           <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass + " mono tabular-nums"} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
           <div className="flex flex-wrap items-center gap-2">
             <ConfirmButton type="submit" disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</ConfirmButton>
-            <Tip label="How investing works">Your wallet sends the USDC into your own vault (the first time it also creates the vault). Your agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s and the vault&apos;s limits, keeps the rest ready as cash and pays the bills you approved.</Tip>
+            <Tip label="How investing works">Your wallet sends the USDC into your own vault (the first time it also creates the vault). Your agent can invest all of it. It decides how much goes to Morpho and how much to USYC, when to bring money back to cash for the bills you approved, and pays each one on its payment day.</Tip>
           </div>
         </form></SectionCard>
         <SectionCard><SectionHeading icon={<Undo2 aria-hidden="true" className="size-4" />} title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
           <div>
-            <p className="flex items-center gap-1 text-[12px] text-white/55">{status?.vault?.deployed ? "In your vault" : "With your agent"}<Tip align="end" label="About returning">{status?.vault?.deployed ? "Your agent redeems the Morpho position straight to your wallet, then sends the vault's cash. You can also do it yourself below." : "A tiny network-fee remainder stays behind."}</Tip></p>
+            <p className="flex items-center gap-1 text-[12px] text-white/55">{status?.vault?.deployed ? "In your vault" : "With your agent"}<Tip align="end" label="About returning">{status?.vault?.deployed ? "Your agent redeems the Morpho and USYC positions straight to your wallet, then sends the vault's cash. You can also do it yourself below." : "A tiny network-fee remainder stays behind."}</Tip></p>
             <p className="mono mt-1 text-2xl font-medium tabular-nums tracking-[-0.03em]">{total === null ? "Balance unavailable" : display(total)}</p>
           </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-white/60"><Bot aria-hidden="true" className="size-4 shrink-0" /><ArrowRight aria-hidden="true" className="size-3.5 shrink-0 text-white/40" /><Wallet aria-hidden="true" className="size-4 shrink-0" /><span className="sr-only">Destination:</span>{destination ? <span title={destination} className="mono text-[13px] text-white/80">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : <span>Connect your verified wallet</span>}</p>
           <ConfirmButton disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</ConfirmButton>
         </div></SectionCard>
       </div>
-      {status?.vault && <VaultCard vault={status.vault} disabled={disabled} onWithdrawAll={() => void act(signal => vaultAction({ op: "withdraw-all" }, signal))} />}
+      {status?.vault && <VaultCard vault={status.vault} disabled={disabled} onWithdrawAll={() => void act(signal => vaultAction({ op: "withdraw-all" }, signal))} onLiftLimits={() => void act(signal => vaultAction({ op: "lift-limits" }, signal))} />}
       {status?.vault?.deployed && <VaultBills bills={status.bills ?? []} disabled={disabled} onApprove={id => void act(signal => vaultAction({ op: "approve-bill", obligationId: id }, signal))} />}
       {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading title="Progress" />
         <AutopilotProgress input={progress} />
@@ -449,7 +459,7 @@ export function AutopilotView() {
         <button className={buttonClass.ghost} disabled={disabled || !status?.mandate} onClick={() => void act(async signal => { await post("pause", {}, signal); await load(signal); setMessage("Paused. Already submitted transactions can still settle."); })}><Pause aria-hidden="true" className="size-3.5" />Pause autopilot</button>
         <div className="border border-white/12 p-4">
           <div className="min-w-0">
-            <p className="flex items-center gap-1.5 font-medium"><Sparkles aria-hidden="true" className="size-4 text-[#9ec5f4]" />AI advisor<Tip label="About the AI advisor">Every six hours, when your policy changes and when a bill comes due, your agent runs. Each run, a Groq model may invest less, wait, or move part of the Morpho position back to the agent&apos;s cash, always inside the limits Hodd&apos;s engine sets, and writes down why. It never sees addresses or bill names, and safety moves (protecting your bills, refilling the reserve, returning everything) are never up to it.</Tip></p>
+            <p className="flex items-center gap-1.5 font-medium"><Sparkles aria-hidden="true" className="size-4 text-[#9ec5f4]" />AI advisor<Tip label="About the AI advisor">Every six hours, when your policy changes and when a bill comes due, your agent runs. Each run, a Groq model decides where your vault&apos;s money sits: how much is invested and where, moving between Morpho and USYC, and when to bring money back to cash for the bills you approved. It writes down why, and can only use what each strategy can take and pay out right now. It never sees addresses or bill names. A bill is always paid on its payment day (anything missing is taken out of Morpho or USYC then), and protecting your wallet and returning everything are never up to it.</Tip></p>
             <p className="mt-1 text-[12px] text-white/55">{status?.advisor?.available ? "Always on" + (status.advisor.model ? `, ${status.advisor.model} on Groq` : "") : "Not enabled by the operator yet"}</p>
           </div>
         </div>

@@ -80,3 +80,17 @@ Recovery used to accept only an unchanged nonce, so this payment could never be 
 4. The bill closed through the payment ledger: payment `fed8eedb…` on the `AUTOPILOT_VAULT` rail is CONFIRMED, and the bill is PAID with that payment as its reference.
 
 The vault's cash went from 19.523539 to 17.523539 USDC.
+
+## USYC through the vault, and no amount limits (2026-10-14)
+
+Autopilot now uses both strategies and is limited only by where money can go (Morpho, Hodd's USYC pool, approved recipients up to their cap, the owner). New vaults are created with all four limits at 2^64-1; older vaults can have their owner lift them. Live run with `HODD_VAULT_LIVE=1 vitest run src/lib/autopilot/vault-usyc.live.test.ts` (owner = dev test signer `0xB7a0…a19C`, operator = the Circle smoke agent):
+
+1. **Older vault lifted.** The test vault `0x4cE19EAbc6F38fb95030E400A50abac0f4f12B88` (created with 1,000/2,000 USDC limits) had its owner call `setLimits` with the no-limit values, tx `0x0b34d3cc443556bd42971d9a775c6342d2cd21a8d5711348f736b4b25698cb1e`. Hodd's vault check still accepts it.
+2. **New vault without limits.** Created through the factory, tx `0x623557e1b0ebdf22f66367eaad0ccd00a2b63a75c877403c9c8a15a98dd49281`, vault `0xc7eF24F5694C310E84714834a611Cf4082F8333F`, both strategies allowed. Funded with 1 USDC (`0xc40830ea…4a67`).
+3. **USYC yield read.** Circle's redemption price over the last 1,000,000 blocks (about six days) gives 3.46% a year.
+4. **Agent deposits into USYC.** `depositToStrategy(USYC pool, 0.6 USDC)`, tx `0x0dfd6795a8dc5b75370e01631f35d3b29b0109676f2dd10f31954247d456054d`: 263,094,500,000 pool shares, valued at 0.599999 USDC.
+5. **Agent redeems for a bill.** `redeemFromStrategy` of shares worth 0.2 USDC plus the runner's 0.5% buffer, tx `0x5baadc5c4d405e7a6dbfb9fba7870fd577c5d07e6be816c9d6e7446b55cbdea6`: 0.200999 USDC back in the vault, verified from `RedeemedFromStrategy`.
+6. **Agent redeems the rest to the owner.** `redeemToOwner`, tx `0x5e987a7cdb946ec016b75aa27e7501260ba68d481df20b7508e17d2d933e7bb5`: 0.398998 USDC to the owner.
+7. **Owner sweeps.** `withdrawAll`, tx `0x2112ff1b00de3fdfc29a88681638ba64d957ad5e7f296d7b47018b23c026c4a4`. The vault ends with 0 USDC and 0 pool shares.
+
+Unit coverage: `vault-decision.test.ts` (choosing between the strategies by yield, USYC room and freshness, bills paid from Morpho then USYC, top-ups, returns from both), `vault-advisor.test.ts` (the advisor's split and moves and every bound), `vault-runner.test.ts` (legs per route, USYC share math, per-leg checks), `vault.test.ts` (both strategies, `redeemFromStrategy`, limits).

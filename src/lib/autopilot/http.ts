@@ -25,7 +25,7 @@ const messages:Record<string,string>={
   AGENT_SCHEMA_UNAVAILABLE:"Autopilot is not provisioned. Its local migration has not been applied.",
   AGENT_RATE_LIMIT:"Autopilot starts at most one run every 5 minutes. Nothing was sent; it will start shortly.",
   AGENT_RUN_OPEN:"The agent is still finishing its current step. Nothing new was sent; try again in a moment.",
-  AGENT_BUDGET_LIMIT:"Autopilot manages at most 1,000 USDC in total on testnet. Choose a smaller amount.",
+  AGENT_BUDGET_LIMIT:"That amount is larger than Autopilot can record. Choose a smaller amount.",
   AGENT_OWNER_PROOF_REQUIRED:"Verify ownership of your connected wallet on Overview first. Nothing was sent.",
   AGENT_OWNER_WALLET_CHANGED:"Your agent belongs to another of your wallets. Connect that wallet to use it.",
   AGENT_FUNDING_UNAVAILABLE:"Arc Testnet could not check your transfer right now. Nothing was sent or changed; try again in a moment.",
@@ -126,7 +126,9 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       // The budget covers what the vault already holds plus this amount; fees already counted stay counted.
       const budget=BigInt(current?.spent_minor ?? "0")+plan.holdingsMinor+custodial+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
-      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
+      // The budget only records what went in. In vault mode the agent decides how much goes to Morpho or USYC; the
+      // Morpho share is kept at the policy's value only because the stored mandate format requires one.
+      const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:cap,enabled:true,paused:false},policy);
       await confirm(c,await review(c,wallet,current?.revision ?? 0,"MANDATE",mandate),"MANDATE");
       return Response.json({status:"READY",mode:"VAULT",agentAddress:wallet.address,vaultAddress:plan.vaultAddress,mandate,calls:plan.calls,funding:plan.fund},{headers});
     }
@@ -143,7 +145,7 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       return Response.json({status:arrived>0n?"ARRIVED":"UNRELATED",amountMinor:arrived.toString()},{headers});
     }
     if(action==="vault") {
-      const input=z.discriminatedUnion("op",[z.object({op:z.literal("approve-bill"),obligationId:z.string().min(1).max(128)}).strict(),z.object({op:z.literal("withdraw-all")}).strict()]).parse(body);
+      const input=z.discriminatedUnion("op",[z.object({op:z.literal("approve-bill"),obligationId:z.string().min(1).max(128)}).strict(),z.object({op:z.literal("withdraw-all")}).strict(),z.object({op:z.literal("lift-limits")}).strict()]).parse(body);
       await reserveLiveUsage(c.client,mode,"QUOTE");
       const wallet=await loadWallet(c.userId);
       if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");

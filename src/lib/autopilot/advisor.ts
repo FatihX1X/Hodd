@@ -56,9 +56,9 @@ export function parseUsdc(value: string | null): bigint | null {
   return BigInt(match[1]) * USDC + BigInt((match[2] ?? "").padEnd(6, "0"));
 }
 
-const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+export const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
 
-function record(engine: Decision, status: AdvisorRecord["status"], action: AdvisorRecord["action"], rationale: string, source: { provider: string; model: string } | null): AdvisorRecord {
+export function record(engine: Decision, status: AdvisorRecord["status"], action: AdvisorRecord["action"], rationale: string, source: { provider: string; model: string } | null): AdvisorRecord {
   return { status, action, provider: source?.provider ?? null, model: source?.model ?? null, rationale: clean(rationale), engine: { kind: engine.kind, depositMinor: engine.depositMinor, withdrawMinor: engine.withdrawMinor, transferMinor: engine.transferMinor, explanation: engine.explanation } };
 }
 

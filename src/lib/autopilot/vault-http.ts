@@ -8,8 +8,8 @@ import { nativeWeiToUsdcCeil } from "@/lib/earn/money";
 import type { TreasuryWorkspace } from "@/lib/treasury/models";
 import { agentDb } from "./store";
 import type { AgentWallet } from "./models";
-import { createVaultCall, HODDIE_VAULT_FACTORY, VAULT_LIMITS, VAULT_STRATEGIES, vaultAbi } from "./vault";
-import { predictVault, readRecipients, readVaultFunds, vaultDeployed, verifiedVault } from "./vault-state";
+import { createVaultCall, HODDIE_VAULT_FACTORY, liftLimitsCall, limitsLifted, VAULT_STRATEGIES, vaultAbi } from "./vault";
+import { predictLegacyVault, predictVault, readRecipients, readVaultFunds, vaultDeployed, verifiedVault } from "./vault-state";
 import { vaultBillPlan, VAULT_PAY_WINDOW_MS } from "./vault-decision";
 import { vaultInputs } from "./vault-runner";
 
@@ -19,7 +19,7 @@ export const AGENT_GAS_FLOOR_MINOR = 200_000n;
 const usdcText = (minor: bigint) => (Number(minor > 0n ? minor : 0n) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 6 });
 const minorOf = (wei: bigint) => BigInt(nativeWeiToUsdcCeil(wei.toString()).minorUnits);
 type Call = { to: `0x${string}`; data: `0x${string}`; value: "0" };
-export type OwnerCall = { kind: "CREATE_VAULT" | "AGENT_GAS" | "FUND" | "APPROVE_BILL" | "WITHDRAW_ALL"; call: Call; gasBudgetWei: string; gasCeiling: { gasLimit: string; gasPriceWei: string }; amountMinor: string };
+export type OwnerCall = { kind: "CREATE_VAULT" | "AGENT_GAS" | "FUND" | "APPROVE_BILL" | "WITHDRAW_ALL" | "LIFT_LIMITS"; call: Call; gasBudgetWei: string; gasCeiling: { gasLimit: string; gasPriceWei: string }; amountMinor: string };
 
 /** A call the owner's wallet signs, with a server-estimated gas ceiling (the browser never simulates it). */
 async function ownerCall(owner: `0x${string}`, kind: OwnerCall["kind"], call: Call, amountMinor = 0n): Promise<OwnerCall> {
@@ -32,10 +32,15 @@ async function ownerCall(owner: `0x${string}`, kind: OwnerCall["kind"], call: Ca
 const transfer = (to: string, amount: bigint): Call => ({ to: ARC_TESTNET_USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(to), amount] }), value: "0" });
 const usdcBalance = (address: string) => arcClient.readContract({ address: ARC_TESTNET_USDC, abi: erc20Abi, functionName: "balanceOf", args: [getAddress(address)] });
 
-/** The vault this owner and agent use: the stored one, or the address the factory will deploy to. */
+/**
+ * The vault this owner and agent use: the stored one, else the current parameters' address if it exists, else one
+ * already created with the earlier limits, else the current address (created with the next Invest).
+ */
 export async function ownerVault(wallet: AgentWallet) {
   const owner = getAddress(wallet.owner_address), agent = getAddress(wallet.address);
-  const address = wallet.vault_address ? getAddress(wallet.vault_address) : await predictVault(owner, agent);
+  let address = wallet.vault_address ? getAddress(wallet.vault_address) : null;
+  // The current parameters first: anyone can create the older vault for an owner, and it must not shadow a new one.
+  if (!address) { const current = await predictVault(owner, agent); address = current; if (!(await vaultDeployed(current))) { const legacy = await predictLegacyVault(owner, agent); if (await vaultDeployed(legacy)) address = legacy; } }
   const deployed = await vaultDeployed(address);
   if (deployed) await verifiedVault(address, owner, agent);
   return { address, deployed, owner, agent };
@@ -66,7 +71,7 @@ export async function vaultInvestCalls(wallet: AgentWallet, amount: bigint) {
   const needed = calls.reduce((sum, item) => sum + BigInt(item.amountMinor) + minorOf(BigInt(item.gasBudgetWei)), 0n);
   if (ownerBalance < needed) throw new EarnAccessError("AGENT_FUNDS_INSUFFICIENT", `Your wallet has ${usdcText(ownerBalance)} USDC on Arc Testnet; this needs about ${usdcText(needed)} USDC including the vault setup and network fees. Choose a smaller amount. Nothing was sent.`, 400);
   let holdings = 0n;
-  if (vault.deployed) { const morpho = (await discoverAllowedVaults())[0]; const funds = await readVaultFunds(vault.address, morpho); holdings = BigInt(funds.idle.balance.minorUnits) + BigInt(funds.position.currentBalance.minorUnits); }
+  if (vault.deployed) { const morpho = (await discoverAllowedVaults())[0]; const funds = await readVaultFunds(vault.address, morpho); holdings = BigInt(funds.idle.balance.minorUnits) + BigInt(funds.position.currentBalance.minorUnits) + (funds.usyc?.valueMinor ?? 0n); }
   return { vaultAddress: vault.address, calls, fund, holdingsMinor: holdings };
 }
 
@@ -85,24 +90,28 @@ export async function vaultFundingStatus(wallet: AgentWallet, txHash: `0x${strin
   return { status: "ARRIVED" as const, amountMinor: arrived.toString() };
 }
 
-/** Owner-only vault calls: approve a bill's recipient (cap = the bill amount) or take everything back. */
-export async function vaultOwnerAction(wallet: AgentWallet, workspace: TreasuryWorkspace, input: { op: "approve-bill"; obligationId: string } | { op: "withdraw-all" }) {
+/**
+ * Owner-only vault calls: approve a bill's recipient (cap = the bill amount), remove an older vault's amount limits,
+ * or take everything back.
+ */
+export async function vaultOwnerAction(wallet: AgentWallet, workspace: TreasuryWorkspace, input: { op: "approve-bill"; obligationId: string } | { op: "withdraw-all" } | { op: "lift-limits" }) {
   if (!wallet.vault_address) throw new EarnAccessError("AGENT_VAULT_NOT_DEPLOYED", "Invest once to create your Autopilot vault first.", 409);
   const vault = getAddress(wallet.vault_address), owner = getAddress(wallet.owner_address);
-  await verifiedVault(vault, owner, wallet.address);
+  const config = await verifiedVault(vault, owner, wallet.address);
   if (input.op === "withdraw-all") return { status: "READY" as const, call: await ownerCall(owner, "WITHDRAW_ALL", { to: vault, data: encodeFunctionData({ abi: vaultAbi, functionName: "withdrawAll" }), value: "0" }) };
+  if (input.op === "lift-limits") return limitsLifted(config.limits) ? { status: "ALREADY" as const } : { status: "READY" as const, call: await ownerCall(owner, "LIFT_LIMITS", liftLimitsCall(vault)) };
   const bill = workspace.obligations.find((item) => item.id === input.obligationId && (item.status === "UPCOMING" || item.status === "OVERDUE"));
   if (!bill) throw new EarnAccessError("AGENT_BILL_UNAVAILABLE", "That bill is not open any more.", 404);
   if (!bill.recipientAddress) throw new EarnAccessError("AGENT_BILL_NO_RECIPIENT", "Add the recipient's Arc address to this bill first.", 409);
   const amount = BigInt(bill.amount.minorUnits), recipient = getAddress(bill.recipientAddress);
-  if (amount > VAULT_LIMITS.maxPaymentPerTx) throw new EarnAccessError("AGENT_BILL_OVER_LIMIT", `The vault pays at most ${usdcText(VAULT_LIMITS.maxPaymentPerTx)} USDC per bill. Pay this one yourself.`, 409);
+  if (amount > config.limits.maxPaymentPerTx) throw new EarnAccessError("AGENT_BILL_OVER_LIMIT", `Your vault pays at most ${usdcText(config.limits.maxPaymentPerTx)} USDC per bill. Remove the vault's amount limits first, or pay this one yourself.`, 409);
   const current = (await readRecipients(vault, [recipient])).get(recipient)!;
   if (current.approved && current.capMinor >= amount) return { status: "ALREADY" as const };
   const data = current.approved ? encodeFunctionData({ abi: vaultAbi, functionName: "setRecipientCap", args: [recipient, amount] }) : encodeFunctionData({ abi: vaultAbi, functionName: "addRecipient", args: [recipient, amount] });
   return { status: "READY" as const, call: await ownerCall(owner, "APPROVE_BILL", { to: vault, data, value: "0" }) };
 }
 
-/** What the Autopilot page shows about the vault: balances, contract limits, and who pays each bill. */
+/** What the Autopilot page shows about the vault: balances in each strategy, contract limits, and who pays each bill. */
 export async function vaultView(wallet: AgentWallet, now = new Date()) {
   if (!wallet.vault_address) {
     const vault = await ownerVault(wallet).catch(() => null);
@@ -111,7 +120,7 @@ export async function vaultView(wallet: AgentWallet, now = new Date()) {
   const v = await vaultInputs(wallet.user_id);
   const horizon = now.getTime() + v.workspace.policy.planningHorizonDays * 86_400_000;
   const bills = v.bills.filter((bill) => bill.obligation.status === "OVERDUE" || Date.parse(bill.obligation.dueAt) <= horizon).map((bill) => {
-    const plan = vaultBillPlan(bill);
+    const plan = vaultBillPlan(bill, v.config.limits.maxPaymentPerTx);
     return { id: bill.obligation.id, title: bill.obligation.title, amountMinor: bill.obligation.amount.minorUnits, dueAt: bill.obligation.dueAt, recipient: bill.obligation.recipientAddress ?? null, capMinor: bill.capMinor.toString(), plan, payFrom: plan === "PAYS" ? new Date(Math.max(now.getTime(), Date.parse(bill.obligation.dueAt) - VAULT_PAY_WINDOW_MS)).toISOString() : null };
   });
   const needsYou: { code: string; message: string }[] = [];
@@ -122,9 +131,11 @@ export async function vaultView(wallet: AgentWallet, now = new Date()) {
   const ownerOpen = v.activePayments.filter((row) => row.rail !== "AUTOPILOT_VAULT");
   if (ownerOpen.length) needsYou.push({ code: "OPEN_PAYMENT", message: ownerOpen.some((row) => row.state === "UNKNOWN") ? "A payment you started on Obligations has an unknown outcome. Resolve it there (Check again, or tell Hodd you closed the wallet request); Autopilot pays no bill until then." : "A payment you started on Obligations is still open. Autopilot pays bills once it finishes." });
   if (v.config.paused) needsYou.push({ code: "VAULT_PAUSED", message: "Your vault is paused. Autopilot cannot act until you unpause it." });
+  const lifted = limitsLifted(v.config.limits);
+  if (!lifted) needsYou.push({ code: "LIFT_LIMITS", message: "Your vault still has the old amount limits (at most 1,000 USDC per deposit or payment, 2,000 a day). Remove them with one signature under Your vault: Autopilot is then limited only by where it can send money." });
   return {
-    vault: { address: v.vaultAddress, deployed: true, factory: HODDIE_VAULT_FACTORY, paused: v.config.paused, limits: { maxDepositPerTxMinor: v.config.limits.maxDepositPerTx.toString(), depositLimit24hMinor: v.config.limits.depositLimit24h.toString(), maxPaymentPerTxMinor: v.config.limits.maxPaymentPerTx.toString(), paymentLimit24hMinor: v.config.limits.paymentLimit24h.toString() }, strategies: [...VAULT_STRATEGIES], depositRoomMinor: v.funds.depositRoomMinor.toString(), paymentRoomMinor: v.funds.paymentRoomMinor.toString(), agentGasMinor: v.cash.balance.minorUnits },
-    balances: { cashMinor: v.funds.idle.balance.minorUnits, positionMinor: v.funds.position.currentBalance.minorUnits, redeemableMinor: v.funds.position.redeemable.minorUnits, observedAt: v.funds.idle.observedAt },
+    vault: { address: v.vaultAddress, deployed: true, factory: HODDIE_VAULT_FACTORY, paused: v.config.paused, limitsLifted: lifted, limits: { maxDepositPerTxMinor: v.config.limits.maxDepositPerTx.toString(), depositLimit24hMinor: v.config.limits.depositLimit24h.toString(), maxPaymentPerTxMinor: v.config.limits.maxPaymentPerTx.toString(), paymentLimit24hMinor: v.config.limits.paymentLimit24h.toString() }, strategies: [...VAULT_STRATEGIES], depositRoomMinor: v.funds.depositRoomMinor.toString(), paymentRoomMinor: v.funds.paymentRoomMinor.toString(), agentGasMinor: v.cash.balance.minorUnits },
+    balances: { cashMinor: v.funds.idle.balance.minorUnits, positionMinor: v.funds.position.currentBalance.minorUnits, redeemableMinor: v.funds.position.redeemable.minorUnits, usycMinor: (v.funds.usyc?.valueMinor ?? 0n).toString(), usycRedeemableMinor: (v.funds.usyc?.redeemableMinor ?? 0n).toString(), usycAvailable: Boolean(v.funds.usyc?.ready), morphoApyBps: v.apy.morphoBps, usycApyBps: v.apy.usycBps, observedAt: v.funds.idle.observedAt },
     bills, needsYou,
   };
 }

@@ -157,6 +157,16 @@ with a hostile operator or strategy. Before showing a vault to a user or asking 
 read `owner()`, `operator()`, the four limits, `strategies()` on-chain and compare
 them with what the user agreed to. Index `VaultCreated` only for predicted addresses.
 
+**How the Hodd app uses it (since 2026-10-15).** The app creates every new vault with all four
+limits at `2^64 - 1` (no amount limit) and both strategies (Morpho, HoddUSYCVault): the agent is
+bounded only by where the contract lets money go (the allowlisted strategies, owner-approved
+recipients up to each one's cap, the owner). Vaults created before then with 1,000 USDC per
+deposit or payment and 2,000 USDC a day keep their address; the Autopilot page lets their owner
+call `setLimits` with the same `2^64 - 1` values. Because the address only ever comes from
+`predictVault` with Hodd's own parameters (or the stored, already verified address), the app
+checks `owner()`, `operator()`, `asset()` and that both strategies are allowed, and leaves
+the limits to the owner.
+
 ## Tests
 
 Requires [Foundry](https://book.getfoundry.sh/) (`forge` 1.x).

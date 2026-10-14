@@ -27,14 +27,17 @@ describe("scheduledTrigger", () => {
     expect(scheduledTrigger({ now, lastRunAt: ago(HOUR), lastPolicy: { ...w.policy, minimumLiquidityCoverageBps: w.policy.minimumLiquidityCoverageBps + 500 }, workspace: w })).toBe("POLICY_CHANGED");
   });
 
-  it("reacts when a bill falls due or enters its protection window since the last run", () => {
+  it("reacts when a bill falls due, enters its payment day or its protection window since the last run", () => {
     // Autopilot protects bills 3 days ahead by default.
     const due = workspace([{ dueAt: ago(30 * 60_000).toISOString() }]);
     expect(scheduledTrigger({ now, lastRunAt: ago(HOUR), lastPolicy: due.policy, workspace: due })).toBe("BILL_DUE");
     const entering = workspace([{ dueAt: new Date(now.getTime() + 3 * DAY - 20 * 60_000).toISOString() }]);
     expect(scheduledTrigger({ now, lastRunAt: ago(HOUR), lastPolicy: entering.policy, workspace: entering })).toBe("BILL_PROTECTION");
-    // Already inside the window at the last run: nothing new happened.
-    const inside = workspace([{ dueAt: new Date(now.getTime() + DAY).toISOString() }]);
+    // A day before it falls due the vault may pay an approved bill: its payment day starts.
+    const payDay = workspace([{ dueAt: new Date(now.getTime() + DAY - 20 * 60_000).toISOString() }]);
+    expect(scheduledTrigger({ now, lastRunAt: ago(HOUR), lastPolicy: payDay.policy, workspace: payDay })).toBe("BILL_PAY");
+    // Already inside both windows at the last run: nothing new happened.
+    const inside = workspace([{ dueAt: new Date(now.getTime() + 1.5 * DAY).toISOString() }]);
     expect(scheduledTrigger({ now, lastRunAt: ago(HOUR), lastPolicy: inside.policy, workspace: inside })).toBeNull();
   });
 

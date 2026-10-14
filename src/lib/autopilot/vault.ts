@@ -9,13 +9,24 @@ import { ARC_TESTNET_USDC, EARN_VAULT_ALLOWLIST } from "@/lib/earn/allowlist";
  * withdrawAll(). Factory deployed and verified on Arc Testnet (2026-10-14).
  */
 export const HODDIE_VAULT_FACTORY = getAddress("0x311578B21F269ca0E45f5c16324A3E51f69ce389");
-/** The allowlisted Morpho vault, the strategy Autopilot invests in. */
+/** The allowlisted Morpho vault, one of the two strategies Autopilot invests in. */
 export const VAULT_MORPHO = EARN_VAULT_ALLOWLIST[0].address;
-/** Hodd's pooled USYC vault, allowlisted as a second strategy so the owner can use it later without a new vault. */
+/** Hodd's pooled USYC vault (Circle-allowlisted), the other strategy. It has no exact-assets withdraw: exits redeem shares. */
 export const VAULT_USYC_POOL = getAddress("0x97A7BAaA5416e0aC0674C395cec22FF606120b76");
-/** Fixed parameters (USDC base units). Changing any of them yields a different vault address. */
-export const VAULT_LIMITS = { maxDepositPerTx: 1_000_000_000n, depositLimit24h: 2_000_000_000n, maxPaymentPerTx: 1_000_000_000n, paymentLimit24h: 2_000_000_000n } as const;
+export type StrategyKey = "MORPHO" | "USYC";
+export const strategyAddress = (key: StrategyKey) => key === "MORPHO" ? VAULT_MORPHO : VAULT_USYC_POOL;
+/**
+ * "No limit" for the contract's amount budgets: the largest value its 24-hour windows accept (uint64). The agent is
+ * bounded only by where it can send money (the two strategies, approved recipients up to their caps, the owner).
+ */
+export const VAULT_NO_LIMIT = 2n ** 64n - 1n;
+/** Creation parameters of new vaults (USDC base units). Changing any of them yields a different vault address. */
+export const VAULT_LIMITS = { maxDepositPerTx: VAULT_NO_LIMIT, depositLimit24h: VAULT_NO_LIMIT, maxPaymentPerTx: VAULT_NO_LIMIT, paymentLimit24h: VAULT_NO_LIMIT } as const;
+/** What vaults created before 2026-10-15 started with; their owner lifts them with one setLimits call. */
+export const LEGACY_VAULT_LIMITS = { maxDepositPerTx: 1_000_000_000n, depositLimit24h: 2_000_000_000n, maxPaymentPerTx: 1_000_000_000n, paymentLimit24h: 2_000_000_000n } as const;
 export const VAULT_STRATEGIES = [VAULT_MORPHO, VAULT_USYC_POOL] as const;
+/** True when none of the contract's amount budgets can bind in practice (more than all USDC in existence). */
+export const limitsLifted = (limits: VaultLimits) => [limits.maxDepositPerTx, limits.depositLimit24h, limits.maxPaymentPerTx, limits.paymentLimit24h].every((value) => value >= 2n ** 63n);
 /** Strategy deposits and withdrawals are bounded to at most this loss against the strategy's own preview (0.5%). */
 export const VAULT_SLIPPAGE_BPS = 50n;
 
@@ -42,14 +53,17 @@ export const vaultAbi = parseAbi([
   "function remainingPaymentAllowance() view returns (uint256)",
   "function depositToStrategy(address strategy, uint256 assets, uint256 minShares) returns (uint256 shares)",
   "function withdrawFromStrategy(address strategy, uint256 assets, uint256 maxShares) returns (uint256 shares)",
+  "function redeemFromStrategy(address strategy, uint256 shares, uint256 minAssets) returns (uint256 assets)",
   "function redeemToOwner(address strategy, uint256 shares, uint256 minAssets) returns (uint256 assets)",
   "function transferToOwner(uint256 amount)",
   "function pay(address recipient, uint256 amount, bytes32 ref)",
   "function addRecipient(address recipient, uint256 maxPerPayment)",
   "function setRecipientCap(address recipient, uint256 maxPerPayment)",
+  "function setLimits(uint256 maxDepositPerTx, uint256 depositLimit24h, uint256 maxPaymentPerTx, uint256 paymentLimit24h)",
   "function withdrawAll()",
   "event DepositedToStrategy(address indexed strategy, uint256 assets, uint256 shares)",
   "event WithdrawnFromStrategy(address indexed strategy, uint256 assets, uint256 shares)",
+  "event RedeemedFromStrategy(address indexed strategy, uint256 shares, uint256 assets)",
   "event RedeemedToOwner(address indexed strategy, address indexed owner, uint256 shares, uint256 assets)",
   "event TransferredToOwner(address indexed owner, uint256 amount)",
   "event Payment(address indexed recipient, uint256 amount, bytes32 indexed ref)",
@@ -59,15 +73,20 @@ export const strategyAbi = parseAbi([
   "function convertToAssets(uint256 shares) view returns (uint256)",
   "function previewDeposit(uint256 assets) view returns (uint256)",
   "function previewWithdraw(uint256 assets) view returns (uint256)",
+  "function previewRedeem(uint256 shares) view returns (uint256)",
 ]);
 
 export type VaultLimits = { maxDepositPerTx: bigint; depositLimit24h: bigint; maxPaymentPerTx: bigint; paymentLimit24h: bigint };
-/** The exact createVault arguments for this owner and agent. */
-export function vaultParams(owner: string, operator: string) {
-  return [getAddress(owner), getAddress(operator), { ...VAULT_LIMITS }, [...VAULT_STRATEGIES]] as const;
+/** The exact createVault arguments for this owner and agent (new vaults start without amount limits). */
+export function vaultParams(owner: string, operator: string, limits: VaultLimits = VAULT_LIMITS) {
+  return [getAddress(owner), getAddress(operator), { ...limits }, [...VAULT_STRATEGIES]] as const;
 }
 export function createVaultCall(owner: string, operator: string) {
   return { to: HODDIE_VAULT_FACTORY, data: encodeFunctionData({ abi: factoryAbi, functionName: "createVault", args: vaultParams(owner, operator) }), value: "0" } as const;
+}
+/** The owner's one call that removes the amount limits of an older vault. */
+export function liftLimitsCall(vault: string) {
+  return { to: getAddress(vault), data: encodeFunctionData({ abi: vaultAbi, functionName: "setLimits", args: [VAULT_NO_LIMIT, VAULT_NO_LIMIT, VAULT_NO_LIMIT, VAULT_NO_LIMIT] }), value: "0" } as const;
 }
 /** Bytes32 reference echoed in the Payment event, binding a payment to one bill. */
 export const billRef = (obligationId: string) => keccak256(stringToHex(`hodd-bill:${obligationId}`));
@@ -81,6 +100,7 @@ export type VaultCall = { to: `0x${string}`; data: Hex; value: "0" };
 export type VaultInstruction =
   | { fn: "depositToStrategy"; strategy: `0x${string}`; assets: bigint; minShares: bigint }
   | { fn: "withdrawFromStrategy"; strategy: `0x${string}`; assets: bigint; maxShares: bigint }
+  | { fn: "redeemFromStrategy"; strategy: `0x${string}`; shares: bigint; minAssets: bigint }
   | { fn: "redeemToOwner"; strategy: `0x${string}`; shares: bigint; minAssets: bigint }
   | { fn: "transferToOwner"; amount: bigint }
   | { fn: "pay"; recipient: `0x${string}`; amount: bigint; ref: Hex }
@@ -92,14 +112,17 @@ export function encodeVaultCall(vault: string, op: VaultInstruction): VaultCall 
   switch (op.fn) {
     case "depositToStrategy": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.strategy, op.assets, op.minShares] }), value: "0" };
     case "withdrawFromStrategy": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.strategy, op.assets, op.maxShares] }), value: "0" };
-    case "redeemToOwner": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.strategy, op.shares, op.minAssets] }), value: "0" };
+    case "redeemFromStrategy": case "redeemToOwner": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.strategy, op.shares, op.minAssets] }), value: "0" };
     case "transferToOwner": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.amount] }), value: "0" };
     case "pay": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.recipient, op.amount, op.ref] }), value: "0" };
     case "moveShares": return { to: VAULT_MORPHO, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, op.amount] }), value: "0" };
     case "moveCash": return { to: ARC_TESTNET_USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, op.amount] }), value: "0" };
   }
 }
-/** The operator call decoded back: only these five functions, only on this user's vault, only the Morpho strategy. */
+/**
+ * The operator call decoded back: only these six functions, only on this user's vault, only the Morpho vault or Hodd's
+ * USYC pool as strategy (or a move of the agent's leftover Morpho shares or USDC into this vault).
+ */
 export function decodeVaultCall(vault: string, call: { to: string; data: string; value?: string }): VaultInstruction {
   if ((call.value ?? "0") !== "0") throw new Error("AGENT_VAULT_CALL_REFUSED");
   // A move into the vault: only a transfer of Morpho shares or USDC, and only to this vault.
@@ -110,10 +133,11 @@ export function decodeVaultCall(vault: string, call: { to: string; data: string;
   }
   if (getAddress(call.to) !== getAddress(vault)) throw new Error("AGENT_VAULT_CALL_REFUSED");
   const decoded = decodeFunctionData({ abi: vaultAbi, data: call.data as Hex });
-  const strategy = (value: unknown) => { const address = getAddress(String(value)); if (address !== VAULT_MORPHO) throw new Error("AGENT_VAULT_STRATEGY_REFUSED"); return address; };
+  const strategy = (value: unknown) => { const address = getAddress(String(value)); if (!(VAULT_STRATEGIES as readonly string[]).includes(address)) throw new Error("AGENT_VAULT_STRATEGY_REFUSED"); return address; };
   switch (decoded.functionName) {
     case "depositToStrategy": return { fn: decoded.functionName, strategy: strategy(decoded.args[0]), assets: decoded.args[1], minShares: decoded.args[2] };
     case "withdrawFromStrategy": return { fn: decoded.functionName, strategy: strategy(decoded.args[0]), assets: decoded.args[1], maxShares: decoded.args[2] };
+    case "redeemFromStrategy": return { fn: decoded.functionName, strategy: strategy(decoded.args[0]), shares: decoded.args[1], minAssets: decoded.args[2] };
     case "redeemToOwner": return { fn: decoded.functionName, strategy: strategy(decoded.args[0]), shares: decoded.args[1], minAssets: decoded.args[2] };
     case "transferToOwner": return { fn: decoded.functionName, amount: decoded.args[0] };
     case "pay": return { fn: decoded.functionName, recipient: getAddress(decoded.args[0]), amount: decoded.args[1], ref: decoded.args[2] };
@@ -123,15 +147,14 @@ export function decodeVaultCall(vault: string, call: { to: string; data: string;
 
 export type VaultConfig = { owner: `0x${string}`; operator: `0x${string}`; paused: boolean; asset: `0x${string}`; limits: VaultLimits; strategies: `0x${string}`[] };
 /**
- * Anyone can create a vault that names a user as owner with other settings. Hodd only uses a vault whose owner,
- * operator, asset, limits and strategies are exactly the ones it predicts for this user and agent.
+ * Anyone can create a vault that names a user as owner with other settings, but Hodd only ever uses the address the
+ * factory derives from its own parameters for this user and agent (or the one stored for them). That vault must still
+ * have this owner, operator and asset, and allow both strategies. Its amount limits are the owner's to set.
  */
 export function vaultMatches(config: VaultConfig, owner: string, operator: string) {
   const same = (a: string, b: string) => getAddress(a) === getAddress(b);
   return same(config.owner, owner) && same(config.operator, operator) && same(config.asset, ARC_TESTNET_USDC)
-    && config.limits.maxDepositPerTx === VAULT_LIMITS.maxDepositPerTx && config.limits.depositLimit24h === VAULT_LIMITS.depositLimit24h
-    && config.limits.maxPaymentPerTx === VAULT_LIMITS.maxPaymentPerTx && config.limits.paymentLimit24h === VAULT_LIMITS.paymentLimit24h
-    && config.strategies.length === VAULT_STRATEGIES.length && config.strategies.every((item, index) => same(item, VAULT_STRATEGIES[index]));
+    && VAULT_STRATEGIES.every((strategy) => config.strategies.some((item) => same(item, strategy)));
 }
 
 type Log = TransactionReceipt["logs"][number];
@@ -164,6 +187,11 @@ export function verifyVaultReceipt(receipt: Pick<TransactionReceipt, "logs" | "s
     case "withdrawFromStrategy": {
       const e = one(events.flatMap((item) => item.eventName === "WithdrawnFromStrategy" ? [item.args] : []));
       if (getAddress(e.strategy) !== op.strategy || e.assets !== op.assets || e.shares > op.maxShares) throw new Error("AGENT_VAULT_EVENT_MISMATCH");
+      return { assetsMinor: e.assets, shares: e.shares };
+    }
+    case "redeemFromStrategy": {
+      const e = one(events.flatMap((item) => item.eventName === "RedeemedFromStrategy" ? [item.args] : []));
+      if (getAddress(e.strategy) !== op.strategy || e.shares !== op.shares || e.assets < op.minAssets) throw new Error("AGENT_VAULT_EVENT_MISMATCH");
       return { assetsMinor: e.assets, shares: e.shares };
     }
     case "redeemToOwner": {

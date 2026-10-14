@@ -106,7 +106,7 @@ describe("one-click Autopilot", () => {
     mocks.signer = { sendCalls: vi.fn().mockResolvedValue(hash) };
     handler = investing({ status: "READY", run: { ...run, decision: { ...decision, kind: "INVEST", withdrawMinor: "0", depositMinor: "4000000", transferMinor: "0" } } });
     await ready(); await clickInvest();
-    expect(requests).toEqual([{ action: "invest", body: { amountMinor: "10000000", maxMorphoBps: 4000 } }, { action: "funding", body: { txHash: hash } }, { action: "run", body: {} }]);
+    expect(requests).toEqual([{ action: "invest", body: { amountMinor: "10000000" } }, { action: "funding", body: { txHash: hash } }, { action: "run", body: {} }]);
     // Signed inside the server's gas ceiling: the browser makes no RPC call of its own before the wallet opens.
     expect(mocks.signer.sendCalls).toHaveBeenCalledExactlyOnceWith([funding.funding.call], "1000", undefined, undefined, funding.funding.gasCeiling);
   });
@@ -161,7 +161,7 @@ describe("AI advisor", () => {
     expect(screen.getByText("Advisor adjusted")).toBeInTheDocument();
     expect(screen.getByText("A bill entered its protection window")).toBeInTheDocument();
     expect(screen.getByText("A bill is due in two days; invest less.")).toBeInTheDocument();
-    expect(screen.getByText(/Engine proposed: invested in morpho 10 USDC/)).toBeInTheDocument();
+    expect(screen.getByText(/Engine proposed: invested 10 USDC/)).toBeInTheDocument();
   });
   it("shows the advisor as always on once the operator enables it, with no switch to turn", async () => {
     snapshot = { ...initial(), mandate, advisor: { available: true, model: "openai/gpt-oss-120b" } } as unknown as ReturnType<typeof initial>;
@@ -248,5 +248,38 @@ describe("Autopilot vault mode", () => {
     await waitFor(() => expect(requests.map(item => item.action)).toEqual(["invest", "funding", "run"]));
     expect(mocks.signer.sendCalls.mock.calls.map(([sent]) => sent[0])).toEqual(calls.map(item => item.call));
     expect(requests[1].body).toEqual({ txHash: hash });
+  });
+
+  it("shows cash, Morpho and USYC in the vault, the yields the agent compares and the only places it can send money", async () => {
+    const noLimit = "18446744073709551615";
+    snapshot = { ...vaultSnapshot(), balances: { cashMinor: "2000000", positionMinor: "5000000", redeemableMinor: "5000000", usycMinor: "3000000", usycRedeemableMinor: "3000000", usycAvailable: true, morphoApyBps: 512, usycApyBps: 347, observedAt: "2026-10-14" },
+      vault: { ...vaultSnapshot().vault, limitsLifted: true, limits: { maxDepositPerTxMinor: noLimit, depositLimit24hMinor: noLimit, maxPaymentPerTxMinor: noLimit, paymentLimit24hMinor: noLimit } } } as unknown as ReturnType<typeof initial>;
+    await ready();
+    expect(screen.getByRole("img", { name: "2 USDC cash, 5 USDC in morpho, 3 USDC in usyc" })).toBeInTheDocument();
+    expect(screen.getAllByText("10 USDC").length).toBeGreaterThan(0);
+    expect(screen.getByText("5.12%")).toBeInTheDocument();
+    expect(screen.getByText("3.47%")).toBeInTheDocument();
+    for (const place of ["Morpho vault", "Hodd's USYC pool", "Bill recipients you approved", "Your own wallet"]) expect(screen.getByText(place)).toBeInTheDocument();
+    expect(screen.getByText("Payments a day").nextSibling).toHaveTextContent("No limit");
+    expect(screen.queryByRole("button", { name: /Remove amount limits/ })).toBeNull();
+    expect(screen.queryByText(/Morpho share/)).toBeNull();
+  });
+
+  it("removes an older vault's amount limits with one owner transaction, after Confirm?", async () => {
+    snapshot = { ...vaultSnapshot(), vault: { ...vaultSnapshot().vault, limitsLifted: false } } as unknown as ReturnType<typeof initial>;
+    mocks.signer = { sendCalls: vi.fn().mockResolvedValue(hash) };
+    const lift = ownerCall("LIFT_LIMITS", vaultAddress);
+    handler = action => {
+      if (action === "vault") { snapshot = { ...snapshot, vault: { ...(snapshot as unknown as ReturnType<typeof vaultSnapshot>).vault, limitsLifted: true } } as unknown as ReturnType<typeof initial>; return json({ status: "READY", call: lift }); }
+      return json({ status: "READY", run: null });
+    };
+    await ready();
+    const button = screen.getByRole("button", { name: /Remove amount limits/ });
+    fireEvent.click(button);
+    expect(requests).toEqual([]);
+    await act(async () => { fireEvent.click(button); });
+    await waitFor(() => expect(requests).toContainEqual({ action: "vault", body: { op: "lift-limits" } }));
+    await waitFor(() => expect(mocks.signer!.sendCalls).toHaveBeenCalledExactlyOnceWith([lift.call], "1000", undefined, undefined, lift.gasCeiling));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no amount limits now"), { timeout: 5_000 });
   });
 });

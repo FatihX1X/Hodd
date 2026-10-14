@@ -8,15 +8,15 @@ import { paymentProposalSchema } from "@/lib/payments/models";
 import { agentAdapter } from "./circle";
 import { agentFeeConfig } from "./calls";
 import { agentInputs } from "./inputs";
-import { adviseDecision, advisorEnvelope, advisorFacts } from "./advisor";
-import { advisorConfigured, groqAdvisor } from "./advisor-model";
+import { advisorConfigured, groqVaultAdvisor } from "./advisor-model";
+import { adviseVaultDecision, vaultAdvisorEnvelope, vaultAdvisorFacts } from "./vault-advisor";
 import { agentDb, patchRun, patchStep, type AgentRun, type AgentStep } from "./store";
 import { stepAction } from "./state";
 import type { RunTrigger } from "./triggers";
 import type { Decision } from "./models";
-import { billRef, decodeVaultCall, encodeVaultCall, maxSharesFor, minAssetsFor, minSharesFor, strategyAbi, verifyVaultReceipt, VAULT_MORPHO, type VaultInstruction } from "./vault";
-import { convertToAssets, previewDeposit, previewWithdraw, readRecipients, readVaultFunds, verifiedVault } from "./vault-state";
-import { AGENT_FEE_FLOAT_MINOR, decideVault, vaultBillPlan, type VaultBill } from "./vault-decision";
+import { billRef, decodeVaultCall, encodeVaultCall, maxSharesFor, minAssetsFor, minSharesFor, strategyAbi, strategyAddress, verifyVaultReceipt, VAULT_MORPHO, VAULT_SLIPPAGE_BPS, VAULT_USYC_POOL, type StrategyKey, type VaultInstruction } from "./vault";
+import { convertToAssets, previewDeposit, previewRedeem, previewWithdraw, readRecipients, readVaultFunds, usycApyBps, verifiedVault } from "./vault-state";
+import { AGENT_FEE_FLOAT_MINOR, decideVault, routeOf, vaultBillPlan, vaultState, type VaultBill, type VaultDecisionInputs } from "./vault-decision";
 
 const ACTIVE_PAYMENT = ["AWAITING_SIGNATURE", "SUBMITTED", "UNKNOWN"];
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -28,7 +28,7 @@ export async function vaultInputs(userId: string) {
   if (!i.wallet.vault_address) throw new Error("AGENT_VAULT_NOT_DEPLOYED");
   const vaultAddress = getAddress(i.wallet.vault_address);
   const config = await verifiedVault(vaultAddress, i.wallet.owner_address, i.wallet.address);
-  const [funds, agentShares] = await Promise.all([readVaultFunds(vaultAddress, i.vault), arcClient.readContract({ address: VAULT_MORPHO, abi: strategyAbi, functionName: "balanceOf", args: [getAddress(i.wallet.address)] })]);
+  const [funds, agentShares, usycBps] = await Promise.all([readVaultFunds(vaultAddress, i.vault), arcClient.readContract({ address: VAULT_MORPHO, abi: strategyAbi, functionName: "balanceOf", args: [getAddress(i.wallet.address)] }), usycApyBps()]);
   const custodial = { shares: agentShares, positionMinor: BigInt(i.agentPosition.currentBalance.minorUnits), cashMinor: BigInt(i.cash.balance.minorUnits) };
   const openBills = i.workspace.obligations.filter((o) => o.status === "UPCOMING" || o.status === "OVERDUE");
   const withRecipient = openBills.filter((o) => o.recipientAddress);
@@ -42,25 +42,26 @@ export async function vaultInputs(userId: string) {
     const r = obligation.recipientAddress ? recipients.get(getAddress(obligation.recipientAddress)) : undefined;
     return { obligation, approved: r?.approved ?? false, capMinor: r?.capMinor ?? 0n, busy: activeRows.some((row) => row.obligation_id === obligation.id) };
   });
-  return { ...i, vaultAddress, config, funds, bills, activePayments: activeRows, custodial };
+  return { ...i, vaultAddress, config, funds, bills, activePayments: activeRows, custodial, apy: { morphoBps: i.vault.apyBps ?? null, usycBps } };
 }
 export type VaultInputs = Awaited<ReturnType<typeof vaultInputs>>;
 
+export function vaultDecisionInputs(v: VaultInputs, now = new Date()): VaultDecisionInputs {
+  return { workspace: v.workspace, ownerPositions: v.ownerPositions, vaultPosition: v.funds.position, usyc: v.funds.usyc, apy: v.apy, mandate: v.stored.mandate, idleMinor: v.funds.idle.balance.minorUnits, returnAll: v.stored.return_requested, bills: v.bills, depositRoomMinor: v.funds.depositRoomMinor, paymentRoomMinor: v.funds.paymentRoomMinor, maxPaymentPerTxMinor: v.config.limits.maxPaymentPerTx, agentGasMinor: v.cash.balance.minorUnits, feeReserveMinor: v.feeReserveMinor, ledgerBusy: v.activePayments.length > 0, custodial: v.custodial, now };
+}
 export function vaultDecision(v: VaultInputs, now = new Date()) {
-  return decideVault({ workspace: v.workspace, ownerPositions: v.ownerPositions, vaultPosition: v.funds.position, mandate: v.stored.mandate, idleMinor: v.funds.idle.balance.minorUnits, spentMinor: String(v.stored.spent_minor), returnAll: v.stored.return_requested, bills: v.bills, depositRoomMinor: v.funds.depositRoomMinor, paymentRoomMinor: v.funds.paymentRoomMinor, agentGasMinor: v.cash.balance.minorUnits, feeReserveMinor: v.feeReserveMinor, ledgerBusy: v.activePayments.length > 0, custodial: v.custodial, now });
+  return decideVault(vaultDecisionInputs(v, now));
 }
 
-/** Same bounded advisor as the custodial agent, over the vault's cash and Morpho position (fees are the agent's). */
+/** The advisor decides where the vault's free cash sits between Morpho, USYC and cash, inside what both can take now. */
 async function adviseVault(v: VaultInputs, engine: Decision, now = new Date()): Promise<Decision> {
   const m = v.stored.mandate;
   if (v.stored.return_requested || !m.enabled || m.paused || !(await advisorConfigured())) return engine;
   const controls = await liveControls(); if (!controls?.get("AGENT_ADVISOR")) return engine;
-  const position = v.funds.position, observed = Date.parse(position.observedAt);
-  if (position.liquidityStatus !== "READY" || now.getTime() - observed > 60_000) return engine;
-  const envelope = advisorEnvelope(engine, { cashMinor: BigInt(v.funds.idle.balance.minorUnits), redeemableMinor: BigInt(position.redeemable.minorUnits), positionMinor: BigInt(position.currentBalance.minorUnits), feeReserveMinor: 0n });
+  const input = vaultDecisionInputs(v, now), s = vaultState(input);
+  const envelope = vaultAdvisorEnvelope(engine, input, s);
   if (!envelope) return engine;
-  const facts = advisorFacts({ workspace: v.workspace, cash: v.funds.idle.balance, ownerCash: v.ownerCash.balance, agentPosition: position, vault: v.vault, mandate: m, remainingBudgetMinor: engine.remainingBudgetMinor, now });
-  return adviseDecision(engine, envelope, facts, groqAdvisor);
+  return adviseVaultDecision(engine, envelope, vaultAdvisorFacts(input, s, BigInt(v.vault.liquidity.minorUnits)), groqVaultAdvisor);
 }
 
 /** Records a vault-mode run (NO_ACTION or RUNNING). The caller advances a RUNNING one. */
@@ -68,7 +69,7 @@ export async function createVaultRun(userId: string, trigger: RunTrigger): Promi
   const v = await vaultInputs(userId);
   const decision = await adviseVault(v, vaultDecision(v));
   const id = randomUUID();
-  const snapshot = { mode: "VAULT", vault: v.vaultAddress, trigger, workspace: v.workspace, workspaceRevision: v.workspaceRevision, mandate: v.stored.mandate, mandateRevision: v.stored.revision, spentMinor: String(v.stored.spent_minor), cash: v.funds.idle, agentGas: v.cash, ownerCash: v.ownerCash, ownerPositions: v.ownerPositions, agentPosition: v.funds.position, feeReserveMinor: v.feeReserveMinor, depositRoomMinor: v.funds.depositRoomMinor.toString(), paymentRoomMinor: v.funds.paymentRoomMinor.toString(), bills: v.bills.map((bill) => ({ id: bill.obligation.id, plan: vaultBillPlan(bill), dueAt: bill.obligation.dueAt, amountMinor: bill.obligation.amount.minorUnits })) };
+  const snapshot = { mode: "VAULT", vault: v.vaultAddress, trigger, workspace: v.workspace, workspaceRevision: v.workspaceRevision, mandate: v.stored.mandate, mandateRevision: v.stored.revision, spentMinor: String(v.stored.spent_minor), cash: v.funds.idle, agentGas: v.cash, ownerCash: v.ownerCash, ownerPositions: v.ownerPositions, agentPosition: v.funds.position, feeReserveMinor: v.feeReserveMinor, usyc: v.funds.usyc ? { shares: v.funds.usyc.shares.toString(), valueMinor: v.funds.usyc.valueMinor.toString(), redeemableMinor: v.funds.usyc.redeemableMinor.toString(), depositRoomMinor: v.funds.usyc.depositRoomMinor.toString(), ready: v.funds.usyc.ready, observedAt: v.funds.usyc.observedAt } : null, apy: v.apy, depositRoomMinor: v.funds.depositRoomMinor.toString(), paymentRoomMinor: v.funds.paymentRoomMinor.toString(), bills: v.bills.map((bill) => ({ id: bill.obligation.id, plan: vaultBillPlan(bill, v.config.limits.maxPaymentPerTx), dueAt: bill.obligation.dueAt, amountMinor: bill.obligation.amount.minorUnits })) };
   const { error } = await agentDb().rpc("hodd_start_agent_run", { p_id: id, p_user: userId, p_snapshot: snapshot, p_decision: decision, p_quote: null, p_return_all: v.stored.return_requested, p_revision: v.stored.revision });
   if (error) throw new Error(/rate limit/i.test(error.message) ? "AGENT_RATE_LIMIT" : "AGENT_RUN_CHANGED");
   const { data, error: readError } = await agentDb().from("agent_runs").select("*").eq("id", id).single();
@@ -77,26 +78,69 @@ export async function createVaultRun(userId: string, trigger: RunTrigger): Promi
 }
 
 const decoded = (run: AgentRun, step: AgentStep) => decodeVaultCall(String(run.snapshot.vault), step.call);
+const key = (strategy: string): StrategyKey => getAddress(strategy) === VAULT_USYC_POOL ? "USYC" : "MORPHO";
+const plus = (value: bigint) => (value * (10_000n + VAULT_SLIPPAGE_BPS) + 9_999n) / 10_000n;
+
+type Leg = { type: "withdraw" | "deposit" | "toOwner"; strategy: StrategyKey; amount: bigint } | { type: "pay" } | { type: "transfer"; amount: bigint };
+/** The legs a decision takes, in order: money out of strategies first, then into them, then the payment. */
+export function plannedLegs(d: Decision): Leg[] {
+  const r = routeOf(d), n = (value: string) => BigInt(value);
+  const out = (type: "withdraw" | "toOwner"): Leg[] => [
+    ...(n(r.withdrawMorphoMinor) > 0n ? [{ type, strategy: "MORPHO" as const, amount: n(r.withdrawMorphoMinor) }] : []),
+    ...(n(r.withdrawUsycMinor) > 0n ? [{ type, strategy: "USYC" as const, amount: n(r.withdrawUsycMinor) }] : []),
+  ];
+  const into: Leg[] = [
+    ...(n(r.depositMorphoMinor) > 0n ? [{ type: "deposit" as const, strategy: "MORPHO" as const, amount: n(r.depositMorphoMinor) }] : []),
+    ...(n(r.depositUsycMinor) > 0n ? [{ type: "deposit" as const, strategy: "USYC" as const, amount: n(r.depositUsycMinor) }] : []),
+  ];
+  switch (d.kind) {
+    case "INVEST": return into;
+    case "REBALANCE": return [...out("withdraw"), ...into];
+    case "RESERVE_REFILL": case "DE_RISK": return out("withdraw");
+    case "PAY_BILL": return [...out("withdraw"), { type: "pay" }];
+    // One leg: the vault's cash if there is any to send, otherwise a redemption straight to the owner.
+    case "LIQUIDITY_TOP_UP": return n(d.transferMinor) > 0n ? [{ type: "transfer", amount: n(d.transferMinor) }] : out("toOwner").slice(0, 1);
+    default: return [];
+  }
+}
+
 /**
- * The next operator call for this run, or null when it is done. Legs: INVEST deposits; RESERVE_REFILL and DE_RISK
- * withdraw into the vault; LIQUIDITY_TOP_UP sends idle cash or redeems straight to the owner; RETURN_ALL redeems the
- * whole position to the owner, then sends the idle cash; PAY_BILL withdraws the missing part, then pays.
+ * The next operator call for this run, or null when it is done. Legs follow plannedLegs; RETURN_ALL redeems every
+ * strategy position straight to the owner, then sends the vault's cash; MOVE_TO_VAULT moves the custodial agent's
+ * leftovers in. A withdrawal from USYC redeems shares worth a little more than the amount (the pool pays by shares).
  */
 export async function nextVaultLeg(run: AgentRun, done: VaultInstruction[], v: VaultInputs): Promise<VaultInstruction | null> {
-  const d = run.decision, idle = BigInt(v.funds.idle.balance.minorUnits), shares = v.funds.shares;
-  const withdraw = async (assets: bigint): Promise<VaultInstruction> => { const preview = await previewWithdraw(assets); const max = maxSharesFor(preview); return { fn: "withdrawFromStrategy", strategy: VAULT_MORPHO, assets, maxShares: max < shares ? max : shares }; };
-  switch (d.kind) {
-    case "INVEST": return done.length ? null : { fn: "depositToStrategy", strategy: VAULT_MORPHO, assets: BigInt(d.depositMinor), minShares: minSharesFor(await previewDeposit(BigInt(d.depositMinor))) };
-    case "RESERVE_REFILL": case "DE_RISK": return done.length ? null : withdraw(BigInt(d.withdrawMinor));
-    case "LIQUIDITY_TOP_UP": {
-      if (done.length) return null;
-      if (BigInt(d.transferMinor) > 0n) return { fn: "transferToOwner", amount: BigInt(d.transferMinor) };
-      const preview = await previewWithdraw(BigInt(d.withdrawMinor));
-      return { fn: "redeemToOwner", strategy: VAULT_MORPHO, shares: preview < shares ? preview : shares, minAssets: minAssetsFor(BigInt(d.withdrawMinor)) };
+  const d = run.decision, idle = BigInt(v.funds.idle.balance.minorUnits), morphoShares = v.funds.shares, usyc = v.funds.usyc;
+  const usycShares = (assets: bigint, buffer: boolean) => {
+    if (!usyc || usyc.valueMinor === 0n || usyc.shares === 0n) throw new Error("AGENT_USYC_UNAVAILABLE");
+    const shares = (assets * usyc.shares + usyc.valueMinor - 1n) / usyc.valueMinor;
+    const wanted = buffer ? plus(shares) : shares, most = usyc.redeemableShares < usyc.shares ? usyc.redeemableShares : usyc.shares;
+    return wanted < most ? wanted : most;
+  };
+  const build = async (leg: Leg): Promise<VaultInstruction> => {
+    if (leg.type === "pay") return { fn: "pay", recipient: getAddress(d.bill!.recipient), amount: BigInt(d.bill!.amountMinor), ref: billRef(d.bill!.obligationId) };
+    if (leg.type === "transfer") return { fn: "transferToOwner", amount: leg.amount };
+    const strategy = strategyAddress(leg.strategy);
+    if (leg.type === "deposit") {
+      // After a USYC redemption the vault may hold a little less than planned: never deposit more than it has.
+      const assets = leg.amount < idle ? leg.amount : idle;
+      return { fn: "depositToStrategy", strategy, assets, minShares: minSharesFor(await previewDeposit(assets, strategy)) };
     }
+    if (leg.strategy === "MORPHO") {
+      const preview = await previewWithdraw(leg.amount);
+      if (leg.type === "toOwner") return { fn: "redeemToOwner", strategy, shares: preview < morphoShares ? preview : morphoShares, minAssets: minAssetsFor(leg.amount) };
+      const most = maxSharesFor(preview);
+      return { fn: "withdrawFromStrategy", strategy, assets: leg.amount, maxShares: most < morphoShares ? most : morphoShares };
+    }
+    const shares = usycShares(leg.amount, leg.type === "withdraw");
+    return { fn: leg.type === "withdraw" ? "redeemFromStrategy" : "redeemToOwner", strategy, shares, minAssets: minAssetsFor(await previewRedeem(shares)) };
+  };
+  switch (d.kind) {
     case "RETURN_ALL": {
       if (done.some((op) => op.fn === "transferToOwner")) return null;
-      if (!done.length && shares > 0n) return { fn: "redeemToOwner", strategy: VAULT_MORPHO, shares, minAssets: minAssetsFor(await convertToAssets(shares)) };
+      const redeemed = (s: StrategyKey) => done.some((op) => op.fn === "redeemToOwner" && key(op.strategy) === s);
+      if (!redeemed("MORPHO") && morphoShares > 0n) return { fn: "redeemToOwner", strategy: VAULT_MORPHO, shares: morphoShares, minAssets: minAssetsFor(await convertToAssets(morphoShares)) };
+      if (!redeemed("USYC") && usyc && usyc.redeemableShares > 0n) return { fn: "redeemToOwner", strategy: VAULT_USYC_POOL, shares: usyc.redeemableShares, minAssets: minAssetsFor(await previewRedeem(usyc.redeemableShares)) };
       return idle > 0n ? { fn: "transferToOwner", amount: idle } : null;
     }
     case "MOVE_TO_VAULT": {
@@ -105,26 +149,46 @@ export async function nextVaultLeg(run: AgentRun, done: VaultInstruction[], v: V
       const cash = v.custodial.cashMinor > AGENT_FEE_FLOAT_MINOR ? v.custodial.cashMinor - AGENT_FEE_FLOAT_MINOR : 0n;
       return cash > 0n ? { fn: "moveCash", amount: cash } : null;
     }
-    case "PAY_BILL": {
-      if (!d.bill) throw new Error("AGENT_BILL_MISSING");
-      const legs = BigInt(d.withdrawMinor) > 0n ? ["withdraw", "pay"] : ["pay"];
-      const leg = legs[done.length];
-      if (!leg) return null;
-      if (leg === "withdraw") return withdraw(BigInt(d.withdrawMinor));
-      return { fn: "pay", recipient: getAddress(d.bill.recipient), amount: BigInt(d.bill.amountMinor), ref: billRef(d.bill.obligationId) };
-    }
-    default: return null;
+    case "PAY_BILL": if (!d.bill) throw new Error("AGENT_BILL_MISSING");
   }
+  const leg = plannedLegs(d)[done.length];
+  return leg ? build(leg) : null;
 }
 
-/** Fresh state must still allow the next leg; an advised run may only ever be smaller than the fresh engine decision. */
+/** Decisions that come before investing: while fresh state asks for one of these, no investment leg goes ahead. */
+const FIRST = new Set(["PAY_BILL", "LIQUIDITY_TOP_UP", "MOVE_TO_VAULT", "RETURN_ALL"]);
+/**
+ * Fresh state must still allow the next leg. Investing and moving between strategies never go ahead while something
+ * comes first (a due bill, the owner's top-up, a return), never deposit more than the vault's cash, and never exceed
+ * what the source can pay out or the destination can take.
+ */
 export function vaultLegAllowed(run: AgentRun, op: VaultInstruction, fresh: Decision, v: VaultInputs, ownStepId?: string) {
   const d = run.decision, n = (value: string) => BigInt(value);
-  const redeemable = n(v.funds.position.redeemable.minorUnits);
+  const s = vaultState(vaultDecisionInputs(v));
+  const room = (strategy: string) => key(strategy) === "USYC" ? s.usycRoom : s.morphoRoom;
+  const usyc = v.funds.usyc;
+  // A redemption out of a strategy: Morpho by exact assets, USYC by shares (never more than the pool pays out now).
+  // Into the vault, unless the run sends money to the owner (a top-up): redeemToOwner is only ever a top-up leg here.
+  const outOk = (leg: VaultInstruction, toOwner = false) => {
+    if (leg.fn === "withdrawFromStrategy") return !toOwner && key(leg.strategy) === "MORPHO" && leg.assets > 0n && s.morphoRedeemable >= leg.assets;
+    if (leg.fn !== (toOwner ? "redeemToOwner" : "redeemFromStrategy")) return false;
+    if (leg.shares <= 0n) return false;
+    if (key(leg.strategy) === "MORPHO") return leg.shares <= v.funds.shares && s.morphoFresh;
+    return Boolean(usyc) && s.usycFresh && leg.shares <= usyc!.redeemableShares;
+  };
   switch (d.kind) {
-    case "INVEST": return fresh.kind === "INVEST" && n(fresh.depositMinor) >= n(d.depositMinor);
-    case "RESERVE_REFILL": case "LIQUIDITY_TOP_UP": return fresh.kind === d.kind && n(fresh.withdrawMinor) >= n(d.withdrawMinor) && n(fresh.transferMinor) >= n(d.transferMinor);
-    case "DE_RISK": return (fresh.kind === "INVEST" || fresh.kind === "NO_ACTION") && redeemable >= n(d.withdrawMinor);
+    case "INVEST": case "REBALANCE": case "DE_RISK": case "RESERVE_REFILL": {
+      if (FIRST.has(fresh.kind)) return false;
+      // The advisor may invest the vault's whole cash: a due bill is still paid on its payment day (PAY_BILL comes first).
+      if (op.fn === "depositToStrategy") return op.assets > 0n && op.assets <= s.idle && op.assets <= room(op.strategy);
+      return outOk(op);
+    }
+    case "LIQUIDITY_TOP_UP": {
+      if (fresh.kind !== "LIQUIDITY_TOP_UP") return false;
+      const need = n(fresh.transferMinor) + n(fresh.withdrawMinor);
+      if (op.fn === "transferToOwner") return op.amount <= need && op.amount <= s.idle;
+      return op.fn === "redeemToOwner" && need >= n(d.withdrawMinor) && outOk(op, true);
+    }
     case "RETURN_ALL": return run.return_all && v.stored.return_requested;
     // Only into this owner's verified vault, never more than the agent holds, always keeping its fee float.
     case "MOVE_TO_VAULT": return op.fn === "moveShares" ? op.amount <= v.custodial.shares : op.fn === "moveCash" && op.amount + AGENT_FEE_FLOAT_MINOR <= v.custodial.cashMinor;
@@ -135,8 +199,9 @@ export function vaultLegAllowed(run: AgentRun, op: VaultInstruction, fresh: Deci
       // The ledger marks a bill PAID only while no other payment of this user is open (an owner payment or another
       // run); this step's own record never counts against it.
       if (v.activePayments.some((row) => row.id !== ownStepId)) return false;
-      if (op.fn === "pay") return n(v.funds.idle.balance.minorUnits) >= n(d.bill.amountMinor) && v.funds.paymentRoomMinor >= n(d.bill.amountMinor);
-      return n(v.funds.idle.balance.minorUnits) + redeemable >= n(d.bill.amountMinor);
+      // The payment is exactly the bill: its approved recipient, its amount, its reference.
+      if (op.fn === "pay") return same(op.recipient, d.bill.recipient) && op.amount === n(d.bill.amountMinor) && op.ref === billRef(d.bill.obligationId) && s.idle >= n(d.bill.amountMinor) && v.funds.paymentRoomMinor >= n(d.bill.amountMinor);
+      return s.idle + s.morphoRedeemable + s.usycRedeemable >= n(d.bill.amountMinor) && outOk(op);
     }
     default: return false;
   }
@@ -187,11 +252,11 @@ export async function advanceVaultRun(run: AgentRun, steps: AgentStep[], allowSu
   if (!step) {
     const call = encodeVaultCall(v.vaultAddress, op);
     const gasLimit = (await arcClient.estimateGas({ account: getAddress(v.wallet.address), to: call.to, data: call.data, value: 0n }) * 120n + 99n) / 100n;
-    const amount = op.fn === "depositToStrategy" || op.fn === "withdrawFromStrategy" ? op.assets : op.fn === "redeemToOwner" ? op.minAssets : op.fn === "moveShares" ? 0n : op.amount;
+    const amount = op.fn === "depositToStrategy" || op.fn === "withdrawFromStrategy" ? op.assets : op.fn === "redeemToOwner" || op.fn === "redeemFromStrategy" ? op.minAssets : op.fn === "moveShares" ? 0n : op.amount;
     step = { id: randomUUID(), run_id: run.id, user_id: run.user_id, state: "PREPARED", stage: "VAULT", call, gas_limit: gasLimit.toString(), gas_price_wei: v.gasPriceWei, started_block: (await arcClient.getBlockNumber()).toString(), amount_minor: amount.toString(), circle_transaction_id: null, tx_hash: null, receipt: null };
     const { error } = await agentDb().from("agent_run_steps").insert(step); if (error) throw new Error("AGENT_STEP_STORE_UNAVAILABLE");
   }
-  // The signed call is exactly the leg: this user's vault, an operator function, the Morpho strategy or the approved recipient.
+  // The signed call is exactly the leg: this user's vault, an operator function, Morpho or the USYC pool, or the approved recipient.
   const signed = decoded(run, step);
   if (JSON.stringify(signed, (_, value) => typeof value === "bigint" ? value.toString() : value) !== JSON.stringify(op, (_, value) => typeof value === "bigint" ? value.toString() : value)) throw new Error("AGENT_VAULT_CALL_REFUSED");
   const fee = BigInt(nativeWeiToUsdcCeil((BigInt(step.gas_limit) * BigInt(step.gas_price_wei)).toString()).minorUnits);
@@ -261,7 +326,8 @@ async function settleVaultStep(run: AgentRun, initial: AgentStep): Promise<Agent
 
 async function finishVault(run: AgentRun, v: VaultInputs) {
   // A return leaves nothing but dust behind; any other run is complete once its legs are verified.
-  const left = BigInt(v.funds.idle.balance.minorUnits) + BigInt(v.funds.position.currentBalance.minorUnits);
-  if (run.return_all && left > 10n) return patchRun(run, "PARTIAL", "AGENT_RETURN_HAS_RESIDUAL_ASSETS");
+  const left = BigInt(v.funds.idle.balance.minorUnits) + BigInt(v.funds.position.currentBalance.minorUnits) + (v.funds.usyc?.valueMinor ?? 0n);
+  // USYC shares that could not be redeemed (Circle paused the pool, or it could not be read) are never "nothing left".
+  if (run.return_all && (left > 10n || (v.funds.usyc?.shares ?? 0n) > 0n)) return patchRun(run, "PARTIAL", "AGENT_RETURN_HAS_RESIDUAL_ASSETS");
   return patchRun(run, "COMPLETED");
 }

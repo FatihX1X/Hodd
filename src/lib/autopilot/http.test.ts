@@ -53,15 +53,15 @@ describe("one-click invest",()=>{
     const response=await post("invest",{amountMinor:"1000000"});expect(response.status).toBe(200);
     expect(reviewed()).toMatchObject({p_mandate:{budgetMinor:(14_892n+2_000_000n+40_000_000n+1_000_000n).toString()}});
   });
-  it("never exceeds the policy's Morpho cap and creates the agent wallet on first use",async()=>{
+  it("stores the policy's Morpho value whatever the browser sends (the vault agent ignores it) and creates the agent wallet on first use",async()=>{
     m.wallet=null;m.mandate=null;m.create.mockResolvedValue({id:"00000000-0000-4000-8000-000000000003",address:agent});
     const response=await post("invest",{amountMinor:"5000000",maxMorphoBps:9000});
     expect(response.status).toBe(200);expect(m.create).toHaveBeenCalledTimes(1);expect(m.upserts).toHaveLength(1);
     expect(reviewed()).toMatchObject({p_mandate_revision:0,p_mandate:{budgetMinor:"5000000",maxMorphoBps:4000}});
   });
-  it("refuses while a run is open, over the testnet budget limit and for malformed amounts, before any review",async()=>{
+  it("refuses while a run is open, beyond what a mandate can record and for malformed amounts, before any review",async()=>{
     m.open={id:"run"};let response=await post("invest",{amountMinor:"1000000"});expect(response.status).toBe(409);expect((await response.json()).code).toBe("AGENT_RUN_OPEN");
-    m.open=null;m.holdings=999_000_000n;response=await post("invest",{amountMinor:"2000000"});expect(response.status).toBe(400);expect((await response.json()).code).toBe("AGENT_BUDGET_LIMIT");m.holdings=0n;
+    m.open=null;m.holdings=999_999_999_000_000n;response=await post("invest",{amountMinor:"2000000"});expect(response.status).toBe(400);expect((await response.json()).code).toBe("AGENT_BUDGET_LIMIT");m.holdings=0n;
     for(const amountMinor of ["0","1.5","-1"]){response=await post("invest",{amountMinor});expect(response.status).toBe(400);}
     expect(m.rpc).not.toHaveBeenCalled();
   });

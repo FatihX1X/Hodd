@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { TreasuryPolicy } from "@/lib/treasury/models";
 
-export const AGENT_MAX_BUDGET_MINOR = 1_000_000_000n;
+/** The mandate's budget is a record of what the owner put into Autopilot, not a limit on the agent (1 billion USDC). */
+export const AGENT_MAX_BUDGET_MINOR = 1_000_000_000_000_000n;
 const minor = z.string().regex(/^(0|[1-9]\d{0,15})$/);
 export const mandateSchema = z.object({
   budgetMinor: minor, maxMorphoBps: z.number().int().min(0).max(10_000),
@@ -21,8 +22,9 @@ export const agentWalletSchema = z.object({ user_id: z.string().uuid(), circle_w
 export type AgentWallet = z.infer<typeof agentWalletSchema>;
 export const runStatusSchema = z.enum(["RUNNING", "NO_ACTION", "COMPLETED", "PARTIAL", "FAILED", "UNKNOWN"]);
 export type RunStatus = z.infer<typeof runStatusSchema>;
-export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK", "PAY_BILL", "MOVE_TO_VAULT"]);
-export const advisorActionSchema = z.enum(["FOLLOW", "REDUCE", "WAIT", "DE_RISK"]);
+export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK", "PAY_BILL", "MOVE_TO_VAULT", "REBALANCE"]);
+/** ALLOCATE and MOVE are the vault-mode advisor's: how new cash splits between Morpho and USYC, and moving between them. */
+export const advisorActionSchema = z.enum(["FOLLOW", "REDUCE", "WAIT", "DE_RISK", "ALLOCATE", "MOVE"]);
 /**
  * What the LLM advisor did to a run. The engine's own decision is always kept beside it. APPLIED: the advice changed
  * the decision; FOLLOWED: the advice kept it; REJECTED: the advice broke a limit and the engine decided; UNAVAILABLE:
@@ -36,5 +38,11 @@ export const advisorRecordSchema = z.object({
 export type AdvisorRecord = z.infer<typeof advisorRecordSchema>;
 /** PAY_BILL (vault mode): the bill the vault pays to its owner-approved recipient. transferMinor is the payment. */
 export const billPaymentSchema = z.object({ obligationId: z.string().min(1).max(128), recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/), amountMinor: minor, dueAt: z.string().datetime() });
-export const decisionSchema = z.object({ kind: decisionKindSchema, depositMinor: minor, withdrawMinor: minor, transferMinor: minor, remainingBudgetMinor: minor, protectedMinor: minor, explanation: z.string(), advisor: advisorRecordSchema.optional(), bill: billPaymentSchema.optional() });
+/**
+ * Vault mode: which strategy each amount goes into or comes out of. depositMinor / withdrawMinor are the totals. A
+ * withdrawal from USYC redeems shares worth at least the amount (the pool has no exact-assets withdraw).
+ */
+export const routeSchema = z.object({ depositMorphoMinor: minor, depositUsycMinor: minor, withdrawMorphoMinor: minor, withdrawUsycMinor: minor });
+export type Route = z.infer<typeof routeSchema>;
+export const decisionSchema = z.object({ kind: decisionKindSchema, depositMinor: minor, withdrawMinor: minor, transferMinor: minor, remainingBudgetMinor: minor, protectedMinor: minor, explanation: z.string(), advisor: advisorRecordSchema.optional(), bill: billPaymentSchema.optional(), route: routeSchema.optional() });
 export type Decision = z.infer<typeof decisionSchema>;
