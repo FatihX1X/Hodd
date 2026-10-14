@@ -19,25 +19,26 @@ const conversation: readonly Line[] = [
   { from: "hoddie", text: "Ready. Review the fresh quote in Hodd and sign with your wallet.", card: { title: "Withdraw 600 USDC from Morpho", action: "Review and sign" } },
 ];
 
-type Verdict = "INVEST" | "TOP UP" | "REFILL" | "RETURN" | "HOLD";
+type Verdict = "INVEST" | "PAY" | "TOP UP" | "REFILL" | "RETURN" | "HOLD";
 type Decision = Readonly<{ verdict: Verdict; what: string; amount: string; why: string }>;
 
 /**
- * Autopilot's own decision kinds (INVEST, LIQUIDITY_TOP_UP, RESERVE_REFILL, RETURN_ALL, NO_ACTION),
- * with illustrative amounts. The agent wallet can only use the allowlisted Morpho vault or send USDC
- * back to your verified wallet.
+ * Autopilot's decision kinds, with illustrative amounts. It runs from the owner's vault, which only lets
+ * the agent send money to Morpho, Hodd's USYC pool, bills the owner approved and the owner's own wallet.
  */
 const decisions: readonly Decision[] = [
-  { verdict: "INVEST", what: "Deposit to Morpho", amount: "1,200", why: "Budget cash after fees and the 300 USDC reserve, inside both Morpho caps." },
+  { verdict: "INVEST", what: "Split between Morpho and USYC", amount: "1,200", why: "700 to Morpho, 500 to USYC by their recent yields. Bills due soon stay covered." },
+  { verdict: "PAY", what: "Pay an approved bill", amount: "600", why: "It is the bill’s payment day. Paid from your vault, redeeming from Morpho or USYC first if cash is short." },
   { verdict: "HOLD", what: "No action", amount: "—", why: "Balances are older than a minute. Nothing moves until they are fresh." },
   { verdict: "TOP UP", what: "Send to your wallet", amount: "600", why: "Your liquid USDC is below payroll plus the buffer. Sends only the shortfall." },
-  { verdict: "REFILL", what: "Withdraw from Morpho", amount: "150", why: "Agent cash fell below its reserve. Refills it from the position." },
-  { verdict: "HOLD", what: "No action", amount: "—", why: "Protected capital and Morpho caps leave no budget to invest." },
-  { verdict: "RETURN", what: "Return all to your wallet", amount: "2,050", why: "You asked for everything back. Redeems the position, then returns the cash." },
+  { verdict: "REFILL", what: "Bring cash back from USYC", amount: "800", why: "A bill enters its protection window. Redeems enough to have it ready as cash." },
+  { verdict: "HOLD", what: "No action", amount: "—", why: "Protected capital leaves nothing deployable. Bills come first." },
+  { verdict: "RETURN", what: "Return all to your wallet", amount: "2,050", why: "You asked for everything back. Redeems the positions, then returns the cash." },
 ];
 
 const verdictStyle: Record<Verdict, { text: string; dot: string }> = {
   INVEST: { text: "text-[#7fe3a8]", dot: "rounded-full bg-[#2fcf2f]" },
+  PAY: { text: "text-[#7fe3a8]", dot: "rounded-[1px] bg-[#2fcf2f]" },
   "TOP UP": { text: "text-[#9ec5f4]", dot: "rounded-full bg-[#6da7ec]" },
   REFILL: { text: "text-[#ffd27f]", dot: "rounded-full border border-[#fab219] bg-[linear-gradient(90deg,#fab219_50%,transparent_50%)]" },
   RETURN: { text: "text-[#9ec5f4]", dot: "rounded-[1px] border border-[#6da7ec]" },
@@ -195,7 +196,7 @@ export function HoddiePreview() {
             <span className={clsx(label, "inline-flex items-center gap-2 text-[#9ec5f4]")}><span aria-hidden="true" className="size-2 rounded-full border-[1.5px] border-[#6da7ec]" />Arc Testnet</span>
           </div>
           <DecisionLog running={running} armed={armed} />
-          <p className="m-0 mt-auto border-t border-white/15 px-[clamp(16px,2.4vw,28px)] py-4 text-[13px] leading-[1.5] text-[#a5a8b3]">Illustrative amounts. Autopilot uses its own agent wallet and the budget you fund. It can only invest in the allowlisted Morpho vault or return USDC to your verified wallet, and you can pause it at any time.</p>
+          <p className="m-0 mt-auto border-t border-white/15 px-[clamp(16px,2.4vw,28px)] py-4 text-[13px] leading-[1.5] text-[#a5a8b3]">Illustrative amounts. Autopilot runs from your own vault: your wallet owns it and the agent is only its operator. It can only send money to Morpho, Hodd’s USYC pool, bills you approved and your own wallet. You can pause it or take everything back at any time.</p>
         </section>
       </div>
     </LazyMotion>
