@@ -109,3 +109,21 @@ test("Autopilot returns everything with one click", async ({ page }) => {
   await expect(rail.getByRole("link", { name: /Open transaction/ })).toHaveAttribute("href", "https://testnet.arcscan.app/tx/" + hash);
   expect(returns).toBe(1); expect(polls).toBe(1);
 });
+
+test("Autopilot shows the user's vault, its limits and the bills it pays", async ({ page }, testInfo) => {
+  await liveSession(page, linked()); await reads(page);
+  const vault = "0x4cE19EAbc6F38fb95030E400A50abac0f4f12B88";
+  await page.route("**/api/autopilot/status", (route) => route.fulfill({ json: { status: "READY", mode: "TESTNET_LIVE", executionEnabled: true, policyMorphoCapBps: 4000,
+    wallet: { address: recipient, owner_address: address, account_type: "EOA" }, mandate: { budgetMinor: "10000000", reserveMinor: "0", maxPerRunMinor: "10000000", maxMorphoBps: 4000, enabled: true, paused: false }, spentMinor: "12000", returnRequested: false,
+    balances: { cashMinor: "6000000", positionMinor: "4000000", redeemableMinor: "4000000", observedAt: new Date().toISOString() }, balanceError: null, runs: [], steps: [],
+    vault: { address: vault, deployed: true, factory: "0x311578B21F269ca0E45f5c16324A3E51f69ce389", paused: false, limits: { maxDepositPerTxMinor: "1000000000", depositLimit24hMinor: "2000000000", maxPaymentPerTxMinor: "1000000000", paymentLimit24hMinor: "2000000000" }, agentGasMinor: "480000" },
+    bills: [{ id: "vendor-bill", title: "Vendor bill", amountMinor: "2000000", dueAt: new Date(Date.now() + 5 * 86_400_000).toISOString(), recipient, capMinor: "0", plan: "NEEDS_APPROVAL", payFrom: null }],
+    needsYou: [{ code: "APPROVE_BILLS", message: "One bill needs your approval before Autopilot can pay it." }] } }));
+  await page.goto("/autopilot");
+  await expect(page.getByRole("heading", { name: "Your vault" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /0x4cE1/ })).toHaveAttribute("href", "https://testnet.arcscan.app/address/" + vault);
+  await expect(page.getByRole("button", { name: "Let Autopilot pay Vendor bill" })).toBeEnabled();
+  await expect(page.getByRole("region", { name: "Needs you" })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("autopilot-vault.png"), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

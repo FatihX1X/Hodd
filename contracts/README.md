@@ -202,10 +202,17 @@ Foundry's ERC-20 `deal` can not work). Arc's own tooling (`arc-forge`, `arc-anvi
 real precompiles and is the faithful alternative if you install it. The tests skip cleanly when no
 fork URL is given.
 
-## Deployment (not done yet)
+## Deployment
 
-Nothing has been deployed. Both ways below deploy **only the factory**. Vaults are created later
-through the factory.
+**Deployed on Arc Testnet (2026-10-14):** `HoddieVaultFactory` at
+[`0x311578B21F269ca0E45f5c16324A3E51f69ce389`](https://explorer.testnet.arc.io/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389)
+(tx `0x35b830c4e8237b7cfbdeb4b278c8a86d952aa5251b8ad14f724aaaea3dfdfd86`, source verified on ArcScan,
+`asset()` = `0x3600...0000`). Hodd creates one vault per owner and agent through it (see the app's
+`src/lib/autopilot/vault.ts`). First live vault: `0x4cE19EAbc6F38fb95030E400A50abac0f4f12B88`
+(owner = the dev test signer, operator = a Circle developer-controlled wallet), full lifecycle in
+`docs/autopilot-validation.md`.
+
+Both ways below deploy **only the factory**. Vaults are created later through the factory.
 
 ### (a) `forge script` with a key from the environment
 

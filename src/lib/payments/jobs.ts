@@ -32,7 +32,11 @@ const SIGNATURE_GRACE_MS = 60_000;
 const admin = () => paymentAdmin();
 const pendingOf = (row: Row) => { const parsed = paymentPendingSchema.safeParse(row.pending); return parsed.success ? parsed.data : null; };
 // Gateway-rail payments have their own state machine (src/lib/gateway/payments.ts).
-const arcOnly = (proposal: PaymentProposal) => { if (proposal.rail === "GATEWAY") throw new EarnAccessError("GATEWAY_PAYMENT", "This payment is paid from your Gateway balance. Use the cross-chain payment controls.", 409); };
+const arcOnly = (proposal: PaymentProposal) => {
+  if (proposal.rail === "GATEWAY") throw new EarnAccessError("GATEWAY_PAYMENT", "This payment is paid from your Gateway balance. Use the cross-chain payment controls.", 409);
+  // Autopilot vault payments are signed by the agent and settled by the Autopilot runner, never from this dialog.
+  if (proposal.rail === "AUTOPILOT_VAULT") throw new EarnAccessError("AUTOPILOT_PAYMENT", "Autopilot is paying this bill from your vault. Follow it on the Autopilot page.", 409);
+};
 const answered = (row: Row, pending: Pending) => Boolean(row.tx_hash || row.user_operation_hash || pending.challengeApproved);
 
 async function validateClaimedPolicy(context: PaymentContext, proposal: PaymentProposal) {

@@ -7,10 +7,8 @@ import { EarnAccessError } from "@/lib/earn/security";
 import { liveControls } from "@/lib/earn/live-controls";
 import { agentAccess } from "./access";
 import { agentCircle } from "./circle";
-import { decodeEventLog, encodeFunctionData, erc20Abi, formatUnits, getAddress } from "viem";
+import { decodeEventLog, erc20Abi } from "viem";
 import { arcClient } from "@/lib/earn/gateway";
-import { boundedArcGasPrice, bufferedEarnGasLimit } from "@/lib/earn/gas";
-import { nativeWeiToUsdcCeil } from "@/lib/earn/money";
 import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { createAgentWallet, agentIdempotencyKey } from "./wallets";
 import { AGENT_MAX_BUDGET_MINOR, validateMandate, type AgentWallet, type Mandate } from "./models";
@@ -21,6 +19,8 @@ import { scheduledTrigger, type RunTrigger } from "./triggers";
 import { advisorConfigured, groqAdvisorModel } from "./advisor-model";
 import { autopilotSecret } from "./secrets";
 import { treasuryPolicySchema, treasuryWorkspaceSchema } from "@/lib/treasury/models";
+import { discoverAllowedVaults, getEarnPosition } from "@/lib/earn/gateway";
+import { vaultFundingStatus, vaultInvestCalls, vaultOwnerAction, vaultView } from "./vault-http";
 const headers={"Cache-Control":"no-store"};
 const messages:Record<string,string>={
   AGENT_SCHEMA_UNAVAILABLE:"Autopilot is not provisioned. Its local migration has not been applied.",
@@ -30,6 +30,9 @@ const messages:Record<string,string>={
   AGENT_OWNER_PROOF_REQUIRED:"Verify ownership of your connected wallet on Overview first. Nothing was sent.",
   AGENT_OWNER_WALLET_CHANGED:"Your agent belongs to another of your wallets. Connect that wallet to use it.",
   AGENT_FUNDING_UNAVAILABLE:"Arc Testnet could not check your transfer right now. Nothing was sent or changed; try again in a moment.",
+  AGENT_CUSTODIAL_FUNDS:"Your agent still holds USDC or a Morpho position from before your vault. Press Return everything first, then invest into your vault.",
+  AGENT_VAULT_SETTINGS_CHANGED:"The vault at your address does not have the settings Hodd expects. Nothing was sent; contact support.",
+  AGENT_VAULT_NOT_DEPLOYED:"Your Autopilot vault does not exist yet. Invest once to create it.",
 };
 const env=()=>({nodeEnv:process.env.NODE_ENV,vercel:process.env.VERCEL,vercelEnv:process.env.VERCEL_ENV,liveFlag:process.env.HODD_TESTNET_LIVE,localFlag:process.env.HODD_AGENT_EXECUTION_ENABLED});
 async function access(request:Request, execution:boolean,cron=false) {
@@ -49,21 +52,6 @@ async function context() {
   return {...c,sessionId:String(data!.claims.session_id)};
 }
 type Ctx=Awaited<ReturnType<typeof context>>;
-const usdc=(minor:bigint)=>formatUnits(minor>0n?minor:0n,6);
-/** The owner's exact USDC transfer to the agent with a server-estimated gas ceiling; refuses before signing when funds are short. */
-async function fundingTransfer(owner:`0x${string}`,agent:`0x${string}`,amount:bigint) {
-  const call={to:ARC_TESTNET_USDC,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[agent,amount]}),value:"0"};
-  const short=(balance:bigint,fee:bigint)=>new EarnAccessError("AGENT_FUNDS_INSUFFICIENT",`Your wallet has ${usdc(balance)} USDC on Arc Testnet. Invest at most ${usdc(balance-fee)} USDC so the network fee is covered. Nothing was sent.`,400);
-  let balance:bigint, gas:bigint, price:bigint;
-  try { balance=await arcClient.readContract({address:ARC_TESTNET_USDC,abi:erc20Abi,functionName:"balanceOf",args:[owner]}); price=boundedArcGasPrice(await arcClient.getGasPrice()); }
-  catch { throw new Error("AGENT_FUNDING_UNAVAILABLE"); }
-  if(balance<amount)throw short(balance,nativeWeiToUsdcMinor(60_000n*price));
-  try { gas=await arcClient.estimateGas({account:owner,to:ARC_TESTNET_USDC,data:call.data,value:0n}); } catch { throw new Error("AGENT_FUNDING_UNAVAILABLE"); }
-  const gasLimit=bufferedEarnGasLimit(gas), fee=nativeWeiToUsdcMinor(gasLimit*price);
-  if(balance<amount+fee)throw short(balance,fee);
-  return {call,gasBudgetWei:(gasLimit*price).toString(),gasCeiling:{gasLimit:gasLimit.toString(),gasPriceWei:price.toString()},amountMinor:amount.toString()};
-}
-const nativeWeiToUsdcMinor=(wei:bigint)=>BigInt(nativeWeiToUsdcCeil(wei.toString()).minorUnits);
 type Kind="MANDATE"|"RETURN_ALL";
 /** Creates the user's agent wallet once; an existing one must belong to the connected owner. */
 async function ensureWallet(c:Ctx,mode:"TESTNET_LIVE"|"LOCAL_ENABLED"):Promise<AgentWallet> {
@@ -94,7 +82,7 @@ async function confirm(c:Ctx,reviewId:string,kind:Kind) {
   if(error && /run unresolved/i.test(error.message))throw new Error("AGENT_RUN_OPEN");
   if(error || data!==kind)throw new Error("AGENT_REVIEW_CHANGED");
 }
-export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover") {
+export async function agentHttp(request:Request,action:"wallet"|"mandate"|"invest"|"funding"|"run"|"status"|"return-all"|"pause"|"recover"|"vault") {
   try {
     const read=request.method==="GET";
     // GETs are read-only. Reuse same-origin JSON guards without requiring an Origin on normal navigation reads.
@@ -107,11 +95,13 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       if(error)throw new Error("AGENT_SCHEMA_UNAVAILABLE");
       const {data:steps,error:stepError}=await agentDb().from("agent_run_steps").select("id,run_id,stage,state,circle_transaction_id,tx_hash,receipt").eq("user_id",c.userId).order("created_at",{ascending:false}).limit(60);
       if(stepError)throw new Error("AGENT_SCHEMA_UNAVAILABLE");
-      let balances=null, balanceError=null;
-      if(wallet && stored)try{const i=await agentInputs(c.userId);balances={cashMinor:i.cash.balance.minorUnits,positionMinor:i.agentPosition.currentBalance.minorUnits,redeemableMinor:i.agentPosition.redeemable.minorUnits,observedAt:i.cash.observedAt};}catch{balanceError="Fresh balances are unavailable. Execution stays closed until they can be read.";}
+      let balances=null, balanceError=null, vault=null, bills:unknown[]=[], needsYou:unknown[]=[];
+      if(wallet?.vault_address && stored)try{const view=await vaultView(wallet);balances=view.balances;vault=view.vault;bills=view.bills;needsYou=view.needsYou;}catch{balanceError="Fresh vault balances are unavailable. Execution stays closed until they can be read.";}
+      else if(wallet && stored)try{const i=await agentInputs(c.userId);balances={cashMinor:i.cash.balance.minorUnits,positionMinor:i.agentPosition.currentBalance.minorUnits,redeemableMinor:i.agentPosition.redeemable.minorUnits,observedAt:i.cash.observedAt};}catch{balanceError="Fresh balances are unavailable. Execution stays closed until they can be read.";}
+      if(wallet && !wallet.vault_address)try{vault=(await vaultView(wallet)).vault;}catch{/* the vault address is shown once it can be predicted */}
       const policy=c.workspace.policy;
       const [controls,configured]=await Promise.all([liveControls(),advisorConfigured()]);
-      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,advisor:{available:configured && controls?.get("AGENT_ADVISOR")===true,model:configured?groqAdvisorModel():null},wallet,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
+      return Response.json({status:"READY",mode:gate.mode,executionEnabled:gate.open,advisor:{available:configured && controls?.get("AGENT_ADVISOR")===true,model:configured?groqAdvisorModel():null},wallet,vault,bills,needsYou,mandate:stored?.mandate ?? null,spentMinor:stored?String(stored.spent_minor):"0",returnRequested:stored?.return_requested ?? false,balances,balanceError,runs:runs ?? [],steps:steps ?? [],policyMorphoCapBps:policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0},{headers});
     }
     const body=await request.json();
     if(action==="wallet") {
@@ -128,25 +118,39 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       if(await openRun(c.userId))throw new Error("AGENT_RUN_OPEN");
       const current=await loadMandate(c.userId), policy=c.workspace.policy;
       const cap=policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0;
-      // The budget covers what the agent already holds plus this amount; fees and returns already counted stay counted.
-      const budget=BigInt(current?.spent_minor ?? "0")+await agentHoldings(wallet.address)+BigInt(input.amountMinor);
+      // Vault mode: the money goes into the user's own HoddieVault; the agent wallet only keeps a little USDC for fees.
+      // Funds the agent still holds from the custodial mode come back first (Return everything).
+      const morpho=(await discoverAllowedVaults())[0];
+      const [agentCash,agentPosition]=await Promise.all([agentHoldings(wallet.address),getEarnPosition(wallet.address,morpho)]);
+      if(BigInt(agentPosition.currentBalance.minorUnits)>0n || agentCash>1_000_000n)throw new Error("AGENT_CUSTODIAL_FUNDS");
+      // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
+      // and wallet extensions made that fail before the wallet opened). The wallet signs within these exact ceilings.
+      const plan=await vaultInvestCalls(wallet,BigInt(input.amountMinor));
+      // The budget covers what the vault already holds plus this amount; fees already counted stay counted.
+      const budget=BigInt(current?.spent_minor ?? "0")+plan.holdingsMinor+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
       const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
-      // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
-      // and wallet extensions made that fail before the wallet opened). The wallet signs within this exact ceiling.
-      const funding=await fundingTransfer(getAddress(c.wallet.address),getAddress(wallet.address),BigInt(input.amountMinor));
       await confirm(c,await review(c,wallet,current?.revision ?? 0,"MANDATE",mandate),"MANDATE");
-      return Response.json({status:"READY",agentAddress:wallet.address,mandate,funding},{headers});
+      return Response.json({status:"READY",mode:"VAULT",agentAddress:wallet.address,vaultAddress:plan.vaultAddress,mandate,calls:plan.calls,funding:plan.fund},{headers});
     }
     if(action==="funding") {
       // Read-only: did the owner's transfer land with the agent? The page waits on this instead of a browser RPC.
       const input=z.object({txHash:z.string().regex(/^0x[0-9a-fA-F]{64}$/)}).strict().parse(body);
       const wallet=await loadWallet(c.userId);
       if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
+      const intoVault=await vaultFundingStatus(wallet,input.txHash.toLowerCase() as `0x${string}`);
+      if(intoVault.status!=="UNRELATED")return Response.json(intoVault,{headers});
       let receipt;try{receipt=await arcClient.getTransactionReceipt({hash:input.txHash.toLowerCase() as `0x${string}`});}catch{return Response.json({status:"PENDING"},{headers});}
       if(receipt.status!=="success")return Response.json({status:"REVERTED"},{headers});
       const arrived=receipt.logs.reduce((sum,log)=>{if(log.address.toLowerCase()!==ARC_TESTNET_USDC.toLowerCase())return sum;try{const e=decodeEventLog({abi:erc20Abi,data:log.data,topics:log.topics});return e.eventName==="Transfer" && e.args.from.toLowerCase()===wallet.owner_address && e.args.to.toLowerCase()===wallet.address ? sum+e.args.value : sum;}catch{return sum;}},0n);
       return Response.json({status:arrived>0n?"ARRIVED":"UNRELATED",amountMinor:arrived.toString()},{headers});
+    }
+    if(action==="vault") {
+      const input=z.discriminatedUnion("op",[z.object({op:z.literal("approve-bill"),obligationId:z.string().min(1).max(128)}).strict(),z.object({op:z.literal("withdraw-all")}).strict()]).parse(body);
+      await reserveLiveUsage(c.client,mode,"QUOTE");
+      const wallet=await loadWallet(c.userId);
+      if(!wallet || wallet.owner_address!==c.wallet.address.toLowerCase())throw new Error("AGENT_SETUP_REQUIRED");
+      return Response.json(await vaultOwnerAction(wallet,c.workspace,input),{headers});
     }
     if(action==="pause") {
       z.object({}).strict().parse(body);const {error}=await agentDb().rpc("hodd_pause_agent",{p_user:c.userId});if(error)throw new Error("AGENT_PAUSE_UNAVAILABLE");
@@ -184,9 +188,20 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
   } catch(error) {
     const known=error instanceof EarnAccessError;
     const code=known ? error.code : error instanceof z.ZodError ? "INVALID_REQUEST" : error instanceof Error && /^AGENT_[A-Z_]+$/.test(error.message) ? error.message : "AGENT_UNAVAILABLE";
-    const status=known?error.status:code==="AGENT_RATE_LIMIT"?429:code==="AGENT_RUN_OPEN"?409:code==="INVALID_REQUEST" || code==="AGENT_BUDGET_LIMIT"?400:code==="AGENT_OWNER_PROOF_REQUIRED" || code==="AGENT_OWNER_WALLET_CHANGED"?403:503;
+    const status=known?error.status:code==="AGENT_RATE_LIMIT"?429:code==="AGENT_RUN_OPEN" || code==="AGENT_CUSTODIAL_FUNDS" || code==="AGENT_VAULT_SETTINGS_CHANGED"?409:code==="INVALID_REQUEST" || code==="AGENT_BUDGET_LIMIT"?400:code==="AGENT_OWNER_PROOF_REQUIRED" || code==="AGENT_OWNER_WALLET_CHANGED"?403:503;
     return Response.json({status:"ERROR",code,message:known?error.message:messages[code] ?? "Autopilot cannot safely complete this request. Check existing runs before trying again."},{status,headers});
   }
+}
+/** Advances an open run until it settles or the deadline passes (each call does one bounded step). */
+async function driveRun(initial:Awaited<ReturnType<typeof startAgentRun>>,deadline:number) {
+  let run=initial;
+  while((run.state==="RUNNING" || run.state==="UNKNOWN") && Date.now()<deadline) {
+    await new Promise(resolve=>setTimeout(resolve,3_000));
+    const next=await advanceAgentRun(run);
+    if(next.state===run.state && next.state==="UNKNOWN")break;
+    run=next;
+  }
+  return run;
 }
 /** A bearer secret compared in constant time. */
 function bearerMatches(request:Request,secret:string|undefined) {
@@ -204,7 +219,9 @@ export async function agentCron(request:Request) {
     if(!bearerMatches(request,process.env.CRON_SECRET) && !bearerMatches(request,(await autopilotSecret("autopilot_scheduler_secret")) ?? undefined))return Response.json({status:"ERROR"},{status:401,headers});
     await access(request,true,true);
     const {data,error}=await agentDb().from("agent_mandates").select("user_id,mandate").eq("mandate->>enabled","true").eq("mandate->>paused","false").order("updated_at",{ascending:true}).limit(50);if(error)throw new Error();
-    const results:{trigger:RunTrigger;id?:string;state:string}[]=[];const now=new Date();
+    const results:{trigger:RunTrigger;id?:string;state:string}[]=[];const now=new Date();const stop=Date.now()+45_000;
+    const {data:open}=await agentDb().from("agent_runs").select("*").in("state",["RUNNING"]).order("created_at",{ascending:true}).limit(5);
+    for(const run of open ?? []){try{const settled=await driveRun(run as Awaited<ReturnType<typeof startAgentRun>>,Math.min(stop,Date.now()+20_000));results.push({trigger:"MANUAL",id:settled.id,state:settled.state});}catch{/* the next tick retries */}}
     for(const row of data ?? []) {
       const [last,stored]=await Promise.all([
         agentDb().from("agent_runs").select("created_at,policy:snapshot->workspace->policy").eq("user_id",row.user_id).order("created_at",{ascending:false}).limit(1).maybeSingle(),
@@ -216,7 +233,7 @@ export async function agentCron(request:Request) {
       const lastPolicy=lastRun?.policy ? treasuryPolicySchema.safeParse(lastRun.policy) : null;
       const trigger=scheduledTrigger({now,lastRunAt:lastRun?new Date(lastRun.created_at):null,lastPolicy:lastPolicy?.success?lastPolicy.data:null,workspace:workspace.data});
       if(!trigger)continue;
-      try{const run=await startAgentRun(row.user_id,trigger);results.push({trigger,id:run.id,state:run.state});}catch{results.push({trigger,state:"FAILED"});}
+      try{if(Date.now()>stop)break;const run=await driveRun(await startAgentRun(row.user_id,trigger),stop);results.push({trigger,id:run.id,state:run.state});}catch{results.push({trigger,state:"FAILED"});}
       if(results.length>=5)break; // bounded Hobby invocation; the next tick continues.
     }
     return Response.json({status:"READY",results},{headers});

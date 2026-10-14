@@ -20,6 +20,8 @@ import { adviseDecision, advisorEnvelope, advisorFacts } from "./advisor";
 import { advisorConfigured, groqAdvisor } from "./advisor-model";
 import type { Decision } from "./models";
 import type { RunTrigger } from "./triggers";
+import { advanceVaultRun, createVaultRun } from "./vault-runner";
+import { loadWallet } from "./store";
 const same=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
 const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = i.feeReserveMinor) => decideAutopilot({workspace:i.workspace,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,mandate:i.stored.mandate,cashMinor:i.cash.balance.minorUnits,spentMinor:String(i.stored.spent_minor),feeReserveMinor,returnAll:i.stored.return_requested});
 /**
@@ -40,6 +42,8 @@ async function advise(i: Awaited<ReturnType<typeof agentInputs>>, engine: Decisi
 }
 export async function startAgentRun(userId: string, trigger: RunTrigger = "MANUAL") {
   const existing=await openRun(userId); if(existing)return advanceAgentRun(existing);
+  // Vault mode: the user's HoddieVault holds the funds and the agent is only its limited operator.
+  if((await loadWallet(userId))?.vault_address) { const created=await createVaultRun(userId,trigger); return created.state==="RUNNING" ? advanceAgentRun(created) : created; }
   const i=await agentInputs(userId); const decision=await advise(i,decisionOf(i)); const quote=await agentEarnQuote(i,decision);
   // A withdrawal re-quoted at Circle's rounded max records the amount that will actually move.
   if(quote?.operation==="WITHDRAW" && BigInt(quote.amount.minorUnits)<BigInt(decision.withdrawMinor))decision.withdrawMinor=quote.amount.minorUnits;
@@ -63,6 +67,7 @@ export async function advanceAgentRun(initial: AgentRun, allowSubmission = true)
     const {data:rows,error:stepError}=await agentDb().from("agent_run_steps").select("*").eq("run_id",run.id).order("created_at",{ascending:true});
     if(stepError)throw new Error("AGENT_STATUS_UNAVAILABLE");
     const steps=(rows ?? []) as AgentStep[];
+    if((run.snapshot as {mode?:string}).mode==="VAULT")return await advanceVaultRun(run,steps,allowSubmission);
     const pending=steps.find(s=>s.state!=="VERIFIED" && s.state!=="FAILED");
     if(pending && stepAction(pending.state)==="RECHECK")return await settleStep(run,pending);
     if(run.state==="UNKNOWN")return run;

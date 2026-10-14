@@ -177,3 +177,57 @@ describe("AI advisor", () => {
     expect(screen.getByText("Not enabled by the operator yet")).toBeInTheDocument();
   });
 });
+describe("Autopilot vault mode", () => {
+  const vaultAddress = "0x4cE19EAbc6F38fb95030E400A50abac0f4f12B88";
+  const ownerCall = (kind: string, to: string, amountMinor = "0") => ({ kind, call: { to, data: "0x" + kind.length.toString(16).padStart(2, "0"), value: "0" }, gasBudgetWei: "1000", gasCeiling: { gasLimit: "50", gasPriceWei: "20" }, amountMinor });
+  const vaultSnapshot = () => ({ ...initial(), mandate: { budgetMinor: "10000000", reserveMinor: "0", maxPerRunMinor: "10000000", maxMorphoBps: 4000, enabled: true, paused: false },
+    vault: { address: vaultAddress, deployed: true, factory: "0x311578B21F269ca0E45f5c16324A3E51f69ce389", paused: false, limits: { maxDepositPerTxMinor: "1000000000", depositLimit24hMinor: "2000000000", maxPaymentPerTxMinor: "1000000000", paymentLimit24hMinor: "2000000000" }, agentGasMinor: "500000" },
+    bills: [
+      { id: "rent", title: "Office rent", amountMinor: "2000000", dueAt: "2026-10-20T12:00:00.000Z", recipient: "0x62dCe01b1a7B9a6f592f148d305E0D5751478386", capMinor: "0", plan: "NEEDS_APPROVAL", payFrom: null },
+      { id: "saas", title: "Design tool", amountMinor: "1000000", dueAt: "2026-10-18T12:00:00.000Z", recipient: "0x62dCe01b1a7B9a6f592f148d305E0D5751478386", capMinor: "1000000", plan: "PAYS", payFrom: "2026-10-17T12:00:00.000Z" },
+    ],
+    needsYou: [{ code: "APPROVE_BILLS", message: "One bill needs your approval before Autopilot can pay it." }] });
+
+  it("shows the vault, who controls it, its limits, the bills it pays and what needs the owner", async () => {
+    snapshot = vaultSnapshot() as unknown as ReturnType<typeof initial>;
+    await ready();
+    expect(screen.getByRole("region", { name: "Needs you" })).toHaveTextContent("One bill needs your approval");
+    expect(screen.getByText("Owner: your wallet")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /0x4cE1/ })).toHaveAttribute("href", "https://testnet.arcscan.app/address/" + vaultAddress);
+    expect(screen.getByText("Payments a day").nextSibling).toHaveTextContent("2000 USDC");
+    expect(screen.getByText("Office rent")).toBeInTheDocument();
+    expect(screen.getByText("Needs your approval")).toBeInTheDocument();
+    expect(screen.getByText("Autopilot pays")).toBeInTheDocument();
+    expect(screen.getAllByText("In your vault")).toHaveLength(2);
+  });
+
+  it("approves a bill's recipient with one owner transaction on the vault, after Confirm?", async () => {
+    snapshot = vaultSnapshot() as unknown as ReturnType<typeof initial>;
+    mocks.signer = { sendCalls: vi.fn().mockResolvedValue(hash) };
+    const approve = ownerCall("APPROVE_BILL", vaultAddress);
+    handler = action => {
+      if (action === "vault") { snapshot = { ...snapshot, bills: (snapshot as unknown as ReturnType<typeof vaultSnapshot>).bills.map(bill => bill.id === "rent" ? { ...bill, plan: "PAYS" } : bill) } as unknown as ReturnType<typeof initial>; return json({ status: "READY", call: approve }); }
+      return json({ status: "READY", run: null });
+    };
+    await ready();
+    const button = screen.getByRole("button", { name: "Let Autopilot pay Office rent" });
+    fireEvent.click(button);
+    expect(requests).toEqual([]);
+    await act(async () => { fireEvent.click(button); });
+    await waitFor(() => expect(requests).toContainEqual({ action: "vault", body: { op: "approve-bill", obligationId: "rent" } }));
+    await waitFor(() => expect(mocks.signer!.sendCalls).toHaveBeenCalledExactlyOnceWith([approve.call], "1000", undefined, undefined, approve.gasCeiling));
+  });
+
+  it("creates the vault, tops up the agent's fee money and funds the vault in that order, then starts the agent", async () => {
+    snapshot = { ...initial(), vault: { address: vaultAddress, deployed: false, factory: "0x311578B21F269ca0E45f5c16324A3E51f69ce389" } } as unknown as ReturnType<typeof initial>;
+    mocks.signer = { sendCalls: vi.fn().mockResolvedValueOnce("0x" + "1".repeat(64)).mockResolvedValueOnce("0x" + "2".repeat(64)).mockResolvedValueOnce(hash) };
+    const calls = [ownerCall("CREATE_VAULT", "0x311578B21F269ca0E45f5c16324A3E51f69ce389"), ownerCall("AGENT_GAS", "0x3600000000000000000000000000000000000000", "500000"), ownerCall("FUND", "0x3600000000000000000000000000000000000000", "10000000")];
+    handler = action => action === "invest" ? json({ status: "READY", mode: "VAULT", agentAddress: address, vaultAddress, calls, funding: calls[2] }) : action === "funding" ? json({ status: "ARRIVED", amountMinor: "10000000" }) : json({ status: "READY", run: { ...run, decision: { ...decision, kind: "INVEST", withdrawMinor: "0", depositMinor: "4000000", transferMinor: "0" } } });
+    await ready();
+    expect(screen.getByText(/with your first Invest/)).toBeInTheDocument();
+    await clickInvest();
+    await waitFor(() => expect(requests.map(item => item.action)).toEqual(["invest", "funding", "run"]));
+    expect(mocks.signer.sendCalls.mock.calls.map(([sent]) => sent[0])).toEqual(calls.map(item => item.call));
+    expect(requests[1].body).toEqual({ txHash: hash });
+  });
+});

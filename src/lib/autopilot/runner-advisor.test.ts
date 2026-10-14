@@ -25,7 +25,7 @@ vi.mock("./inputs", () => ({ agentInputs: async () => {
     agentPosition: { currentBalance: usdc("90000000"), redeemable: usdc("80000000"), liquidityStatus: "READY", observedAt: now }, cash: { balance: usdc("150000000") }, ownerCash: { balance: usdc("1000000000") }, feeReserveMinor: "2000000", gasPriceWei: "20000000000" };
 } }));
 vi.mock("./store", () => ({
-  openRun: async () => null,
+  openRun: async () => null, loadWallet: async () => null,
   agentDb: () => ({
     rpc: async (name: string, args: (typeof m.started)[number]) => { if (name === "hodd_start_agent_run") m.started.push(args); return { error: null }; },
     from: () => { const query = { select: () => query, eq: () => query, single: async () => ({ data: { id: "run", state: "COMPLETED" }, error: null }) }; return query; },

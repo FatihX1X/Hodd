@@ -16,11 +16,12 @@ export function validateMandate(input: unknown, policy: TreasuryPolicy): Mandate
   if (m.maxMorphoBps > policy.strategyCapsBps.MORPHO || (m.maxMorphoBps > 0 && !policy.enabledStrategies.MORPHO)) throw new Error("MANDATE_EXCEEDS_POLICY");
   return m;
 }
-export const agentWalletSchema = z.object({ user_id: z.string().uuid(), circle_wallet_id: z.string().uuid(), wallet_set_id: z.string().uuid(), address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), account_type: z.enum(["EOA", "SCA"]), owner_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/) });
+/** vault_address: the user's HoddieVault once it is deployed and verified (vault mode); null for the custodial agent. */
+export const agentWalletSchema = z.object({ user_id: z.string().uuid(), circle_wallet_id: z.string().uuid(), wallet_set_id: z.string().uuid(), address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), account_type: z.enum(["EOA", "SCA"]), owner_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), vault_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/).nullable().optional() });
 export type AgentWallet = z.infer<typeof agentWalletSchema>;
 export const runStatusSchema = z.enum(["RUNNING", "NO_ACTION", "COMPLETED", "PARTIAL", "FAILED", "UNKNOWN"]);
 export type RunStatus = z.infer<typeof runStatusSchema>;
-export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK"]);
+export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK", "PAY_BILL"]);
 export const advisorActionSchema = z.enum(["FOLLOW", "REDUCE", "WAIT", "DE_RISK"]);
 /**
  * What the LLM advisor did to a run. The engine's own decision is always kept beside it. APPLIED: the advice changed
@@ -33,5 +34,7 @@ export const advisorRecordSchema = z.object({
   engine: z.object({ kind: decisionKindSchema, depositMinor: minor, withdrawMinor: minor, transferMinor: minor, explanation: z.string() }),
 });
 export type AdvisorRecord = z.infer<typeof advisorRecordSchema>;
-export const decisionSchema = z.object({ kind: decisionKindSchema, depositMinor: minor, withdrawMinor: minor, transferMinor: minor, remainingBudgetMinor: minor, protectedMinor: minor, explanation: z.string(), advisor: advisorRecordSchema.optional() });
+/** PAY_BILL (vault mode): the bill the vault pays to its owner-approved recipient. transferMinor is the payment. */
+export const billPaymentSchema = z.object({ obligationId: z.string().min(1).max(128), recipient: z.string().regex(/^0x[0-9a-fA-F]{40}$/), amountMinor: minor, dueAt: z.string().datetime() });
+export const decisionSchema = z.object({ kind: decisionKindSchema, depositMinor: minor, withdrawMinor: minor, transferMinor: minor, remainingBudgetMinor: minor, protectedMinor: minor, explanation: z.string(), advisor: advisorRecordSchema.optional(), bill: billPaymentSchema.optional() });
 export type Decision = z.infer<typeof decisionSchema>;

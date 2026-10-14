@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
-import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, ReceiptText, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
 import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
 import { ConfirmButton } from "./confirm-button";
+import { NeedsYouBanner, VaultBills, VaultCard, type NeedsYou, type VaultBillView, type VaultView } from "./autopilot-vault";
 import { Ring, moneyColor } from "./visuals";
 import { Tip } from "./tip";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
@@ -23,9 +24,12 @@ interface Status {
   mandate: Mandate | null; spentMinor: string; returnRequested: boolean;
   balances: { cashMinor: string; positionMinor: string; redeemableMinor: string; observedAt: string } | null;
   balanceError: string | null; runs: Run[];
+  vault?: VaultView | null; bills?: VaultBillView[]; needsYou?: NeedsYou[];
   steps: { id: string; run_id: string; stage: string; state: string; tx_hash: string | null; circle_transaction_id: string | null }[];
 }
-interface Funding { agentAddress: string; funding: { call: WalletCall; gasBudgetWei: string; gasCeiling: EarnGasCeiling; amountMinor: string } }
+interface OwnerCall { kind: "CREATE_VAULT" | "AGENT_GAS" | "FUND" | "APPROVE_BILL" | "WITHDRAW_ALL"; call: WalletCall; gasBudgetWei: string; gasCeiling: EarnGasCeiling; amountMinor: string }
+/** Vault mode: the owner signs these in order (create the vault once, a little fee money for the agent, the amount). */
+interface Funding { agentAddress: string; mode?: "VAULT"; vaultAddress?: string; calls?: OwnerCall[]; funding: OwnerCall }
 class ApiError extends Error {
   constructor(message: string, readonly code: string) { super(message); }
 }
@@ -80,6 +84,7 @@ const decisionKinds: Record<Decision["kind"], { label: string; Icon: LucideIcon;
   RETURN_ALL: { label: "Returned everything", Icon: Undo2, color: moneyColor.safe },
   NO_ACTION: { label: "No action needed", Icon: CircleSlash, color: "#8d8b84" },
   DE_RISK: { label: "Moved Morpho back to cash", Icon: ArrowDownToLine, color: moneyColor.LIQUID },
+  PAY_BILL: { label: "Paid a bill", Icon: ReceiptText, color: moneyColor.protected },
 };
 const advisorStates: Record<NonNullable<Decision["advisor"]>["status"], { label: string; tone: "info" | "success" | "warning" | "neutral" }> = {
   APPLIED: { label: "Advisor adjusted", tone: "info" },
@@ -155,7 +160,7 @@ function MorphoShareCard({ value, onChange, capBps, disabled }: { value: string;
 function RunTimeline({ runs, steps }: { runs: Run[]; steps: Status["steps"] }) {
   return <ol className="p-5 pt-2">{runs.map((item, index) => {
     const kind = decisionKinds[item.decision.kind] ?? decisionKinds.NO_ACTION, Icon = kind.Icon;
-    const moved = [["Deposit", item.decision.depositMinor], ["Withdraw", item.decision.withdrawMinor], ["Return", item.decision.transferMinor]].filter(([, minor]) => BigInt(minor) > 0n);
+    const moved = [["Deposit", item.decision.depositMinor], ["Withdraw", item.decision.withdrawMinor], [item.decision.kind === "PAY_BILL" ? "Paid" : "Return", item.decision.transferMinor]].filter(([, minor]) => BigInt(minor) > 0n);
     const own = steps.filter(step => step.run_id === item.id);
     return <li key={item.id} className="relative flex gap-4 pb-6 last:pb-0">
       {index < runs.length - 1 && <span aria-hidden="true" className="absolute bottom-0 left-4 top-9 w-px bg-white/10" />}
@@ -300,9 +305,24 @@ export function AutopilotView() {
     const result = await post<Funding>("invest", { amountMinor, maxMorphoBps }, signal);
     signal.throwIfAborted();
     const signer = getActiveWalletRuntime();
+    if (result.calls?.length && isSignerFor(signer, workspace.walletConnection) && signer.sendCalls) {
+      setPhase("wallet");
+      let fundHash: Hash | null = null;
+      for (const entry of result.calls) {
+        const hash = await signOwner(entry);
+        signal.throwIfAborted();
+        if (entry.kind === "FUND") fundHash = hash;
+      }
+      setFundingHash(fundHash); setPhase("funding");
+      await arrived(fundHash!, signal);
+      setManualAddress(""); setMessage(""); setPhase("starting");
+      await startRun("run", signal);
+      return;
+    }
+    if (result.calls?.some(entry => entry.kind === "CREATE_VAULT")) throw new Error("Creating your vault needs your wallet's signature. Reconnect your wallet and press Invest again. Nothing was sent.");
     if (!isSignerFor(signer, workspace.walletConnection) || !signer.sendCalls) {
       setMessage("Reconnect your wallet to sign the funding transfer");
-      setManualAddress(result.agentAddress); setPhase("funding");
+      setManualAddress(result.vaultAddress ?? result.agentAddress); setPhase("funding");
       // PIN wallets can fund manually. Observe the requested cash increase before investing.
       for (;;) {
         await wait(3_000, signal);
@@ -326,15 +346,42 @@ export function AutopilotView() {
     await startRun("run", signal);
   }
 
+  /** One owner transaction with the server's gas ceiling; a refusal in the wallet sends nothing. */
+  async function signOwner(entry: OwnerCall): Promise<Hash> {
+    const signer = getActiveWalletRuntime();
+    if (!isSignerFor(signer, workspace.walletConnection) || !signer.sendCalls) throw new Error("Reconnect your wallet to sign. Nothing was sent.");
+    try { return await signer.sendCalls([entry.call], entry.gasBudgetWei, undefined, undefined, entry.gasCeiling); }
+    catch (error) {
+      if (rejected(error)) throw new Error("Cancelled in your wallet. Nothing more was sent.");
+      if (error instanceof WalletPreflightError) throw new Error(error.code === "WALLET_SESSION_CHANGED" ? "Your wallet switched account or network. Choose your Hodd account on Arc Testnet and try again." : "Your wallet could not prepare the transaction. Try again.");
+      throw error;
+    }
+  }
+
+  /** Owner-only vault calls: approve a bill's recipient, or take everything back. Then the page reads the vault again. */
+  async function vaultAction(body: { op: "approve-bill"; obligationId: string } | { op: "withdraw-all" }, signal: AbortSignal) {
+    const result = await post<{ status: "READY" | "ALREADY"; call?: OwnerCall }>("vault", body, signal);
+    if (result.status === "READY" && result.call) {
+      const hash = await signOwner(result.call);
+      setMessage(body.op === "withdraw-all" ? "Sent. Your vault's USDC is on its way to your wallet." : "Approved. Autopilot will pay this bill from your vault.");
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await wait(2_000, signal);
+        const fresh = await load(signal);
+        if (body.op === "approve-bill" ? fresh.bills?.find(bill => bill.id === body.obligationId)?.plan === "PAYS" : !fresh.balances || BigInt(fresh.balances.cashMinor) + BigInt(fresh.balances.positionMinor) === 0n) return;
+      }
+      setMessage("Sent (" + hash.slice(0, 10) + "…). It has not shown up yet; check again in a moment.");
+    } else await load(signal);
+  }
+
   /** Waits until Hodd's server sees the owner's transfer land with the agent (no browser RPC). */
   async function arrived(txHash: string, signal: AbortSignal) {
     const deadline = Date.now() + 3 * 60_000;
     for (;;) {
-      const check = await post<{ status: "PENDING" | "ARRIVED" | "REVERTED" | "UNRELATED" }>("funding", { txHash }, signal).catch(error => { if (signal.aborted) throw error; return { status: "PENDING" as const }; });
+      const check = await post<{ status: "PENDING" | "ARRIVED" | "REVERTED" | "UNRELATED" | "VAULT_NOT_DEPLOYED" }>("funding", { txHash }, signal).catch(error => { if (signal.aborted) throw error; return { status: "PENDING" as const }; });
       if (check.status === "ARRIVED") return;
       if (check.status === "REVERTED") throw new Error("The funding transfer reverted on Arc Testnet. The agent did not start investing.");
       if (check.status === "UNRELATED") throw new Error("That transaction did not send USDC to your agent. The agent did not start investing.");
-      if (Date.now() >= deadline) throw new Error("Your transfer has not arrived yet. Check it on ArcScan; nothing else was sent and the agent did not start.");
+      if (Date.now() >= deadline) throw new Error(check.status === "VAULT_NOT_DEPLOYED" ? "Your USDC reached your vault's address, but the vault itself is not created yet. Press Invest again to create it; the USDC is waiting there." : "Your transfer has not arrived yet. Check it on ArcScan; nothing else was sent and the agent did not start.");
       await wait(2_000, signal);
     }
   }
@@ -350,7 +397,7 @@ export function AutopilotView() {
   // Status lists steps newest first; the rail reads them oldest first.
   const progress: AutopilotProgressInput = { flow: intent ?? (returning ? "return" : "invest"), local: phase, run: run ? { ...run, state: run.state as NonNullable<AutopilotProgressInput["run"]>["state"] } : null, steps: [...runSteps].reverse(), error: failure, countdown, result, fundingHash };
   return <>
-    <PageHeader eyebrow="Agent treasury" title="Autopilot" description="Invest with your agent, or bring its USDC back to your wallet." />
+    <PageHeader eyebrow="Agent treasury" title="Autopilot" description="Your agent invests your vault's USDC and pays the bills you approve. Take it all back whenever you want." />
     <PageBody>
       <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2 border border-white/15 px-4 py-3">
         <StatusPill label={status?.executionEnabled ? "Testnet execution enabled" : "Autopilot disabled"} tone={status?.executionEnabled ? "info" : "warning"} />
@@ -358,8 +405,9 @@ export function AutopilotView() {
       </div>
       {message && <p role="alert" className="mb-6 border border-[#fab219]/40 p-4 text-sm text-[#ffd27f]">{message}</p>}
       {status?.balanceError && <p className="mb-5 text-sm text-[#ffd27f]">{status.balanceError}</p>}
+      <NeedsYouBanner items={status?.needsYou ?? []} />
       <section aria-label="Agent overview" className="grid gap-px border border-white/[0.14] bg-white/[0.14] lg:grid-cols-[1.3fr_1fr_1fr]">
-        <div className="bg-[#101319] p-5"><p className="flex items-center gap-1.5 text-[12px] text-white/55"><Bot aria-hidden="true" className="size-3.5" />Total with agent</p><HoldingsBar balances={status?.balances ?? null} /></div>
+        <div className="bg-[#101319] p-5"><p className="flex items-center gap-1.5 text-[12px] text-white/55"><Bot aria-hidden="true" className="size-3.5" />{status?.vault?.deployed ? "In your vault" : "Total with agent"}</p><HoldingsBar balances={status?.balances ?? null} /></div>
         <BudgetCard mandate={status?.mandate ?? null} spentMinor={status?.spentMinor ?? "0"} />
         <MorphoShareCard value={share ?? (status ? String(status.policyMorphoCapBps / 100) : "")} onChange={setShare} capBps={status?.policyMorphoCapBps ?? 0} disabled={busy || open} />
       </section>
@@ -368,18 +416,20 @@ export function AutopilotView() {
           <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass + " mono tabular-nums"} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
           <div className="flex flex-wrap items-center gap-2">
             <ConfirmButton type="submit" disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</ConfirmButton>
-            <Tip label="How investing works">Your wallet sends the USDC to your agent; the agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s limits and keeps the rest ready as cash.</Tip>
+            <Tip label="How investing works">Your wallet sends the USDC into your own vault (the first time it also creates the vault). Your agent puts up to {(status?.policyMorphoCapBps ?? 0) / 100}% into Morpho within Hodd&apos;s and the vault&apos;s limits, keeps the rest ready as cash and pays the bills you approved.</Tip>
           </div>
         </form></SectionCard>
         <SectionCard><SectionHeading icon={<Undo2 aria-hidden="true" className="size-4" />} title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
           <div>
-            <p className="flex items-center gap-1 text-[12px] text-white/55">With your agent<Tip align="end" label="About returning">A tiny network-fee remainder stays behind.</Tip></p>
+            <p className="flex items-center gap-1 text-[12px] text-white/55">{status?.vault?.deployed ? "In your vault" : "With your agent"}<Tip align="end" label="About returning">{status?.vault?.deployed ? "Your agent redeems the Morpho position straight to your wallet, then sends the vault's cash. You can also do it yourself below." : "A tiny network-fee remainder stays behind."}</Tip></p>
             <p className="mono mt-1 text-2xl font-medium tabular-nums tracking-[-0.03em]">{total === null ? "Balance unavailable" : display(total)}</p>
           </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-white/60"><Bot aria-hidden="true" className="size-4 shrink-0" /><ArrowRight aria-hidden="true" className="size-3.5 shrink-0 text-white/40" /><Wallet aria-hidden="true" className="size-4 shrink-0" /><span className="sr-only">Destination:</span>{destination ? <span title={destination} className="mono text-[13px] text-white/80">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : <span>Connect your verified wallet</span>}</p>
           <ConfirmButton disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</ConfirmButton>
         </div></SectionCard>
       </div>
+      {status?.vault && <VaultCard vault={status.vault} disabled={disabled} onWithdrawAll={() => void act(signal => vaultAction({ op: "withdraw-all" }, signal))} />}
+      {status?.vault?.deployed && <VaultBills bills={status.bills ?? []} disabled={disabled} onApprove={id => void act(signal => vaultAction({ op: "approve-bill", obligationId: id }, signal))} />}
       {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading title="Progress" />
         <AutopilotProgress input={progress} />
         {manualAddress && <div className="space-y-3 px-5 pb-5 text-sm"><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}><Copy aria-hidden="true" className="size-3.5" />Copy agent address</button></div>}

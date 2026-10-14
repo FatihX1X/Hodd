@@ -10,7 +10,7 @@ Hodd keeps a business's money ahead of what it owes. It does five things:
 - pays bills from the owner's own wallet;
 - keeps a record of every decision.
 
-A separate agent wallet, **Autopilot**, runs that loop on a budget the owner sets. An AI advisor decides when to invest less, wait or de-risk, inside limits it cannot change, and writes down why.
+**Autopilot** runs that loop from the owner's own vault contract. The owner's wallet owns it; Hodd's agent is only its operator. The agent invests, keeps cash for upcoming bills and pays the bills the owner approved, inside limits the contract enforces. An AI advisor decides when to invest less, wait or de-risk, and writes down why.
 
 Built from scratch for the **[Tameion Agents Hackathon](https://tameion.thecanteenapp.com/)** (Canteen × Circle, on Arc, Sep 27 – Oct 17, 2026). The first commit is the first day of the event.
 
@@ -19,7 +19,7 @@ Built from scratch for the **[Tameion Agents Hackathon](https://tameion.thecante
 | Live app (Arc Testnet) | [app.hoddfinance.xyz](https://app.hoddfinance.xyz) |
 | Landing page | [hoddfinance.xyz](https://hoddfinance.xyz) |
 | Network | Arc Testnet (chain ID `5042002`), USDC for value and gas |
-| Contracts | [`contracts/`](./contracts) (Foundry). HoddUSYCVault is live at [`0x97A7…0b76`](https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76), allowlisted by Circle |
+| Contracts | [`contracts/`](./contracts) (Foundry). HoddieVaultFactory [`0x3115…e389`](https://testnet.arcscan.app/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389) creates each user's vault; HoddUSYCVault [`0x97A7…0b76`](https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76) is allowlisted by Circle. Both verified on ArcScan |
 
 ## Why Hodd
 
@@ -44,7 +44,7 @@ Every page reads live balances from Arc Testnet, and every money movement ends w
 | **Invest** | Deposit into, withdraw from or fully redeem an allowlisted **Morpho** vault through Circle's App Kit. Deposit USDC into **USYC** through Hodd's pooled vault and take USDC back, with no allowlisting needed for the user. The page also shows strategy limits and a live target mix. |
 | **Obligations** | Add bills with due dates and Arc recipients and see them on a payment calendar and weekly outflow bars. Pay a bill from the connected wallet; it becomes **PAID** only after the canonical USDC transfer is verified. A bill can also be paid **from another chain** through Gateway. |
 | **Policy** | Set the safety buffer, the minimum liquidity coverage, the cap per strategy, the planning horizon and how early bills are protected. The page shows today's checks as meters and states the policy in plain language. |
-| **Autopilot** | Give the agent wallet a budget with **Invest N USDC**, or take everything back with **Return everything**. A progress rail follows each step to the verified receipt. **History** shows every run: what triggered it, what the engine proposed, what the AI advisor decided and why. |
+| **Autopilot** | **Invest N USDC** creates the owner's vault on first use and funds it. Approve a bill once with **Let Autopilot pay**, and the agent pays it from the vault a day before it is due. **Return everything** brings it all back through the agent; **Take everything back yourself** does it from the owner's wallet without Hodd. A progress rail follows each step to the verified receipt. **History** shows every run: what triggered it, what the engine proposed, what the AI advisor decided and why. |
 | **Hoddie** | A treasury assistant in English and Turkish. It answers from the engine's own numbers ("Can I pay tomorrow's bills?") and drafts bills, policy changes and payment or Earn requests for the owner to approve. It never moves money. |
 | **Activity** | A timeline of everything that happened. Local audit records are kept apart from onchain receipts. |
 | **Connections** | Connect Hodd to Claude as a remote MCP connector with 19 tools. Reads are instant. Every write is previewed, approved by the user in Claude and recorded, and a connection can be revoked in one click. |
@@ -84,7 +84,7 @@ The advisor is always on for every Autopilot, behind an operator switch.
 
 The judging FAQ asks how much autonomy an agent should have. In Hodd the limits live outside the model and outside the browser:
 
-- **Two possible destinations.** The Autopilot wallet can only call the Earn router for the allowlisted Morpho vault, or transfer canonical USDC to the owner's proven wallet. Any other call is refused before signing.
+- **A contract the owner owns.** The money sits in the owner's HoddieVault. The agent can only invest in the allowlisted strategy, bring money back to the vault or the owner, and pay recipients the owner approved, up to each recipient's cap and the vault's rolling 24-hour budgets. The contract refuses anything else, and the owner can always run `withdrawAll`, even with Hodd offline.
 - **A mandate the owner sets.** It covers the budget, the cash reserve, the maximum per run and the maximum Morpho share. The owner can pause the agent or ask for everything back at any time.
 - **An envelope the model cannot widen.** The advisor can only lower or delay what the engine allows, or pull money back to the agent's own cash. It can never move more, pick a new destination or skip a safety move.
 - **Bills first.** The engine never invests protected capital. A liquidity shortfall on the owner's side is covered before anything is invested.
@@ -93,7 +93,7 @@ The judging FAQ asks how much autonomy an agent should have. In Hodd the limits 
 - **A complete record.** Every run, payment and Earn operation keeps its inputs, decision, transaction hash and server-verified receipt.
 - **Kill switches.** One database row pauses all live execution within 30 seconds. Other rows pause just Earn, payments, Autopilot, the advisor, USYC or a single wallet provider.
 
-Today these limits are enforced by Hodd's server and database: owner-only row-level security, single-use quotes and a per-wallet lease. [`HoddieVault`](./contracts/src/HoddieVault.sol) moves them onchain: a per-user vault in which the user's wallet is the owner and the agent is only a limited operator. Its limits are rolling 24-hour deposit and payment budgets, recipient caps and slippage bounds. It is written and tested (unit, fuzz, invariant and Arc fork tests) and is not deployed yet.
+The budgets are enforced onchain by [`HoddieVault`](./contracts/src/HoddieVault.sol): rolling 24-hour deposit and payment budgets, recipient caps and slippage bounds. Hodd's server and database add a second layer: owner-only row-level security, single-use quotes, a per-wallet lease, and a payment ledger that never lets two payments of the same bill run at once.
 
 ## Circle and Arc stack
 
@@ -106,13 +106,14 @@ Today these limits are enforced by Hodd's server and database: owner-only row-le
 | **Circle App Kit (Earn)** | Vault discovery, Morpho deposits, withdrawals and redemptions |
 | **Circle Gateway + Forwarding Service** | Unified USDC balance across 12 testnets. Bringing USDC to Arc with one button: the shortfall is deposited with an EIP-2612 permit in a single `depositWithPermit` transaction, and a burn intent signed up front is submitted once Gateway credits it. Paying bills from another chain |
 | **USYC** | Yield on reserve cash through [HoddUSYCVault](./contracts/src/HoddUSYCVault.sol). Circle allowlisted this one pooled contract, so users deposit and withdraw plain USDC and never need allowlisting themselves |
-| **Contracts** | HoddUSYCVault deployed and verified on Arc Testnet. HoddieVault and its CREATE2 factory written and tested |
+| **Contracts** | HoddieVaultFactory (one CREATE2 vault per owner and agent) and HoddUSYCVault, both deployed and verified on Arc Testnet |
 
 ## Verified live on Arc Testnet
 
 | Flow | Evidence |
 | --- | --- |
 | **Autopilot, full cycle in production** (2026-10-11) | Invest: approval [`0x1dfe…8376`](https://testnet.arcscan.app/tx/0x1dfe79052419b228247398e55a40873343c0e0c7d1a60c0b20880e6678c78376), Morpho deposit of 8.955895 USDC [`0xb784…d953`](https://testnet.arcscan.app/tx/0xb78410ce3819829b843fdb5e14e396056acf99a726b254a04d7250664a58d953). Return everything: withdrawal [`0x81a6…bc96`](https://testnet.arcscan.app/tx/0x81a6ece8d993972592a50d754bc83cdd0ea8e612a7971427dd823811dd2dbc96), then 14.973529 USDC back to the owner [`0xd604…45b5`](https://testnet.arcscan.app/tx/0xd6048d1deadf6682feefb7176e471dc72071340c79ca8a20827354995dc045b5). See [Autopilot validation](./docs/autopilot-validation.md) |
+| **Autopilot vault, full lifecycle** (2026-10-14) | Owner creates the vault, funds it and approves a recipient; the Circle agent deposits into Morpho, withdraws, pays the bill, redeems to the owner and sends cash to the owner; the contract refuses a payment over the cap and to an unknown address; the owner runs `withdrawAll`. Pay: [`0x6f25…6a01`](https://testnet.arcscan.app/tx/0x6f252005839251353d689cc8300f66ff73bbe1b51e52c14aeee238d104aa6a01). See [Autopilot validation](./docs/autopilot-validation.md) |
 | **AI advisor** | A live Groq call returned a decision inside the envelope with its reason. The hourly scheduler tick answered `200 READY` in production |
 | **Bill payment with a verified receipt** | 0.1 USDC from the treasury wallet, [`0xf5df…6de7`](https://testnet.arcscan.app/tx/0xf5df364fd1cb752ad08c2cfef31dea260c7a1d5acd7e65cc724315c5f30c6de7) |
 | **USYC through HoddUSYCVault** | Deposit 1 USDC, then withdraw everything back to the same wallet. See [USYC validation](./docs/usyc-validation.md) |
@@ -142,7 +143,7 @@ Snapshot from the production database on 2026-10-13. All values are testnet USDC
 4. On **Obligations**, add a bill. Watch protected and deployable capital change on **Overview**.
 5. On **Invest**, deposit into Morpho or the USYC pool: press once, then **Confirm?**. The progress rail follows each step until the receipt is verified.
 6. If you have USDC on another testnet, use **Bring USDC to Arc** on Overview. It is one button and needs only free signatures plus at most one transaction.
-7. On **Autopilot**, press **Invest 5 USDC**, then **Confirm?**. Open **History** to see the decision, its trigger and the advisor's reason. **Return everything** brings it back.
+7. On **Autopilot**, press **Invest 5 USDC**, then **Confirm?**. The first time, your wallet also creates your vault. Under **Bills Autopilot pays**, press **Let Autopilot pay** for a bill. Open **History** to see each decision, its trigger and the advisor's reason. **Return everything** brings it all back.
 8. Ask **Hoddie** "Can I pay tomorrow's bills?", then check **Activity** for the record.
 
 Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gateway moves need MetaMask or Rabby.
@@ -155,6 +156,7 @@ Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gatewa
 | Oct 6 – 9 | Live testnet host with kill switches, wallet ownership proofs, durable Earn and payment state machines, Claude connector (MCP), Hoddie assistant, landing page |
 | Oct 10 – 11 | Autopilot agent wallet (one-click Invest and Return everything), Circle Gateway (unified balance, bring to Arc, pay from another chain), animated progress rail |
 | Oct 12 – 13 | HoddieVault and factory, HoddUSYCVault deployed and allowlisted by Circle, USYC in the app, AI advisor with six-hourly and event triggers, one-button Gateway with permit deposits, a visual redesign of every page, Confirm? on one-tap actions |
+| Oct 14 | HoddieVaultFactory deployed; Autopilot runs from each owner's vault and pays approved bills through the payment ledger |
 
 ## Architecture and tests
 
@@ -168,7 +170,6 @@ Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gatewa
 **Not done yet:**
 - Circle Passkey acceptance on the live host.
 - Circle PIN (switched off).
-- Deploying HoddieVault, so that agent budgets are enforced onchain.
 - Outside businesses.
 
 Contracts are testnet-grade and unaudited. Everything runs on testnet.
@@ -398,9 +399,11 @@ Money requests are saved through the signed review and separate confirmation rou
 
 Overview shows the selected wallet's USDC on 12 Circle Gateway testnets plus its Gateway unified balance (`/api/gateway/balances`, public read, display only — the Treasury Engine still counts Arc funds alone). **Bring USDC to Arc** is one button (pressed twice: **Confirm?**). `MOVE_QUOTE` estimates Gateway's fee and, when the Gateway balance on the source chain is short of the amount plus fees, adds the shortfall with an exact EIP-2612 permit to the GatewayWallet (`src/lib/gateway/permit.ts`; the token's own `DOMAIN_SEPARATOR` must match, otherwise it falls back to approve + `deposit`). The wallet signs the free EIP-712 burn intent first, then the permit, then sends one `depositWithPermit` transaction; the page waits for Gateway to credit it (the quote handle lives one hour in that case) and submits the intent signed at the start. Circle's Forwarding Service mints on Arc to the user's own wallet and Hodd verifies the mint before offering the normal Morpho deposit within the engine's limit. "Only add to Gateway" keeps the plain deposit for paying from another chain later. **Pay from another chain** (Obligations) puts a payment proposal on the `GATEWAY` rail: Gateway mints the exact amount straight to the obligation's Arc recipient, and PAID still requires a verified GatewayMinter `Transfer(0x0 → recipient, amount)`. Direct minting to a third-party recipient was verified live before building this (see [Gateway validation](./docs/gateway-validation.md)). Gateway signing is EOA-only (MetaMask, Rabby, dev test signer). No new database migration or environment variable is needed; execution uses the existing Earn/payment gates and kill switches.
 
-## Autopilot (agent wallet)
+## Autopilot (agent wallet and vault)
 
 `/autopilot` gives a separate Circle developer-controlled wallet (one EOA per user on Arc Testnet) a budget. It has two buttons: **Invest N USDC** creates the agent and its mandate, asks the user's wallet to sign one USDC transfer to the agent and starts it; **Return everything** withdraws the agent's Morpho position and sends all its USDC (minus that transfer's gas) to the user's verified wallet in a single run. Funded this way, Hodd's deterministic engine then invests idle budget in the allowlisted Morpho vault, refills the agent's cash reserve, and sends liquidity back to the user's proven wallet when obligations need it. The agent can only call the Earn router for the allowlisted vault and transfer canonical USDC to the owner's verified wallet; every run records its inputs, decision, Circle transaction and verified receipt, and UNKNOWN outcomes are never resubmitted. Requires `supabase/migrations/20261010121212_agent_autopilot.sql`, `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET`, `HODD_AGENT_EXECUTION_ENABLED=true` locally, and the `AGENT` row in `hodd_live_controls` (on for the live host). Live custody evidence and the fixes it produced: [Autopilot validation](./docs/autopilot-validation.md).
+
+**Vault mode** (`src/lib/autopilot/vault*.ts`, migration `20261014082201_autopilot_vault.sql`). Invest predicts the owner's vault address from HoddieVaultFactory `0x311578B21F269ca0E45f5c16324A3E51f69ce389` (owner = the user's wallet, operator = the Circle agent, fixed limits of 1,000 USDC per deposit or payment and 2,000 USDC a day each, strategies Morpho and HoddUSYCVault) and returns the owner's calls: create the vault (first time), top up the agent's fee money (0.5 USDC), fund the vault. Hodd stores the vault only after reading its owner, operator, asset, limits and strategies onchain. Runs then decide over the vault's cash and Morpho position (`decideVault`): approved bills due within a day are paid first (`pay`, after a `withdrawFromStrategy` for any missing part), approved bills inside the protection window keep their cash, and the rest goes through the same engine and advisor. Each operator call is decoded before signing (only this vault, only the five operator functions, only the Morpho strategy) and verified from the vault's events after. A bill payment opens a `payment_proposals` row on the `AUTOPILOT_VAULT` rail before it is signed and closes through `hodd_finish_payment`, so the bill becomes PAID like an owner payment and can never be paid twice. It is paid only while no other payment of the owner is open. The owner approves recipients (`addRecipient`, cap = the bill) and can `withdrawAll` from the Autopilot page. Live lifecycle: `HODD_VAULT_LIVE=1` (`src/lib/autopilot/vault.live.test.ts`).
 
 **Scheduling.** `supabase/migrations/20261013192912_autopilot_scheduler.sql` adds an hourly pg_cron job (`hodd-autopilot-tick`, minute 7) that calls `/api/autopilot/cron` through pg_net with a bearer secret kept in Supabase Vault (`autopilot_scheduler_secret`; `CRON_SECRET` for Vercel's daily cron also works). For up to 50 mandates per tick it starts at most five runs, each only when `scheduledTrigger` (`src/lib/autopilot/triggers.ts`) says so: first run, six hours since the last run, a policy that differs from the last run's snapshot, or a bill that entered its protection window or fell due since then; never twice within five minutes. The trigger is stored on the run and shown in History.
 
