@@ -20,6 +20,7 @@ import { assessPayment } from "./policy";
 import { verifyPaymentReceipt, verifyPaymentRevert } from "./receipts";
 import type { PaymentProposal } from "./models";
 import { verifyPaymentUserOperation, resolvePaymentUserOperation } from "./user-operation";
+import { consumedNonceProof, type NonceReader } from "./nonce-proof";
 
 const integer = z.string().regex(/^\d+$/);
 export const paymentPendingSchema = z.object({
@@ -240,8 +241,10 @@ export async function advancePayment(context: PaymentContext, id: string, candid
 
 /**
  * Releases an expired payment only with proof nothing was sent: the wallet's
- * nonce is unchanged (and the user confirms the wallet request was closed), or
- * Circle reports the PIN challenge as failed or expired.
+ * nonce is unchanged (and the user confirms the wallet request was closed), the
+ * nonce it was prepared with was used by a different mined transaction (so no
+ * signed copy can ever be included), or Circle reports the PIN challenge as
+ * failed or expired.
  */
 export async function recoverPayment(context: PaymentContext, id: string, acknowledged: boolean) {
   const { row, record } = await readPayment(context, id, true); arcOnly(record.proposal); const pending = pendingOf(row);
@@ -257,6 +260,13 @@ export async function recoverPayment(context: PaymentContext, id: string, acknow
       const [latest, mempool] = await Promise.all([arcClient.getTransactionCount({ address, blockTag: "latest" }), arcClient.getTransactionCount({ address, blockTag: "pending" })]);
       if (BigInt(latest) === BigInt(pending.nonce) && BigInt(mempool) === BigInt(pending.nonce)) proof = { kind: "EOA_NONCE", nonce: pending.nonce };
     } else if (context.wallet.provider === "CIRCLE_MODULAR" && (await (await modularReadClient(context.wallet)).account.getNonce()) === BigInt(pending.nonce)) proof = { kind: "MSCA_NONCE", nonce: pending.nonce };
+  }
+  if (!proof && pending.nonce && context.wallet.accountType === "EOA") {
+    // The wallet moved on: find the transaction that used this nonce. A different one means this payment can never land.
+    // Any read failure proves nothing: the payment stays held.
+    const consumed = await consumedNonceProof(arcClient as unknown as NonceReader, context.wallet.address, BigInt(pending.nonce), BigInt(record.proposal.startBlock), pending.calls[0]).catch(() => null);
+    if (consumed && "payment" in consumed) throw new EarnAccessError("RECOVERY_NOT_PROVEN", `This payment was sent: ${consumed.payment}. Paste that hash to verify it.`, 409);
+    if (consumed) proof = consumed.proof;
   }
   if (!proof) throw new EarnAccessError("RECOVERY_NOT_PROVEN", "Hodd cannot prove that nothing was sent. Paste the transaction hash to verify it instead.", 409);
   const { error } = await admin().rpc("hodd_release_unsubmitted_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_proof: { ...proof, releasedAt: new Date().toISOString() } });

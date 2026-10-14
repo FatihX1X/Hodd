@@ -67,3 +67,7 @@ The owner's live account had used the custodial agent: the agent wallet `0xae40â
    - 19.523539 USDC moved to the vault, tx `0x68a0751a2160d9b2a3d19126d223b45ee1f993b579dd3de555fc096894a7dda3`.
 
 After the run, the vault held 19.523539 USDC cash plus 19.963245 USDC in Morpho. The agent kept 0.498531 USDC for network fees.
+
+An owner MetaMask payment for the account's 2 USDC bill (`1bed6922â€¦`, 2026-10-13) had been left UNKNOWN with no hash. While it stayed open, the ledger could not mark any bill PAID, so Autopilot paid nothing. Its prepared nonce, 62, was then used by the owner's 30 USDC Autopilot funding transfer `0xc69f43b23add5999b6aa7697ab37eba0a7167b4a909052f772d32e9943614dcf` (block 67127988): the owner's nonce was 62 at block 67127987 and 63 at block 67127988. A transaction prepared with nonce 62 can therefore never be included.
+
+Recovery used to accept only an unchanged nonce, so this payment could never be released. It now also accepts this proof (`EOA_NONCE_CONSUMED`, `src/lib/payments/nonce-proof.ts`). The payment was released through `hodd_release_unsubmitted_payment` with that proof stored on the record.

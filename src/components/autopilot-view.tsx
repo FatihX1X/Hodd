@@ -368,7 +368,17 @@ export function AutopilotView() {
       for (let attempt = 0; attempt < 20; attempt += 1) {
         await wait(2_000, signal);
         const fresh = await load(signal);
-        if (body.op === "approve-bill" ? fresh.bills?.find(bill => bill.id === body.obligationId)?.plan === "PAYS" : !fresh.balances || BigInt(fresh.balances.cashMinor) + BigInt(fresh.balances.positionMinor) === 0n) return;
+        const approved = body.op === "approve-bill" ? fresh.bills?.find(bill => bill.id === body.obligationId) : undefined;
+        if (approved?.plan === "PAYS") {
+          // A bill that is already due is paid right away instead of at the next scheduled run.
+          if (approved.payFrom && Date.parse(approved.payFrom) <= Date.now() && !fresh.runs.some(isOpen)) {
+            setMessage("Approved. Autopilot is paying this bill from your vault now.");
+            setActiveRun(null); setPhase("starting");
+            await startRun("run", signal);
+          }
+          return;
+        }
+        if (body.op === "withdraw-all" && (!fresh.balances || BigInt(fresh.balances.cashMinor) + BigInt(fresh.balances.positionMinor) === 0n)) return;
       }
       setMessage("Sent (" + hash.slice(0, 10) + "…). It has not shown up yet; check again in a moment.");
     } else await load(signal);

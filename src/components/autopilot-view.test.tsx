@@ -216,6 +216,25 @@ describe("Autopilot vault mode", () => {
     await act(async () => { fireEvent.click(button); });
     await waitFor(() => expect(requests).toContainEqual({ action: "vault", body: { op: "approve-bill", obligationId: "rent" } }));
     await waitFor(() => expect(mocks.signer!.sendCalls).toHaveBeenCalledExactlyOnceWith([approve.call], "1000", undefined, undefined, approve.gasCeiling));
+    // Not due yet (pays from a future date): no run is started now.
+    expect(requests.map(item => item.action)).not.toContain("run");
+  });
+
+  it("starts the payment right away when the approved bill is already due", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    snapshot = vaultSnapshot() as unknown as ReturnType<typeof initial>;
+    mocks.signer = { sendCalls: vi.fn().mockResolvedValue(hash) };
+    const paying = { ...run, decision: { kind: "PAY_BILL", depositMinor: "0", withdrawMinor: "0", transferMinor: "2000000", explanation: "Pay the bill." } };
+    handler = action => {
+      if (action === "vault") { snapshot = { ...snapshot, bills: (snapshot as unknown as ReturnType<typeof vaultSnapshot>).bills.map(bill => bill.id === "rent" ? { ...bill, plan: "PAYS", payFrom: new Date(Date.now() - 60_000).toISOString() } : bill) } as unknown as ReturnType<typeof initial>; return json({ status: "READY", call: ownerCall("APPROVE_BILL", vaultAddress) }); }
+      return json({ status: "READY", run: paying });
+    };
+    await ready();
+    const button = screen.getByRole("button", { name: "Let Autopilot pay Office rent" });
+    fireEvent.click(button);
+    await act(async () => { fireEvent.click(button); });
+    await tick(3_000);
+    await waitFor(() => expect(requests.map(item => item.action)).toContain("run"));
   });
 
   it("creates the vault, tops up the agent's fee money and funds the vault in that order, then starts the agent", async () => {
