@@ -56,3 +56,14 @@ The ledger path for a vault bill payment was checked against the production data
 - a second payment for the same bill is refused;
 - workspace edits are blocked while the payment is open;
 - `hodd_finish_payment` marks the proposal CONFIRMED and the bill PAID with the proposal as its reference, and releases the lease.
+
+## Production account moved into its vault (2026-10-14)
+
+The owner's live account had used the custodial agent: the agent wallet `0xae40…750b` held 20.03 USDC and a Morpho position worth 19.96 USDC. Steps:
+1. **Vault created.** The owner's vault was created through the factory (permissionless; owner = the owner's wallet `0xdef0…2e7c`, operator = the agent). Tx `0x7c7199e80c96eeb2f7d6f364d3a1fec539a2a30336a70fa30a9f03029d800e87`, vault `0xA425dD0ACC673405E648EBe64eED2fC4Da0AD02d`.
+2. **Vault checked and registered.** Its owner, operator, asset, limits and strategies were read back on-chain, then the vault was registered on the account.
+3. **First run started.** The production scheduler started the first vault-mode run (trigger FIRST_RUN). It decided MOVE_TO_VAULT and completed two verified steps:
+   - the agent's Morpho shares moved to the vault, tx `0x58af220ca9dd5906679dea3969c79a971898cf70c60da58645de205a2128e276`;
+   - 19.523539 USDC moved to the vault, tx `0x68a0751a2160d9b2a3d19126d223b45ee1f993b579dd3de555fc096894a7dda3`.
+
+After the run, the vault held 19.523539 USDC cash plus 19.963245 USDC in Morpho. The agent kept 0.498531 USDC for network fees.

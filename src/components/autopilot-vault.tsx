@@ -58,7 +58,7 @@ export function VaultCard({ vault, disabled, onWithdrawAll }: { vault: VaultView
 
 const plans: Record<VaultBillView["plan"], { label: string; tone: "success" | "warning" | "neutral" | "info" }> = {
   PAYS: { label: "Autopilot pays", tone: "success" },
-  IN_FLIGHT: { label: "Paying now", tone: "info" },
+  IN_FLIGHT: { label: "Payment open", tone: "info" },
   NEEDS_APPROVAL: { label: "Needs your approval", tone: "warning" },
   CAP_TOO_LOW: { label: "Approve the new amount", tone: "warning" },
   NO_RECIPIENT: { label: "No Arc address", tone: "neutral" },

@@ -118,6 +118,9 @@ export async function vaultView(wallet: AgentWallet, now = new Date()) {
   const unapproved = bills.filter((bill) => bill.plan === "NEEDS_APPROVAL" || bill.plan === "CAP_TOO_LOW");
   if (unapproved.length) needsYou.push({ code: "APPROVE_BILLS", message: `${unapproved.length === 1 ? "One bill needs" : `${unapproved.length} bills need`} your approval before Autopilot can pay ${unapproved.length === 1 ? "it" : "them"}.` });
   if (BigInt(v.cash.balance.minorUnits) < BigInt(v.feeReserveMinor)) needsYou.push({ code: "AGENT_GAS", message: "The agent wallet is out of network-fee money. Invest again (it tops it up) or send it a few cents." });
+  // A payment the owner started elsewhere and left open blocks the ledger, and with it every Autopilot bill payment.
+  const ownerOpen = v.activePayments.filter((row) => row.rail !== "AUTOPILOT_VAULT");
+  if (ownerOpen.length) needsYou.push({ code: "OPEN_PAYMENT", message: ownerOpen.some((row) => row.state === "UNKNOWN") ? "A payment you started on Obligations has an unknown outcome. Resolve it there (Check again, or tell Hodd you closed the wallet request); Autopilot pays no bill until then." : "A payment you started on Obligations is still open. Autopilot pays bills once it finishes." });
   if (v.config.paused) needsYou.push({ code: "VAULT_PAUSED", message: "Your vault is paused. Autopilot cannot act until you unpause it." });
   return {
     vault: { address: v.vaultAddress, deployed: true, factory: HODDIE_VAULT_FACTORY, paused: v.config.paused, limits: { maxDepositPerTxMinor: v.config.limits.maxDepositPerTx.toString(), depositLimit24hMinor: v.config.limits.depositLimit24h.toString(), maxPaymentPerTxMinor: v.config.limits.maxPaymentPerTx.toString(), paymentLimit24hMinor: v.config.limits.paymentLimit24h.toString() }, strategies: [...VAULT_STRATEGIES], depositRoomMinor: v.funds.depositRoomMinor.toString(), paymentRoomMinor: v.funds.paymentRoomMinor.toString(), agentGasMinor: v.cash.balance.minorUnits },

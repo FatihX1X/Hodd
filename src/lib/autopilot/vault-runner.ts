@@ -34,10 +34,10 @@ export async function vaultInputs(userId: string) {
   const withRecipient = openBills.filter((o) => o.recipientAddress);
   const [recipients, active] = await Promise.all([
     withRecipient.length ? readRecipients(vaultAddress, withRecipient.map((o) => o.recipientAddress!)) : Promise.resolve(new Map<string, { approved: boolean; capMinor: bigint }>()),
-    agentDb().from("payment_proposals").select("id,obligation_id").eq("user_id", userId).eq("scope", "TREASURY").in("state", ACTIVE_PAYMENT),
+    agentDb().from("payment_proposals").select("id,obligation_id,state,rail:proposal->>rail").eq("user_id", userId).eq("scope", "TREASURY").in("state", ACTIVE_PAYMENT),
   ]);
   if (active.error) throw new Error("AGENT_STATUS_UNAVAILABLE");
-  const activeRows = (active.data ?? []) as { id: string; obligation_id: string }[];
+  const activeRows = (active.data ?? []) as { id: string; obligation_id: string; state?: string; rail?: string | null }[];
   const bills: VaultBill[] = openBills.map((obligation) => {
     const r = obligation.recipientAddress ? recipients.get(getAddress(obligation.recipientAddress)) : undefined;
     return { obligation, approved: r?.approved ?? false, capMinor: r?.capMinor ?? 0n, busy: activeRows.some((row) => row.obligation_id === obligation.id) };
