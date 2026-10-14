@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, type Hash } from "viem";
-import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, ReceiptText, Settings2, ShieldPlus, TrendingUp, Undo2, Wallet, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CircleSlash, Sparkles, Copy, Droplets, ExternalLink, History, LifeBuoy, Pause, ReceiptText, Settings2, ShieldPlus, TrendingUp, Undo2, Vault, Wallet, type LucideIcon } from "lucide-react";
 import { PageBody, PageHeader, SectionCard, SectionHeading, StatusPill, buttonClass, inputClass } from "./primitives";
 import { ConfirmButton } from "./confirm-button";
 import { NeedsYouBanner, VaultBills, VaultCard, type NeedsYou, type VaultBillView, type VaultView } from "./autopilot-vault";
@@ -85,6 +85,7 @@ const decisionKinds: Record<Decision["kind"], { label: string; Icon: LucideIcon;
   NO_ACTION: { label: "No action needed", Icon: CircleSlash, color: "#8d8b84" },
   DE_RISK: { label: "Moved Morpho back to cash", Icon: ArrowDownToLine, color: moneyColor.LIQUID },
   PAY_BILL: { label: "Paid a bill", Icon: ReceiptText, color: moneyColor.protected },
+  MOVE_TO_VAULT: { label: "Moved into your vault", Icon: Vault, color: moneyColor.safe },
 };
 const advisorStates: Record<NonNullable<Decision["advisor"]>["status"], { label: string; tone: "info" | "success" | "warning" | "neutral" }> = {
   APPLIED: { label: "Advisor adjusted", tone: "info" },
@@ -160,7 +161,7 @@ function MorphoShareCard({ value, onChange, capBps, disabled }: { value: string;
 function RunTimeline({ runs, steps }: { runs: Run[]; steps: Status["steps"] }) {
   return <ol className="p-5 pt-2">{runs.map((item, index) => {
     const kind = decisionKinds[item.decision.kind] ?? decisionKinds.NO_ACTION, Icon = kind.Icon;
-    const moved = [["Deposit", item.decision.depositMinor], ["Withdraw", item.decision.withdrawMinor], [item.decision.kind === "PAY_BILL" ? "Paid" : "Return", item.decision.transferMinor]].filter(([, minor]) => BigInt(minor) > 0n);
+    const moved = [["Deposit", item.decision.depositMinor], [item.decision.kind === "MOVE_TO_VAULT" ? "Morpho moved" : "Withdraw", item.decision.withdrawMinor], [item.decision.kind === "PAY_BILL" ? "Paid" : item.decision.kind === "MOVE_TO_VAULT" ? "Cash moved" : "Return", item.decision.transferMinor]].filter(([, minor]) => BigInt(minor) > 0n);
     const own = steps.filter(step => step.run_id === item.id);
     return <li key={item.id} className="relative flex gap-4 pb-6 last:pb-0">
       {index < runs.length - 1 && <span aria-hidden="true" className="absolute bottom-0 left-4 top-9 w-px bg-white/10" />}

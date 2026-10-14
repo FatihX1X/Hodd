@@ -48,12 +48,10 @@ describe("one-click invest",()=>{
     expect(m.investCalls).toHaveBeenCalledWith(expect.objectContaining({address:agent}),10_000_000n);
     expect(m.start).not.toHaveBeenCalled();
   });
-  it("first brings back funds the custodial agent still holds",async()=>{
-    m.agentPosition=7_000_000n;let response=await post("invest",{amountMinor:"1000000"});
-    expect(response.status).toBe(409);expect((await response.json()).code).toBe("AGENT_CUSTODIAL_FUNDS");
-    m.agentPosition=0n;m.holdings=2_000_000n;
-    expect(m.investCalls).not.toHaveBeenCalled();expect(m.rpc).not.toHaveBeenCalled();
-    response=await post("invest",{amountMinor:"1000000"});expect(response.status).toBe(200);
+  it("counts what the custodial agent still holds in the budget; its next run moves it into the vault",async()=>{
+    m.agentCash=40_000_000n;m.holdings=2_000_000n;
+    const response=await post("invest",{amountMinor:"1000000"});expect(response.status).toBe(200);
+    expect(reviewed()).toMatchObject({p_mandate:{budgetMinor:(14_892n+2_000_000n+40_000_000n+1_000_000n).toString()}});
   });
   it("never exceeds the policy's Morpho cap and creates the agent wallet on first use",async()=>{
     m.wallet=null;m.mandate=null;m.create.mockResolvedValue({id:"00000000-0000-4000-8000-000000000003",address:agent});

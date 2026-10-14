@@ -29,7 +29,11 @@ export interface VaultDecisionInputs {
   depositRoomMinor: bigint; paymentRoomMinor: bigint; agentGasMinor: string; feeReserveMinor: string; now?: Date;
   /** Another payment of this user is still open in the ledger; a bill can only be marked PAID once it settles. */
   ledgerBusy?: boolean;
+  /** What the agent wallet still holds from the custodial mode: Morpho shares, their value, and its USDC. */
+  custodial?: { shares: bigint; positionMinor: bigint; cashMinor: bigint };
 }
+/** The agent keeps this much USDC for its own network fees; anything above it belongs in the vault. */
+export const AGENT_FEE_FLOAT_MINOR = 500_000n;
 
 /**
  * Autopilot in vault mode. Bills come first: a bill whose recipient the owner approved on the vault (within its cap
@@ -50,6 +54,13 @@ export function decideVault(input: VaultDecisionInputs): Decision {
   const autopilotActive = input.mandate.enabled && !input.mandate.paused && !input.returnAll;
   const base: Decision = { kind: "NO_ACTION", depositMinor: "0", withdrawMinor: "0", transferMinor: "0", remainingBudgetMinor: "0", protectedMinor: "0", explanation: "No safe movement is required." };
   const no = (explanation: string): Decision => ({ ...base, explanation });
+
+  // Funds the agent still holds from the custodial mode go into the owner's vault first (a return then takes them too).
+  const custodial = input.custodial;
+  if (custodial && (autopilotActive || input.returnAll) && (custodial.shares > 0n || custodial.cashMinor > AGENT_FEE_FLOAT_MINOR * 2n) && BigInt(input.agentGasMinor) >= BigInt(input.feeReserveMinor)) {
+    const cash = custodial.cashMinor > AGENT_FEE_FLOAT_MINOR * 2n ? custodial.cashMinor - AGENT_FEE_FLOAT_MINOR : 0n;
+    return { ...base, kind: "MOVE_TO_VAULT", withdrawMinor: custodial.positionMinor.toString(), transferMinor: cash.toString(), explanation: `Your agent still holds ${usdcText(custodial.positionMinor + cash)} from before your vault. Move its Morpho shares and cash into your vault, keeping ${usdcText(AGENT_FEE_FLOAT_MINOR)} for network fees.` };
+  }
 
   if (!input.returnAll) {
     if (!autopilotActive) return no("The mandate is disabled or paused.");

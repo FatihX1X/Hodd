@@ -227,3 +227,23 @@ describe("vaultLegAllowed for other runs", () => {
     expect(vaultLegAllowed(run(decision({})), toOwner, decision({}), vaultInputs())).toBe(false);
   });
 });
+
+describe("moving custodial funds into the vault", () => {
+  const withCustodial = (shares: bigint, cash: bigint) => ({ ...vaultInputs(), custodial: { shares, positionMinor: shares / 1_000_000_000_000n, cashMinor: cash } }) as unknown as VaultInputs;
+  it("moves the agent's Morpho shares first, then its cash above the fee float, then stops", async () => {
+    const r = run(decision({ kind: "MOVE_TO_VAULT", withdrawMinor: (20n * USDC).toString(), transferMinor: (19n * USDC).toString() }));
+    const v = withCustodial(19_942_138_980_429_123_206n, 20_025_098n);
+    const shares = await nextVaultLeg(r, [], v);
+    expect(shares).toEqual({ fn: "moveShares", amount: 19_942_138_980_429_123_206n });
+    expect(vaultLegAllowed(r, shares!, decision({}), v)).toBe(true);
+    const cash = await nextVaultLeg(r, [shares!], withCustodial(0n, 20_025_098n));
+    expect(cash).toEqual({ fn: "moveCash", amount: 19_525_098n });
+    expect(await nextVaultLeg(r, [shares!, cash!], withCustodial(0n, 500_000n))).toBeNull();
+  });
+  it("never moves more than the agent holds or eats into its fee float", () => {
+    const r = run(decision({ kind: "MOVE_TO_VAULT" }));
+    expect(vaultLegAllowed(r, { fn: "moveShares", amount: 2n }, decision({}), withCustodial(1n, 0n))).toBe(false);
+    expect(vaultLegAllowed(r, { fn: "moveCash", amount: 600_000n }, decision({}), withCustodial(0n, 1_000_000n))).toBe(false);
+    expect(vaultLegAllowed(r, { fn: "moveCash", amount: 500_000n }, decision({}), withCustodial(0n, 1_000_000n))).toBe(true);
+  });
+});

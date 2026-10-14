@@ -236,3 +236,15 @@ describe("verifyVaultReceipt", () => {
     expect(() => verifyVaultReceipt({ status: "reverted", logs: [transfer, payment(recipient, pay.amount, pay.ref)] }, vault, owner, pay)).toThrow("AGENT_VAULT_REVERTED");
   });
 });
+
+describe("moves into the vault", () => {
+  it("encodes plain transfers to this vault only, and decodes them back", () => {
+    const vault = "0x3333333333333333333333333333333333333333";
+    for (const op of [{ fn: "moveShares" as const, amount: 7n }, { fn: "moveCash" as const, amount: 9n }]) {
+      const call = encodeVaultCall(vault, op);
+      expect(call.to).toBe(op.fn === "moveShares" ? VAULT_MORPHO : "0x3600000000000000000000000000000000000000");
+      expect(decodeVaultCall(vault, call)).toEqual(op);
+      expect(() => decodeVaultCall("0x5555555555555555555555555555555555555555", call)).toThrow("AGENT_VAULT_CALL_REFUSED");
+    }
+  });
+});

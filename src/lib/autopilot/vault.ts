@@ -83,7 +83,10 @@ export type VaultInstruction =
   | { fn: "withdrawFromStrategy"; strategy: `0x${string}`; assets: bigint; maxShares: bigint }
   | { fn: "redeemToOwner"; strategy: `0x${string}`; shares: bigint; minAssets: bigint }
   | { fn: "transferToOwner"; amount: bigint }
-  | { fn: "pay"; recipient: `0x${string}`; amount: bigint; ref: Hex };
+  | { fn: "pay"; recipient: `0x${string}`; amount: bigint; ref: Hex }
+  // Moving what the custodial agent still holds into the owner's vault: plain ERC-20 transfers from the agent.
+  | { fn: "moveShares"; amount: bigint }
+  | { fn: "moveCash"; amount: bigint };
 export function encodeVaultCall(vault: string, op: VaultInstruction): VaultCall {
   const to = getAddress(vault);
   switch (op.fn) {
@@ -92,11 +95,20 @@ export function encodeVaultCall(vault: string, op: VaultInstruction): VaultCall 
     case "redeemToOwner": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.strategy, op.shares, op.minAssets] }), value: "0" };
     case "transferToOwner": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.amount] }), value: "0" };
     case "pay": return { to, data: encodeFunctionData({ abi: vaultAbi, functionName: op.fn, args: [op.recipient, op.amount, op.ref] }), value: "0" };
+    case "moveShares": return { to: VAULT_MORPHO, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, op.amount] }), value: "0" };
+    case "moveCash": return { to: ARC_TESTNET_USDC, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, op.amount] }), value: "0" };
   }
 }
 /** The operator call decoded back: only these five functions, only on this user's vault, only the Morpho strategy. */
 export function decodeVaultCall(vault: string, call: { to: string; data: string; value?: string }): VaultInstruction {
-  if (getAddress(call.to) !== getAddress(vault) || (call.value ?? "0") !== "0") throw new Error("AGENT_VAULT_CALL_REFUSED");
+  if ((call.value ?? "0") !== "0") throw new Error("AGENT_VAULT_CALL_REFUSED");
+  // A move into the vault: only a transfer of Morpho shares or USDC, and only to this vault.
+  if (getAddress(call.to) === VAULT_MORPHO || getAddress(call.to) === ARC_TESTNET_USDC) {
+    const move = decodeFunctionData({ abi: erc20Abi, data: call.data as Hex });
+    if (move.functionName !== "transfer" || getAddress(move.args[0]) !== getAddress(vault)) throw new Error("AGENT_VAULT_CALL_REFUSED");
+    return getAddress(call.to) === VAULT_MORPHO ? { fn: "moveShares", amount: move.args[1] } : { fn: "moveCash", amount: move.args[1] };
+  }
+  if (getAddress(call.to) !== getAddress(vault)) throw new Error("AGENT_VAULT_CALL_REFUSED");
   const decoded = decodeFunctionData({ abi: vaultAbi, data: call.data as Hex });
   const strategy = (value: unknown) => { const address = getAddress(String(value)); if (address !== VAULT_MORPHO) throw new Error("AGENT_VAULT_STRATEGY_REFUSED"); return address; };
   switch (decoded.functionName) {
@@ -130,11 +142,20 @@ const fromVault = (logs: readonly Log[], vault: string) => logs.filter((log) => 
  * What a verified operator call did, from the vault's own events (and, for a payment, the USDC transfer the recipient
  * received). Throws unless the receipt shows exactly the instruction that was signed.
  */
-export function verifyVaultReceipt(receipt: Pick<TransactionReceipt, "logs" | "status">, vault: string, owner: string, op: VaultInstruction) {
+export function verifyVaultReceipt(receipt: Pick<TransactionReceipt, "logs" | "status">, vault: string, owner: string, op: VaultInstruction, agent?: string) {
   if (receipt.status !== "success") throw new Error("AGENT_VAULT_REVERTED");
   const events = fromVault(receipt.logs, vault);
   const one = <T,>(found: T[]) => { if (found.length !== 1) throw new Error("AGENT_VAULT_EVENT_MISMATCH"); return found[0]; };
   switch (op.fn) {
+    case "moveShares": case "moveCash": {
+      const token = op.fn === "moveShares" ? VAULT_MORPHO : ARC_TESTNET_USDC;
+      if (!agent) throw new Error("AGENT_VAULT_EVENT_MISMATCH");
+      one(receipt.logs.flatMap((log) => {
+        if (getAddress(log.address) !== token) return [];
+        try { const t = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics }); return t.eventName === "Transfer" && getAddress(t.args.from) === getAddress(agent) && getAddress(t.args.to) === getAddress(vault) && t.args.value === op.amount ? [log] : []; } catch { return []; }
+      }));
+      return { assetsMinor: op.fn === "moveCash" ? op.amount : 0n, shares: op.fn === "moveShares" ? op.amount : 0n };
+    }
     case "depositToStrategy": {
       const e = one(events.flatMap((item) => item.eventName === "DepositedToStrategy" ? [item.args] : []));
       if (getAddress(e.strategy) !== op.strategy || e.assets !== op.assets || e.shares < op.minShares) throw new Error("AGENT_VAULT_EVENT_MISMATCH");

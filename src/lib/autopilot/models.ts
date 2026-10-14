@@ -21,7 +21,7 @@ export const agentWalletSchema = z.object({ user_id: z.string().uuid(), circle_w
 export type AgentWallet = z.infer<typeof agentWalletSchema>;
 export const runStatusSchema = z.enum(["RUNNING", "NO_ACTION", "COMPLETED", "PARTIAL", "FAILED", "UNKNOWN"]);
 export type RunStatus = z.infer<typeof runStatusSchema>;
-export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK", "PAY_BILL"]);
+export const decisionKindSchema = z.enum(["INVEST", "LIQUIDITY_TOP_UP", "RESERVE_REFILL", "RETURN_ALL", "NO_ACTION", "DE_RISK", "PAY_BILL", "MOVE_TO_VAULT"]);
 export const advisorActionSchema = z.enum(["FOLLOW", "REDUCE", "WAIT", "DE_RISK"]);
 /**
  * What the LLM advisor did to a run. The engine's own decision is always kept beside it. APPLIED: the advice changed

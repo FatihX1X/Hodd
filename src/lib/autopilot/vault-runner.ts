@@ -14,9 +14,9 @@ import { agentDb, patchRun, patchStep, type AgentRun, type AgentStep } from "./s
 import { stepAction } from "./state";
 import type { RunTrigger } from "./triggers";
 import type { Decision } from "./models";
-import { billRef, decodeVaultCall, encodeVaultCall, maxSharesFor, minAssetsFor, minSharesFor, verifyVaultReceipt, VAULT_MORPHO, type VaultInstruction } from "./vault";
+import { billRef, decodeVaultCall, encodeVaultCall, maxSharesFor, minAssetsFor, minSharesFor, strategyAbi, verifyVaultReceipt, VAULT_MORPHO, type VaultInstruction } from "./vault";
 import { convertToAssets, previewDeposit, previewWithdraw, readRecipients, readVaultFunds, verifiedVault } from "./vault-state";
-import { decideVault, vaultBillPlan, type VaultBill } from "./vault-decision";
+import { AGENT_FEE_FLOAT_MINOR, decideVault, vaultBillPlan, type VaultBill } from "./vault-decision";
 
 const ACTIVE_PAYMENT = ["AWAITING_SIGNATURE", "SUBMITTED", "UNKNOWN"];
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -28,7 +28,8 @@ export async function vaultInputs(userId: string) {
   if (!i.wallet.vault_address) throw new Error("AGENT_VAULT_NOT_DEPLOYED");
   const vaultAddress = getAddress(i.wallet.vault_address);
   const config = await verifiedVault(vaultAddress, i.wallet.owner_address, i.wallet.address);
-  const funds = await readVaultFunds(vaultAddress, i.vault);
+  const [funds, agentShares] = await Promise.all([readVaultFunds(vaultAddress, i.vault), arcClient.readContract({ address: VAULT_MORPHO, abi: strategyAbi, functionName: "balanceOf", args: [getAddress(i.wallet.address)] })]);
+  const custodial = { shares: agentShares, positionMinor: BigInt(i.agentPosition.currentBalance.minorUnits), cashMinor: BigInt(i.cash.balance.minorUnits) };
   const openBills = i.workspace.obligations.filter((o) => o.status === "UPCOMING" || o.status === "OVERDUE");
   const withRecipient = openBills.filter((o) => o.recipientAddress);
   const [recipients, active] = await Promise.all([
@@ -41,12 +42,12 @@ export async function vaultInputs(userId: string) {
     const r = obligation.recipientAddress ? recipients.get(getAddress(obligation.recipientAddress)) : undefined;
     return { obligation, approved: r?.approved ?? false, capMinor: r?.capMinor ?? 0n, busy: activeRows.some((row) => row.obligation_id === obligation.id) };
   });
-  return { ...i, vaultAddress, config, funds, bills, activePayments: activeRows };
+  return { ...i, vaultAddress, config, funds, bills, activePayments: activeRows, custodial };
 }
 export type VaultInputs = Awaited<ReturnType<typeof vaultInputs>>;
 
 export function vaultDecision(v: VaultInputs, now = new Date()) {
-  return decideVault({ workspace: v.workspace, ownerPositions: v.ownerPositions, vaultPosition: v.funds.position, mandate: v.stored.mandate, idleMinor: v.funds.idle.balance.minorUnits, spentMinor: String(v.stored.spent_minor), returnAll: v.stored.return_requested, bills: v.bills, depositRoomMinor: v.funds.depositRoomMinor, paymentRoomMinor: v.funds.paymentRoomMinor, agentGasMinor: v.cash.balance.minorUnits, feeReserveMinor: v.feeReserveMinor, ledgerBusy: v.activePayments.length > 0, now });
+  return decideVault({ workspace: v.workspace, ownerPositions: v.ownerPositions, vaultPosition: v.funds.position, mandate: v.stored.mandate, idleMinor: v.funds.idle.balance.minorUnits, spentMinor: String(v.stored.spent_minor), returnAll: v.stored.return_requested, bills: v.bills, depositRoomMinor: v.funds.depositRoomMinor, paymentRoomMinor: v.funds.paymentRoomMinor, agentGasMinor: v.cash.balance.minorUnits, feeReserveMinor: v.feeReserveMinor, ledgerBusy: v.activePayments.length > 0, custodial: v.custodial, now });
 }
 
 /** Same bounded advisor as the custodial agent, over the vault's cash and Morpho position (fees are the agent's). */
@@ -98,6 +99,12 @@ export async function nextVaultLeg(run: AgentRun, done: VaultInstruction[], v: V
       if (!done.length && shares > 0n) return { fn: "redeemToOwner", strategy: VAULT_MORPHO, shares, minAssets: minAssetsFor(await convertToAssets(shares)) };
       return idle > 0n ? { fn: "transferToOwner", amount: idle } : null;
     }
+    case "MOVE_TO_VAULT": {
+      if (!done.some((op) => op.fn === "moveShares") && v.custodial.shares > 0n) return { fn: "moveShares", amount: v.custodial.shares };
+      if (done.some((op) => op.fn === "moveCash")) return null;
+      const cash = v.custodial.cashMinor > AGENT_FEE_FLOAT_MINOR ? v.custodial.cashMinor - AGENT_FEE_FLOAT_MINOR : 0n;
+      return cash > 0n ? { fn: "moveCash", amount: cash } : null;
+    }
     case "PAY_BILL": {
       if (!d.bill) throw new Error("AGENT_BILL_MISSING");
       const legs = BigInt(d.withdrawMinor) > 0n ? ["withdraw", "pay"] : ["pay"];
@@ -119,6 +126,8 @@ export function vaultLegAllowed(run: AgentRun, op: VaultInstruction, fresh: Deci
     case "RESERVE_REFILL": case "LIQUIDITY_TOP_UP": return fresh.kind === d.kind && n(fresh.withdrawMinor) >= n(d.withdrawMinor) && n(fresh.transferMinor) >= n(d.transferMinor);
     case "DE_RISK": return (fresh.kind === "INVEST" || fresh.kind === "NO_ACTION") && redeemable >= n(d.withdrawMinor);
     case "RETURN_ALL": return run.return_all && v.stored.return_requested;
+    // Only into this owner's verified vault, never more than the agent holds, always keeping its fee float.
+    case "MOVE_TO_VAULT": return op.fn === "moveShares" ? op.amount <= v.custodial.shares : op.fn === "moveCash" && op.amount + AGENT_FEE_FLOAT_MINOR <= v.custodial.cashMinor;
     case "PAY_BILL": {
       const bill = v.bills.find((item) => item.obligation.id === d.bill?.obligationId);
       if (!bill || !d.bill || BigInt(bill.obligation.amount.minorUnits) !== n(d.bill.amountMinor) || !bill.obligation.recipientAddress || !same(bill.obligation.recipientAddress, d.bill.recipient)) return false;
@@ -178,7 +187,7 @@ export async function advanceVaultRun(run: AgentRun, steps: AgentStep[], allowSu
   if (!step) {
     const call = encodeVaultCall(v.vaultAddress, op);
     const gasLimit = (await arcClient.estimateGas({ account: getAddress(v.wallet.address), to: call.to, data: call.data, value: 0n }) * 120n + 99n) / 100n;
-    const amount = op.fn === "depositToStrategy" || op.fn === "withdrawFromStrategy" ? op.assets : op.fn === "redeemToOwner" ? op.minAssets : op.amount;
+    const amount = op.fn === "depositToStrategy" || op.fn === "withdrawFromStrategy" ? op.assets : op.fn === "redeemToOwner" ? op.minAssets : op.fn === "moveShares" ? 0n : op.amount;
     step = { id: randomUUID(), run_id: run.id, user_id: run.user_id, state: "PREPARED", stage: "VAULT", call, gas_limit: gasLimit.toString(), gas_price_wei: v.gasPriceWei, started_block: (await arcClient.getBlockNumber()).toString(), amount_minor: amount.toString(), circle_transaction_id: null, tx_hash: null, receipt: null };
     const { error } = await agentDb().from("agent_run_steps").insert(step); if (error) throw new Error("AGENT_STEP_STORE_UNAVAILABLE");
   }
@@ -234,7 +243,7 @@ async function settleVaultStep(run: AgentRun, initial: AgentStep): Promise<Agent
       if (op.fn === "pay") await setPayment(step.id, "FAILED");
       return patchRun(run, "FAILED", "AGENT_RECEIPT_REVERTED");
     }
-    const evidence = verifyVaultReceipt(receipt, wallet.vault_address, wallet.owner_address, op);
+    const evidence = verifyVaultReceipt(receipt, wallet.vault_address, wallet.owner_address, op, wallet.address);
     await patchStep(step, { state: "VERIFIED", receipt: { status: "VERIFIED", blockNumber: receipt.blockNumber.toString(), feeMinor, gasUsed: receipt.gasUsed.toString(), gasPriceWei: receipt.effectiveGasPrice.toString(), assetsMinor: evidence.assetsMinor.toString(), shares: evidence.shares.toString() } });
     if (op.fn === "pay") {
       // The bill becomes PAID through the same ledger function as an owner payment, bound to the canonical transfer.

@@ -21,6 +21,7 @@ import { advisorConfigured, groqAdvisor } from "./advisor-model";
 import type { Decision } from "./models";
 import type { RunTrigger } from "./triggers";
 import { advanceVaultRun, createVaultRun } from "./vault-runner";
+import { registerVault } from "./vault-http";
 import { loadWallet } from "./store";
 const same=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
 const decisionOf=(i: Awaited<ReturnType<typeof agentInputs>>, feeReserveMinor = i.feeReserveMinor) => decideAutopilot({workspace:i.workspace,ownerPositions:i.ownerPositions,agentPosition:i.agentPosition,mandate:i.stored.mandate,cashMinor:i.cash.balance.minorUnits,spentMinor:String(i.stored.spent_minor),feeReserveMinor,returnAll:i.stored.return_requested});
@@ -43,7 +44,8 @@ async function advise(i: Awaited<ReturnType<typeof agentInputs>>, engine: Decisi
 export async function startAgentRun(userId: string, trigger: RunTrigger = "MANUAL") {
   const existing=await openRun(userId); if(existing)return advanceAgentRun(existing);
   // Vault mode: the user's HoddieVault holds the funds and the agent is only its limited operator.
-  if((await loadWallet(userId))?.vault_address) { const created=await createVaultRun(userId,trigger); return created.state==="RUNNING" ? advanceAgentRun(created) : created; }
+  const wallet=await loadWallet(userId);
+  if(wallet && (wallet.vault_address || await registerVault(wallet).catch(()=>null))) { const created=await createVaultRun(userId,trigger); return created.state==="RUNNING" ? advanceAgentRun(created) : created; }
   const i=await agentInputs(userId); const decision=await advise(i,decisionOf(i)); const quote=await agentEarnQuote(i,decision);
   // A withdrawal re-quoted at Circle's rounded max records the amount that will actually move.
   if(quote?.operation==="WITHDRAW" && BigInt(quote.amount.minorUnits)<BigInt(decision.withdrawMinor))decision.withdrawMinor=quote.amount.minorUnits;

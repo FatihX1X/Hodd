@@ -279,3 +279,16 @@ describe("vault decision edge cases", () => {
     expect(decision).toMatchObject({ kind: "NO_ACTION", explanation: expect.stringContaining("could not be read fresh") });
   });
 });
+
+describe("custodial funds", () => {
+  it("moves what the custodial agent still holds into the vault before anything else, keeping its fee float", () => {
+    const due = [bill(obligation("rent", 10n * USDC, 6 * HOUR))];
+    const decision = decideVault(inputs(due, { custodial: { shares: 19_942_138_980_429_123_206n, positionMinor: 19_963_245n, cashMinor: 20_025_098n } }));
+    expect(decision).toMatchObject({ kind: "MOVE_TO_VAULT", withdrawMinor: "19963245", transferMinor: "19525098" });
+  });
+  it("leaves a fee float alone and moves nothing while the mandate is paused", () => {
+    expect(decideVault(inputs([], { custodial: { shares: 0n, positionMinor: 0n, cashMinor: 600_000n } })).kind).not.toBe("MOVE_TO_VAULT");
+    const paused = inputs([], { custodial: { shares: 5n, positionMinor: 5n, cashMinor: 0n } }); paused.mandate = { ...paused.mandate, paused: true };
+    expect(decideVault(paused).kind).toBe("NO_ACTION");
+  });
+});

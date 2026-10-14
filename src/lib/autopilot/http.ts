@@ -19,7 +19,6 @@ import { scheduledTrigger, type RunTrigger } from "./triggers";
 import { advisorConfigured, groqAdvisorModel } from "./advisor-model";
 import { autopilotSecret } from "./secrets";
 import { treasuryPolicySchema, treasuryWorkspaceSchema } from "@/lib/treasury/models";
-import { discoverAllowedVaults, getEarnPosition } from "@/lib/earn/gateway";
 import { vaultFundingStatus, vaultInvestCalls, vaultOwnerAction, vaultView } from "./vault-http";
 const headers={"Cache-Control":"no-store"};
 const messages:Record<string,string>={
@@ -119,15 +118,13 @@ export async function agentHttp(request:Request,action:"wallet"|"mandate"|"inves
       const current=await loadMandate(c.userId), policy=c.workspace.policy;
       const cap=policy.enabledStrategies.MORPHO?policy.strategyCapsBps.MORPHO:0;
       // Vault mode: the money goes into the user's own HoddieVault; the agent wallet only keeps a little USDC for fees.
-      // Funds the agent still holds from the custodial mode come back first (Return everything).
-      const morpho=(await discoverAllowedVaults())[0];
-      const [agentCash,agentPosition]=await Promise.all([agentHoldings(wallet.address),getEarnPosition(wallet.address,morpho)]);
-      if(BigInt(agentPosition.currentBalance.minorUnits)>0n || agentCash>1_000_000n)throw new Error("AGENT_CUSTODIAL_FUNDS");
+      // Anything the agent still holds from the custodial mode is moved into the vault by its next run.
+      const custodial=await agentHoldings(wallet.address);
       // Checked before anything changes: the browser never runs its own RPC simulation (public Arc RPC limits
       // and wallet extensions made that fail before the wallet opened). The wallet signs within these exact ceilings.
       const plan=await vaultInvestCalls(wallet,BigInt(input.amountMinor));
       // The budget covers what the vault already holds plus this amount; fees already counted stay counted.
-      const budget=BigInt(current?.spent_minor ?? "0")+plan.holdingsMinor+BigInt(input.amountMinor);
+      const budget=BigInt(current?.spent_minor ?? "0")+plan.holdingsMinor+custodial+BigInt(input.amountMinor);
       if(budget>AGENT_MAX_BUDGET_MINOR)throw new Error("AGENT_BUDGET_LIMIT");
       const mandate=validateMandate({budgetMinor:budget.toString(),reserveMinor:"0",maxPerRunMinor:budget.toString(),maxMorphoBps:Math.min(input.maxMorphoBps ?? cap,cap),enabled:true,paused:false},policy);
       await confirm(c,await review(c,wallet,current?.revision ?? 0,"MANDATE",mandate),"MANDATE");
@@ -224,14 +221,15 @@ export async function agentCron(request:Request) {
     for(const run of open ?? []){try{const settled=await driveRun(run as Awaited<ReturnType<typeof startAgentRun>>,Math.min(stop,Date.now()+20_000));results.push({trigger:"MANUAL",id:settled.id,state:settled.state});}catch{/* the next tick retries */}}
     for(const row of data ?? []) {
       const [last,stored]=await Promise.all([
-        agentDb().from("agent_runs").select("created_at,policy:snapshot->workspace->policy").eq("user_id",row.user_id).order("created_at",{ascending:false}).limit(1).maybeSingle(),
+        agentDb().from("agent_runs").select("created_at,policy:snapshot->workspace->policy,mode:snapshot->>mode").eq("user_id",row.user_id).order("created_at",{ascending:false}).limit(1).maybeSingle(),
         agentDb().from("treasury_workspaces").select("workspace").eq("user_id",row.user_id).maybeSingle(),
       ]);
       if(last.error || stored.error || !stored.data)continue;
       const workspace=treasuryWorkspaceSchema.safeParse(stored.data.workspace);if(!workspace.success)continue;
-      const lastRun=last.data as {created_at:string;policy:unknown}|null;
+      const lastRun=last.data as {created_at:string;policy:unknown;mode?:string|null}|null;
       const lastPolicy=lastRun?.policy ? treasuryPolicySchema.safeParse(lastRun.policy) : null;
-      const trigger=scheduledTrigger({now,lastRunAt:lastRun?new Date(lastRun.created_at):null,lastPolicy:lastPolicy?.success?lastPolicy.data:null,workspace:workspace.data});
+      const vaultReady=lastRun && lastRun.mode!=="VAULT" && Date.now()-Date.parse(lastRun.created_at)>5*60_000 && Boolean((await agentDb().from("agent_wallets").select("vault_address").eq("user_id",row.user_id).maybeSingle()).data?.vault_address);
+      const trigger=vaultReady ? "FIRST_RUN" as const : scheduledTrigger({now,lastRunAt:lastRun?new Date(lastRun.created_at):null,lastPolicy:lastPolicy?.success?lastPolicy.data:null,workspace:workspace.data});
       if(!trigger)continue;
       try{if(Date.now()>stop)break;const run=await driveRun(await startAgentRun(row.user_id,trigger),stop);results.push({trigger,id:run.id,state:run.state});}catch{results.push({trigger,state:"FAILED"});}
       if(results.length>=5)break; // bounded Hobby invocation; the next tick continues.
