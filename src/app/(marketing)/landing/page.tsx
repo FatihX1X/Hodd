@@ -18,7 +18,7 @@ import { APP_ORIGIN, siteForHost } from "@/lib/site/hosts";
 
 export const metadata: Metadata = {
   title: { absolute: "Hodd Finance — Treasury that plans ahead" },
-  description: "Hodd keeps liquidity ready for what is due, protects your bills before yield, and keeps every move inside the limits you set. Built on Arc.",
+  description: "Hodd protects the money your bills need, puts the rest to work in Morpho and USYC, and pays approved bills on time, from a vault only you own. Built on Arc.",
   alternates: { canonical: "/" },
   // Page-level openGraph replaces the root one, so the share image is repeated here.
   openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Treasury that plans ahead, on Arc.", url: "/", siteName: "Hodd Finance", type: "website", images: [{ url: "/opengraph-image.png", width: 1200, height: 630, alt: "Hodd Finance" }] },
@@ -34,26 +34,27 @@ const buttonPaper = clsx(button, "border-[#f4f1e8] bg-[#f4f1e8] text-[#0b0b0d] h
 const buttonLight = clsx(button, "border-[#f4f1e8]/65 text-[#f4f1e8] hover:shadow-[4px_4px_0_#f4f1e8]");
 const navLink = clsx(label, "inline-flex min-h-11 items-center hover:underline hover:underline-offset-[6px]");
 
-const tickerItems = ["Hodd Finance®", "Treasury that plans ahead", "Capital", "Liquidity", "Obligations", "Approved by you", "On Arc", "Money should know what’s next"];
+const tickerItems = ["Hodd Finance®", "Treasury that plans ahead", "Capital", "Liquidity", "Obligations", "Morpho + USYC", "Approved by you", "On Arc", "Money should know what’s next"];
 
 const facts = [
   { label: "Network", value: "Arc", note: "Testnet today" },
-  { label: "Custody", value: "Yours", note: "Circle, passkey, MetaMask or Rabby" },
-  { label: "Writes", value: "Approved", note: "Every move needs your wallet" },
+  { label: "Custody", value: "Yours", note: "Your wallet owns your vault" },
+  { label: "Writes", value: "Approved", note: "You sign, or you approved the bill" },
   { label: "Horizon", value: "30 days", note: "Obligations protected before yield" },
 ] as const;
 
 const steps = [
-  { no: "01", title: "Connect", body: "Connect your own Arc Testnet wallet. Hodd reads its public USDC balance and Morpho vault positions." },
-  { no: "02", title: "Set policy", body: "Define the limits: where capital may go, how much stays liquid, who signs off on what." },
-  { no: "03", title: "Hodd plans", body: "The Treasury Engine protects your bills and safety buffer before calculating available capital." },
-  { no: "04", title: "Settle", body: "Review a fresh quote and sign each payment in your own wallet. Hodd verifies the receipt and records the outcome." },
+  { no: "01", title: "Connect", body: "Connect your wallet on Arc Testnet: a Circle passkey, MetaMask or Rabby. Hodd reads your USDC across 12 chains and your Morpho and USYC positions." },
+  { no: "02", title: "Set policy", body: "Set a safety buffer, a cap per strategy and how early bills are protected. Add your bills and approve the recipients you trust." },
+  { no: "03", title: "Hodd plans", body: "The Treasury Engine holds back what your bills and buffer need. Autopilot’s advisor splits the rest between Morpho and USYC, and writes down why." },
+  { no: "04", title: "Settle", body: "Approved bills are paid on their payment day, a day before they are due. A bill is marked PAID only once its receipt is verified on Arc." },
 ] as const;
 
 const principles = [
   { no: "01", title: "Policy-bound", body: "Hodd acts only inside the limits you define: where capital can go, how much stays liquid, who signs off." },
   { no: "02", title: "Legible", body: "Every action is logged with the reason it was taken — in plain language, not just a transaction hash." },
   { no: "03", title: "On-chain", body: "Settled on Arc. Anyone with the link can verify what moved, when, and why." },
+  { no: "04", title: "Yours to withdraw", body: "Your vault contract lets the agent send money to four places only: Morpho, Hodd’s USYC pool, bills you approved and your own wallet. You can take everything back yourself, even with Hodd offline." },
 ] as const;
 
 function Arrow() {
@@ -173,7 +174,7 @@ export default async function LandingPage() {
                 ))}
               </h1>
               <div className="max-w-[520px] flex-[1_1_360px]">
-                <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Manage your own wallet on Arc Testnet. Read live USDC balances and Morpho vault positions, track your bills, and review every transaction before signing.</p>
+                <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Hodd protects the money your bills need, puts the rest to work in Morpho and USYC, and pays approved bills on their payment day, from a vault only you own. Live on Arc Testnet.</p>
                 <div className="flex flex-wrap gap-3.5">
                   <MagneticLink className={buttonInk} href={launch}>Launch app <Arrow /></MagneticLink>
                   <a className={buttonLine} href="#system">See how it thinks</a>
@@ -219,7 +220,7 @@ export default async function LandingPage() {
         {/* How it works */}
         <section id="how" className="border-b border-[#0b0b0d] bg-[#ece8dd]">
           <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
-            <HowTimeline steps={steps} intro="Connect your wallet, add your bills, and set your liquidity policy. Hoddie explains the results; the Claude connector prepares changes for your review." outlineClass={styles.outline} />
+            <HowTimeline steps={steps} intro="Connect your wallet, add your bills and set your policy. Autopilot runs inside your vault; Hoddie and the Claude connector prepare changes for your review." outlineClass={styles.outline} />
           </div>
         </section>
 
@@ -231,7 +232,7 @@ export default async function LandingPage() {
                 <div className={clsx(label, "text-[#8fb0ff]")}>03 — Hoddie</div>
                 <RevealLines lines={["Ask first.", "Automate later."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]" />
               </div>
-              <p className="m-0 max-w-[440px] text-[17px] leading-[1.55] text-[#c9cbd3]">Hoddie answers questions about your treasury and drafts changes for you to review. Autopilot runs a separate agent wallet on a budget you set: it invests idle cash in Morpho and sends liquidity back when your bills need it.</p>
+              <p className="m-0 max-w-[440px] text-[17px] leading-[1.55] text-[#c9cbd3]">Hoddie answers questions about your treasury, in English or Turkish, and drafts changes for you to review. Autopilot runs from your own vault: it invests across Morpho and USYC, brings cash back when bills need it, and pays the ones you approved.</p>
             </div>
             <HoddiePreview />
           </div>
@@ -280,7 +281,7 @@ export default async function LandingPage() {
               <div className="min-w-0 flex-[1.4_1_480px]">
                 <div className={clsx(label, "text-[#d6e4ff]")}>05 — Get started</div>
                 <RevealLines lines={["Money should", "know what’s next."]} className="disp mb-7 mt-[22px] text-[clamp(2.25rem,5.4vw,4.75rem)]" />
-                <p className="mb-9 max-w-[480px] text-lg leading-[1.55] text-[#eaf1ff]">Start with an empty treasury. Connect your own Arc Testnet wallet and get free testnet USDC from the Circle faucet.</p>
+                <p className="mb-9 max-w-[480px] text-lg leading-[1.55] text-[#eaf1ff]">Start with an empty treasury. Connect a wallet on Arc Testnet, get free testnet USDC from the Circle faucet, then invest, add a bill and let Autopilot take it from there.</p>
                 <div className="flex flex-wrap gap-3.5">
                   <MagneticLink className={buttonPaper} href={launch}>Launch app <Arrow /></MagneticLink>
                   <a className={buttonLight} href={signIn}>Sign in</a>
@@ -310,6 +311,13 @@ export default async function LandingPage() {
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Console</div>
                 <div className="flex flex-col"><a className={navLink} href={launch}>Launch app</a><a className={navLink} href={signIn}>Sign in</a></div>
+              </div>
+              <div>
+                <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Onchain</div>
+                <div className="flex flex-col">
+                  <a className={navLink} href="https://testnet.arcscan.app/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389" target="_blank" rel="noopener noreferrer">Vault factory<span className="sr-only"> (opens in a new tab)</span></a>
+                  <a className={navLink} href="https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76" target="_blank" rel="noopener noreferrer">USYC pool<span className="sr-only"> (opens in a new tab)</span></a>
+                </div>
               </div>
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Contact</div>

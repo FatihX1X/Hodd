@@ -58,10 +58,10 @@ test("the Hoddie section shows Hoddie and Autopilot's real decisions", async ({ 
   await expect(section.getByRole("heading", { level: 2, name: /ask first\.\s*automate later\./i })).toBeVisible();
   await expect(section.getByText("Available now")).toBeVisible();
   await expect(section.getByText("Arc Testnet", { exact: true })).toBeVisible();
-  await expect(section.getByText(/only invest in the allowlisted Morpho vault or return USDC to your verified wallet/)).toBeVisible();
-  // Autopilot's own decision kinds; it never pays third parties.
-  for (const verdict of ["INVEST", "TOP UP", "REFILL", "RETURN", "HOLD"]) await expect(section.getByText(new RegExp(`^${verdict}:`)).first()).toBeAttached();
-  await expect(section.getByText(/^(PAY|ESCALATE):/)).toHaveCount(0);
+  await expect(section.getByText(/only send money to Morpho, Hodd’s USYC pool, bills you approved and your own wallet/)).toBeVisible();
+  // Autopilot's own decision kinds; it pays only bills the owner approved.
+  for (const verdict of ["INVEST", "PAY", "TOP UP", "REFILL", "RETURN", "HOLD"]) await expect(section.getByText(new RegExp(`^${verdict}:`)).first()).toBeAttached();
+  await expect(section.getByText(/^ESCALATE:/)).toHaveCount(0);
 });
 
 test.describe("with reduced motion", () => {
