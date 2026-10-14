@@ -71,3 +71,12 @@ After the run, the vault held 19.523539 USDC cash plus 19.963245 USDC in Morpho.
 An owner MetaMask payment for the account's 2 USDC bill (`1bed6922…`, 2026-10-13) had been left UNKNOWN with no hash. While it stayed open, the ledger could not mark any bill PAID, so Autopilot paid nothing. Its prepared nonce, 62, was then used by the owner's 30 USDC Autopilot funding transfer `0xc69f43b23add5999b6aa7697ab37eba0a7167b4a909052f772d32e9943614dcf` (block 67127988): the owner's nonce was 62 at block 67127987 and 63 at block 67127988. A transaction prepared with nonce 62 can therefore never be included.
 
 Recovery used to accept only an unchanged nonce, so this payment could never be released. It now also accepts this proof (`EOA_NONCE_CONSUMED`, `src/lib/payments/nonce-proof.ts`). The payment was released through `hodd_release_unsubmitted_payment` with that proof stored on the record.
+
+## First Autopilot bill payment on the production account (2026-10-14)
+
+1. The owner pressed **Let Autopilot pay** on the 2 USDC bill. Their wallet signed `addRecipient(0x3406…0040, 2 USDC)` on the vault.
+2. The page started a run right away (trigger MANUAL). The engine decided PAY_BILL: "A 2 USDC bill is due now. Pay it from the vault's cash to the recipient you approved."
+3. The Circle agent called the vault's `pay`, tx `0x35ca2d3c7b45b55a32a1b9aec31c70f292259efc71edbe8763374a46c09d796b` (block 67191276, from the agent `0xae40…750b` to the vault `0xA425…D02d`). The receipt was verified from the vault's `Payment` event and the USDC transfer to the recipient.
+4. The bill closed through the payment ledger: payment `fed8eedb…` on the `AUTOPILOT_VAULT` rail is CONFIRMED, and the bill is PAID with that payment as its reference.
+
+The vault's cash went from 19.523539 to 17.523539 USDC.
