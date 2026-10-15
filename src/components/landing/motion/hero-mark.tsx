@@ -8,7 +8,9 @@ import styles from "../landing.module.css";
 // The 9 o’clock notch is left out: it would sit inside the D’s counter, where the letter belongs in front of the dial.
 const notches = Array.from({ length: 24 }, (_, index) => index).filter((index) => index !== 18).map((index) => {
   const angle = (index * 15 * Math.PI) / 180, cardinal = index % 6 === 0, inner = cardinal ? 48.5 : 50.5, outer = cardinal ? 54.5 : 53.5;
-  return { index, cardinal, x1: 50 + inner * Math.sin(angle), y1: 50 - inner * Math.cos(angle), x2: 50 + outer * Math.sin(angle), y2: 50 - outer * Math.cos(angle) };
+  // Rounded so the server's and the browser's trigonometry print the same attributes (no hydration mismatch).
+  const at = (value: number) => Math.round(value * 1000) / 1000;
+  return { index, cardinal, x1: at(50 + inner * Math.sin(angle)), y1: at(50 - inner * Math.cos(angle)), x2: at(50 + outer * Math.sin(angle)), y2: at(50 - outer * Math.cos(angle)) };
 });
 const EASE = "cubic-bezier(.2,.75,.15,1)";
 const FLIGHT = "cubic-bezier(.3,.55,.2,1)";
