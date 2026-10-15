@@ -27,6 +27,19 @@ test("landing copy matches what ships today", async ({ page }) => {
   expect(await page.locator("body").innerText()).not.toContain("®");
 });
 
+test("the horizon counts through the windows a person can choose", async ({ page }) => {
+  await page.goto("/landing");
+  const horizon = page.locator("[data-horizon]");
+  await horizon.scrollIntoViewIfNeeded();
+  await expect(page.getByText("You choose 3 to 30 days")).toBeVisible();
+  const seen = new Set<string>();
+  await expect.poll(async () => {
+    seen.add((await horizon.getAttribute("data-horizon")) ?? "");
+    return seen.size;
+  }, { timeout: 15_000, intervals: [300] }).toBeGreaterThanOrEqual(3);
+  for (const value of seen) expect(["3", "7", "14", "30"]).toContain(value);
+});
+
 test("the demo video button stays hidden until its link is configured", async ({ page }) => {
   await page.goto("/landing");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -75,8 +88,6 @@ test("the proof section links to ArcScan, the Circle record and CI", async ({ pa
     await expect(link).toHaveAttribute("rel", /noopener/);
   }
   await expect(proof.getByText("Allowlisted by Circle")).toBeVisible();
-  await expect(proof.getByRole("link", { name: /read the validation record/i })).toHaveAttribute("href", "https://github.com/FatihX1X/Hodd/blob/main/docs/usyc-validation.md");
-  await expect(proof.locator('a[href="https://github.com/FatihX1X/Hodd/actions/workflows/ci.yml"]')).toBeVisible();
   await expect(proof.getByText(/production totals on arc testnet, as of oct 15, 2026/i)).toBeVisible();
   await expect(proof.locator("dl dd")).toHaveCount(6);
 });
@@ -164,6 +175,12 @@ test.describe("with reduced motion", () => {
     await expect(claude.getByText("Pay October rent", { exact: true })).toBeVisible();
     await expect(claude.locator("li[data-active]")).toHaveCount(0);
     await expect(page.locator("#proof").getByText("Allowlisted by Circle")).toBeVisible();
+    // The horizon rests on 30 days.
+    const horizon = page.locator("[data-horizon]");
+    await expect(horizon).toHaveAttribute("data-horizon", "30");
+    await page.waitForTimeout(2_500);
+    await expect(horizon).toHaveAttribute("data-horizon", "30");
+    await expect(horizon).toHaveText("30 days");
   });
 });
 
@@ -188,10 +205,9 @@ test("the footer links to the legal pages, X and email", async ({ page }) => {
   await expect(x).toHaveAttribute("target", "_blank");
   await expect(x).toHaveAttribute("rel", /noopener/);
   await expect(footer.getByRole("link", { name: "info@hoddfinance.xyz" })).toHaveAttribute("href", "mailto:info@hoddfinance.xyz");
-  // No plain GitHub link anywhere; GitHub appears only behind the Proof section's CI badge and validation record.
-  await expect(footer.getByRole("link", { name: /github/i })).toHaveCount(0);
-  await expect(page.locator('a[href="https://github.com/FatihX1X/Hodd"]')).toHaveCount(0);
-  await expect(page.getByRole("link", { name: /code on github/i })).toHaveCount(0);
+  // Nothing on the page links to GitHub: no repository, CI badge or validation record.
+  await expect(page.locator('a[href*="github.com"]')).toHaveCount(0);
+  await expect(page.locator('img[src*="github.com"]')).toHaveCount(0);
   for (const [name, href] of [["Terms", "/terms"], ["Risk", "/risk"], ["Privacy", "/privacy"]]) {
     await expect(footer.getByRole("link", { name: new RegExp(`^${name}$`, "i") })).toHaveAttribute("href", href);
   }
