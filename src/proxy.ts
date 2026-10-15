@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { APP_ORIGIN, isMarketingAsset, siteForHost } from "@/lib/site/hosts";
+import { APP_ORIGIN, isMarketingAsset, isMarketingPage, siteForHost } from "@/lib/site/hosts";
 import { updateSupabaseSession } from "@/lib/supabase/proxy";
 
 export async function proxy(request: NextRequest) {
@@ -8,7 +8,7 @@ export async function proxy(request: NextRequest) {
   if (siteForHost(request.headers.get("host")) === "marketing") {
     if (pathname === "/") return NextResponse.rewrite(new URL("/landing", request.url));
     if (pathname === "/landing") return NextResponse.redirect(new URL("/", request.url), 308);
-    if (isMarketingAsset(pathname)) return NextResponse.next();
+    if (isMarketingAsset(pathname) || isMarketingPage(pathname)) return NextResponse.next();
     // The marketing host never exposes API routes or console pages: send people to the app host.
     if (pathname === "/api" || pathname.startsWith("/api/")) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     return NextResponse.redirect(`${APP_ORIGIN}${pathname}${search}`, 308);

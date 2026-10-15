@@ -18,10 +18,87 @@ test("landing copy matches what ships today", async ({ page }) => {
   await page.goto("/landing");
   await expect(page).toHaveTitle("Hodd Finance — Treasury that plans ahead");
   await expect(page.getByRole("heading", { level: 2, name: /proactive\.\s*never\s*unaccountable\./i })).toBeVisible();
+  await expect(page.locator("#top")).toContainText(/AI-run treasury\s*for small businesses/i);
+  await expect(page.getByText("USYC is held by Hodd’s pool contract. Your pool shares redeem only to you.")).toBeVisible();
   const text = await page.locator("main").innerText();
-  // Every move stays inside limits the user sets, so the page does not promise autonomy, and the principle has no ® mark.
+  // Every move stays inside limits the user sets, so the page does not promise autonomy.
   expect(text).not.toMatch(/autonomous/i);
-  expect(text).not.toMatch(/unaccountable\.?\s*®/);
+  // No ® anywhere: not in the ticker, the copy or the footer.
+  expect(await page.locator("body").innerText()).not.toContain("®");
+});
+
+test("the demo video button stays hidden until its link is configured", async ({ page }) => {
+  await page.goto("/landing");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator("[data-demo-video]")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /watch the demo/i })).toHaveCount(0);
+});
+
+test("the Claude section plays a question until the request lands in Hodd", async ({ page }) => {
+  // The scene takes about seven seconds of real time; leave room for a busy machine.
+  test.setTimeout(60_000);
+  await page.goto("/landing");
+  const section = page.locator("#claude");
+  await section.evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+  await expect(section.getByRole("heading", { level: 2, name: /use hodd\s*from claude\./i })).toBeVisible();
+  // The whole conversation, with the connector's real tool names, is there for screen readers.
+  await expect(section.getByText(/^Claude: \(uses hodd_check_payment\)/)).toBeAttached();
+  await expect(section.getByText(/^Claude: \(uses hodd_prepare_change, hodd_request_payment\)/)).toBeAttached();
+  const steps = section.locator("ol:not(.sr-only) > li");
+  await expect(steps).toHaveCount(3);
+  // Claude answers with Hodd's tools, then the request waits in Hodd for a wallet signature. The steps light up in turn.
+  const seen = new Set<number>();
+  await expect.poll(async () => {
+    const index = (await steps.evaluateAll((items) => items.map((item) => item.getAttribute("data-active")))).indexOf("true");
+    if (index >= 0) seen.add(index);
+    return seen.has(2);
+  }, { timeout: 40_000, intervals: [200] }).toBe(true);
+  expect(seen.has(1), "Claude reads Hodd before the request lands").toBe(true);
+  await expect(section.getByText("1 open", { exact: true })).toBeVisible();
+  await expect(section.getByText("Pay October rent", { exact: true })).toBeVisible();
+});
+
+test("the proof section links to ArcScan, the Circle record and CI", async ({ page }) => {
+  await page.goto("/landing");
+  const proof = page.locator("#proof");
+  await proof.scrollIntoViewIfNeeded();
+  await expect(proof.getByRole("heading", { level: 2, name: /proof,\s*not promises\./i })).toBeVisible();
+  const arcscan = {
+    HoddieVaultFactory: "https://testnet.arcscan.app/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389",
+    HoddUSYCVault: "https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76",
+    "Autopilot’s first bill payment": "https://testnet.arcscan.app/tx/0x35ca2d3c7b45b55a32a1b9aec31c70f292259efc71edbe8763374a46c09d796b",
+  };
+  for (const [name, href] of Object.entries(arcscan)) {
+    const link = proof.getByRole("link", { name: new RegExp(`^${name}`, "i") });
+    await expect(link).toHaveAttribute("href", href);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", /noopener/);
+  }
+  await expect(proof.getByText("Allowlisted by Circle")).toBeVisible();
+  await expect(proof.getByRole("link", { name: /read the validation record/i })).toHaveAttribute("href", "https://github.com/FatihX1X/Hodd/blob/main/docs/usyc-validation.md");
+  await expect(proof.locator('a[href="https://github.com/FatihX1X/Hodd/actions/workflows/ci.yml"]')).toBeVisible();
+  await expect(proof.getByText(/production totals on arc testnet, as of oct 15, 2026/i)).toBeVisible();
+  await expect(proof.locator("dl dd")).toHaveCount(6);
+});
+
+test("built for, built on and the FAQ say what Hodd is for", async ({ page }) => {
+  await page.goto("/landing");
+  const audiences = page.locator("#built-for li h3");
+  await expect(audiences).toHaveText([/small business payroll/i, /freelancer rent and bills/i, /contractor payouts/i]);
+  await expect(page.locator("#built-on li")).toHaveText([/circle wallets/i, /gas station/i, /app kit/i, /gateway/i, /usyc/i, /contracts/i, /morpho/i, /^arc$/i]);
+
+  const faq = page.locator("#faq details");
+  await expect(faq).toHaveCount(4);
+  const custody = faq.filter({ hasText: /can hodd take my money\?/i });
+  const answer = custody.getByText(/send money to four places only/);
+  await expect(answer).toBeHidden();
+  await custody.locator("summary").click();
+  await expect(answer).toBeVisible();
+  // The rows are native disclosures, so the keyboard works too.
+  const testnet = faq.filter({ hasText: /why testnet\?/i });
+  await testnet.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(testnet.getByText(/not audited yet/)).toBeVisible();
 });
 
 test("the hero treasury loops through all six moves", async ({ page }) => {
@@ -79,26 +156,64 @@ test.describe("with reduced motion", () => {
     await expect(section.getByText("Prepare it.", { exact: true })).toBeVisible();
     await expect(section.getByText("Withdraw 600 USDC from Morpho", { exact: true })).toBeVisible();
     await expect(page.locator("#how ol > li[data-active]")).toHaveCount(0);
+    // Claude: the whole conversation and the request already waiting in Hodd, with no step singled out.
+    const claude = page.locator("#claude");
+    await claude.scrollIntoViewIfNeeded();
+    await expect(claude.getByText("Send it to Hodd for Friday.", { exact: true })).toBeVisible();
+    await expect(claude.getByText("1 open", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Pay October rent", { exact: true })).toBeVisible();
+    await expect(claude.locator("li[data-active]")).toHaveCount(0);
+    await expect(page.locator("#proof").getByText("Allowlisted by Circle")).toBeVisible();
   });
 });
 
 test("mobile layout keeps every scene inside the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/landing");
-  for (const id of ["top", "how", "hoddie"]) {
+  for (const id of ["top", "how", "hoddie", "claude", "proof", "built-for", "built-on", "faq"]) {
     await page.locator(`#${id}`).scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), id).toBe(false);
   }
+  // One column: the Claude steps sit above the conversation, not beside it.
+  const steps = await page.locator("#claude ol:not(.sr-only)").boundingBox();
+  const chat = await page.locator('#claude section[aria-label^="Example conversation"]').boundingBox();
+  expect(chat!.y).toBeGreaterThan(steps!.y + steps!.height);
 });
 
-test("the footer links to X and opens a feedback email", async ({ page }) => {
+test("the footer links to the legal pages, GitHub, X and email", async ({ page }) => {
   await page.goto("/landing");
   const footer = page.getByRole("navigation", { name: "Footer" });
-  const x = footer.getByRole("link", { name: /@hoddfinance/ });
+  const x = footer.getByRole("link", { name: /^X @hoddfinance/ });
   await expect(x).toHaveAttribute("href", "https://x.com/hoddfinance");
   await expect(x).toHaveAttribute("target", "_blank");
   await expect(x).toHaveAttribute("rel", /noopener/);
-  await expect(footer.getByRole("link", { name: "Feedback" })).toHaveAttribute("href", /^mailto:info@hoddfinance\.xyz/);
+  await expect(footer.getByRole("link", { name: "info@hoddfinance.xyz" })).toHaveAttribute("href", "mailto:info@hoddfinance.xyz");
+  await expect(footer.getByRole("link", { name: /^github/i })).toHaveAttribute("href", "https://github.com/FatihX1X/Hodd");
+  for (const [name, href] of [["Terms", "/terms"], ["Risk", "/risk"], ["Privacy", "/privacy"]]) {
+    await expect(footer.getByRole("link", { name: new RegExp(`^${name}$`, "i") })).toHaveAttribute("href", href);
+  }
+  await expect(page.locator('a[href*="waitlist"]')).toHaveCount(0);
+  await expect(page.locator("footer")).not.toContainText("®");
+  expect(await page.content()).not.toContain("hello@hoddfinance.xyz");
+});
+
+test("the legal pages disclaim liability, speak as Hodd Finance and link back home", async ({ page }) => {
+  for (const [path, title] of [["/terms", /^terms$/i], ["/risk", /^risk$/i], ["/privacy", /^privacy$/i]] as const) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Hodd Finance, home" })).toHaveAttribute("href", "/landing");
+    await expect(page.getByRole("link", { name: "info@hoddfinance.xyz" })).toHaveAttribute("href", "mailto:info@hoddfinance.xyz");
+    const text = await page.locator("main").textContent() ?? "";
+    expect(text, path).toContain("Hodd Finance");
+    // The company is only ever "Hodd Finance", never "we", "us" or "our".
+    expect(text, path).not.toMatch(/\b(we|us|our|ours)\b/i);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), path).toBe(false);
+  }
+  await page.goto("/terms");
+  await expect(page.locator("main")).toContainText(/“as is”/);
+  await expect(page.locator("main")).toContainText(/not liable/);
+  await page.goto("/risk");
+  await expect(page.locator("main")).toContainText(/entirely at your own risk/);
 });
 
 test("the closing section shows a single star", async ({ page }) => {
@@ -141,6 +256,16 @@ test("the marketing host serves the landing page and nothing else", async ({ req
 
   const canonical = await request.get("/landing", { headers: host, maxRedirects: 0 });
   expect(canonical.status()).toBe(308);
+
+  // The legal pages live next to the landing page and link back to the apex root; there is no waitlist page.
+  expect((await request.get("/waitlist", { headers: host, maxRedirects: 0 })).status()).toBe(308);
+  for (const path of ["/terms", "/risk", "/privacy"]) {
+    const response = await request.get(path, { headers: host, maxRedirects: 0 });
+    expect(response.status(), path).toBe(200);
+    expect(await response.text(), path).toContain('<a href="/" aria-label="Hodd Finance, home"');
+  }
+  const sitemap = await request.get("/sitemap.xml", { headers: host });
+  expect(await sitemap.text()).toContain("https://hoddfinance.xyz/privacy");
 
   for (const path of ["/api/payments", "/api/earn/quote", "/api/wallet/circle/session"]) {
     const response = await request.post(path, { headers: host, data: {}, maxRedirects: 0 });

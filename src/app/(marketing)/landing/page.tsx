@@ -3,7 +3,9 @@ import { Fragment } from "react";
 import { headers } from "next/headers";
 import Image from "next/image";
 import clsx from "clsx";
+import { CiBadge } from "@/components/landing/ci-badge";
 import { SystemTabs } from "@/components/landing/system-tabs";
+import { ClaudePreview } from "@/components/landing/motion/claude-preview";
 import { CountUp } from "@/components/landing/motion/count-up";
 import { CtaStar } from "@/components/landing/motion/cta-star";
 import { HeroMark } from "@/components/landing/motion/hero-mark";
@@ -12,13 +14,14 @@ import { HowTimeline } from "@/components/landing/motion/how-timeline";
 import { LiveTreasury } from "@/components/landing/motion/live-treasury";
 import { MagneticLink } from "@/components/landing/motion/magnetic-link";
 import { RevealLines } from "@/components/landing/motion/reveal-lines";
+import { Stamp } from "@/components/landing/motion/stamp";
 import { SystemMotion, SystemStar } from "@/components/landing/motion/system-motion";
 import styles from "@/components/landing/landing.module.css";
-import { APP_ORIGIN, siteForHost } from "@/lib/site/hosts";
+import { APP_ORIGIN, demoVideoUrl, siteForHost } from "@/lib/site/hosts";
 
 export const metadata: Metadata = {
   title: { absolute: "Hodd Finance — Treasury that plans ahead" },
-  description: "Hodd protects the money your bills need, puts the rest to work in Morpho and USYC, and pays approved bills on time, from a vault only you own. Built on Arc.",
+  description: "Hodd is an AI-run treasury for small businesses. It protects the money your bills need, puts the rest to work in Morpho and USYC, and pays approved bills on time, from a vault only you own. Built on Arc.",
   alternates: { canonical: "/" },
   // Page-level openGraph replaces the root one, so the share image is repeated here.
   openGraph: { title: "Hodd Finance — Your capital, ahead of time.", description: "Treasury that plans ahead, on Arc.", url: "/", siteName: "Hodd Finance", type: "website", images: [{ url: "/opengraph-image.png", width: 1200, height: 630, alt: "Hodd Finance" }] },
@@ -33,12 +36,14 @@ const buttonLine = clsx(button, "border-[#0b0b0d] text-[#0b0b0d] hover:shadow-[4
 const buttonPaper = clsx(button, "border-[#f4f1e8] bg-[#f4f1e8] text-[#0b0b0d] hover:shadow-[4px_4px_0_#0b0b0d]");
 const buttonLight = clsx(button, "border-[#f4f1e8]/65 text-[#f4f1e8] hover:shadow-[4px_4px_0_#f4f1e8]");
 const navLink = clsx(label, "inline-flex min-h-11 items-center hover:underline hover:underline-offset-[6px]");
+// An address reads as typed, so it keeps its case.
+const mailLink = "mono inline-flex min-h-11 items-center text-xs leading-[1.6] tracking-[0.02em] hover:underline hover:underline-offset-[6px]";
 
-const tickerItems = ["Hodd Finance®", "Treasury that plans ahead", "Capital", "Liquidity", "Obligations", "Morpho + USYC", "Approved by you", "On Arc", "Money should know what’s next"];
+const tickerItems = ["Hodd Finance", "AI-run treasury for small businesses", "Capital", "Liquidity", "Obligations", "Morpho + USYC", "Approved by you", "Use it from Claude", "On Arc", "Money should know what’s next"];
 
 const facts = [
   { label: "Network", value: "Arc", note: "Testnet today" },
-  { label: "Custody", value: "Yours", note: "Your wallet owns your vault" },
+  { label: "Custody", value: "Yours", note: "Your wallet owns your vault", detail: "USYC is held by Hodd’s pool contract. Your pool shares redeem only to you." },
   { label: "Writes", value: "Approved", note: "You sign, or you approved the bill" },
   { label: "Horizon", value: "30 days", note: "Obligations protected before yield" },
 ] as const;
@@ -57,9 +62,63 @@ const principles = [
   { no: "04", title: "Yours to withdraw", body: "Your vault contract lets the agent send money to four places only: Morpho, Hodd’s USYC pool, bills you approved and your own wallet. You can take everything back yourself, even with Hodd offline." },
 ] as const;
 
+const claudeSteps = [
+  { no: "01", title: "Ask Claude", body: "Ask about bills, balances or Autopilot in your own words, in any Claude app." },
+  { no: "02", title: "Claude reads Hodd", body: "It answers with Hodd’s own tools and your live data. Reading changes nothing." },
+  { no: "03", title: "You approve in Hodd", body: "Every change needs your OK in Claude. Payments then wait in Hodd until you sign with your wallet." },
+] as const;
+
+const ARCSCAN = "https://testnet.arcscan.app";
+const GITHUB = "https://github.com/FatihX1X/Hodd";
+
+/** Contracts and the first production Autopilot payment, from docs/autopilot-validation.md and docs/usyc-validation.md. */
+const onchain = [
+  { title: "HoddieVaultFactory", body: "Creates one vault per owner. Your wallet owns it; Hodd’s agent can only operate it.", kind: "address", ref: "0x311578B21F269ca0E45f5c16324A3E51f69ce389" },
+  { title: "HoddUSYCVault", body: "The one pool that holds USYC for every Hodd user.", kind: "address", ref: "0x97A7BAaA5416e0aC0674C395cec22FF606120b76" },
+  { title: "Autopilot’s first bill payment", body: "2 USDC paid from an owner’s vault in production on Oct 14, 2026.", kind: "tx", ref: "0x35ca2d3c7b45b55a32a1b9aec31c70f292259efc71edbe8763374a46c09d796b" },
+] as const;
+
+/** Production totals on Arc Testnet, read from Hodd’s database on the date below. There is no public /metrics endpoint yet. */
+const totals = {
+  asOf: "Oct 15, 2026",
+  items: [
+    { value: 20, label: "Autopilot transactions verified on Arc" },
+    { value: 6, label: "Payments confirmed on Arc" },
+    { value: 11, label: "Morpho and USYC moves completed" },
+    { value: 6, label: "Changes approved from Claude" },
+  ],
+} as const;
+
+/** The test suites on the same date: Vitest cases, and Playwright runs (every browser test on desktop and on mobile). */
+const testSuite = { unit: 884, browser: 102 } as const;
+
+const audiences = [
+  { title: "Small business payroll", body: "Payroll stays covered every cycle, while the cash waiting for payday earns in Morpho and USYC." },
+  { title: "Freelancer rent and bills", body: "Rent and utilities are paid on their day from a vault you own, even in your busiest week." },
+  { title: "Contractor payouts", body: "Approve each contractor once, and Autopilot pays them in USDC on Arc when their invoice is due." },
+] as const;
+
+const stack = ["Circle Wallets", "Gas Station", "App Kit", "Gateway", "USYC", "Contracts", "Morpho", "Arc"] as const;
+
+const faqs = [
+  { q: "Where is my money?", a: "In your own wallet on Arc, or in a vault contract your wallet owns. Money at work sits in Morpho vaults or in Hodd’s USYC pool, and only you can redeem your share." },
+  { q: "Can Hodd take my money?", a: "No. Your vault lets Hodd’s agent send money to four places only: Morpho, Hodd’s USYC pool, bills you approved and your own wallet. You can pause it or withdraw everything yourself, even if Hodd is offline." },
+  { q: "What does the AI do, and what can’t it do?", a: "Hoddie and Claude answer questions and prepare changes, and nothing applies until you approve it. Autopilot’s advisor picks the split between Morpho and USYC and when to bring cash back for bills. No AI signs for you, approves a new recipient or sends money outside your vault’s four destinations." },
+  { q: "Why testnet?", a: "Hodd’s contracts are new and not audited yet, so Hodd runs on Arc Testnet. Testnet USDC is free from Circle’s faucet and has no value, so you can try every flow, Autopilot included, without risk." },
+] as const;
+
+const shortHex = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
+const newTab = <span className="sr-only"> (opens in a new tab)</span>;
+
 function Arrow() {
   return (
     <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12L12 2M5 2H12V9" /></svg>
+  );
+}
+
+function Play() {
+  return (
+    <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor" aria-hidden="true"><path d="M0 0L10 6L0 12Z" /></svg>
   );
 }
 
@@ -103,6 +162,8 @@ export default async function LandingPage() {
   const appBase = siteForHost((await headers()).get("host")) === "marketing" ? APP_ORIGIN : "";
   const launch = `${appBase}/`;
   const signIn = `${appBase}/login`;
+  // Read per request, so the link can be added or removed without a new build.
+  const demo = demoVideoUrl(process.env.HODD_DEMO_VIDEO_URL);
 
   return (
     <div className="bg-[#ece8dd] text-[#0b0b0d]">
@@ -123,11 +184,12 @@ export default async function LandingPage() {
           <a href="#top" aria-label="Hodd Finance, home" className="flex min-h-11 items-center">
             <Image src="/brand/hodd-lockup-light.png" alt="" width={1912} height={608} sizes="140px" loading="eager" className="block h-auto w-[140px]" />
           </a>
-          <nav aria-label="Primary" className="hidden gap-9 md:flex">
+          <nav aria-label="Primary" className="hidden gap-7 lg:flex xl:gap-9">
             <a className={navLink} href="#system">System</a>
             <a className={navLink} href="#how">How it works</a>
-            <a className={navLink} href="#hoddie">Hoddie</a>
-            <a className={navLink} href="#principles">Principles</a>
+            <a className={navLink} href="#claude">Claude</a>
+            <a className={navLink} href="#proof">Proof</a>
+            <a className={navLink} href="#faq">FAQ</a>
           </nav>
           <div className="flex items-center gap-5">
             <a className={clsx(label, "hidden min-h-11 items-center whitespace-nowrap hover:underline hover:underline-offset-[6px] sm:inline-flex")} href={signIn}>Sign in</a>
@@ -143,7 +205,7 @@ export default async function LandingPage() {
           <GridLines />
           <div className={clsx(wrap, "relative")}>
             <div className="flex items-start justify-between gap-6 pt-8">
-              <div className={clsx(label, "flex-1")}>Policy-bound<br />Treasury<br />Systems</div>
+              <div className={clsx(label, "flex-1")}>AI-run treasury<br />for small businesses</div>
               <div aria-hidden="true" className={clsx(styles.crosshair, "mt-1.5 hidden sm:block")} />
               <div className={clsx(label, "flex-1 text-right")}>On Arc<br />For a brighter tomorrow</div>
             </div>
@@ -177,6 +239,7 @@ export default async function LandingPage() {
                 <p className="mb-7 text-lg leading-[1.55] text-[#3b3a36]">Hodd protects the money your bills need, puts the rest to work in Morpho and USYC, and pays approved bills on their payment day, from a vault only you own. Live on Arc Testnet.</p>
                 <div className="flex flex-wrap gap-3.5">
                   <MagneticLink className={buttonInk} href={launch}>Launch app <Arrow /></MagneticLink>
+                  {demo && <a className={buttonLine} href={demo} target="_blank" rel="noopener noreferrer" data-demo-video=""><Play />Watch the demo{newTab}</a>}
                   <a className={buttonLine} href="#system">See how it thinks</a>
                 </div>
               </div>
@@ -198,6 +261,7 @@ export default async function LandingPage() {
                   <dd className="m-0">
                     <span className={clsx("disp mb-2.5 mt-3.5 block whitespace-nowrap text-[clamp(1.75rem,3vw,2.75rem)]", fact.label === "Network" && "text-[#0a52e8]")}>{fact.label === "Horizon" ? <><CountUp to={30} />&nbsp;days</> : fact.value}</span>
                     <span className={clsx(label, "text-[#5a5953]")}>{fact.note}</span>
+                    {"detail" in fact && <span className="mt-3 block max-w-[34ch] text-sm leading-[1.5] text-[#3b3a36]">{fact.detail}</span>}
                   </dd>
                 </div>
               ))}
@@ -238,12 +302,23 @@ export default async function LandingPage() {
           </div>
         </section>
 
+        {/* Claude connector */}
+        <section id="claude" className="border-b border-[#0b0b0d] bg-[#ece8dd]">
+          <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
+            <ClaudePreview steps={claudeSteps}>
+              <div className={clsx(label, "text-[#0a52e8]")}>04 — Claude</div>
+              <RevealLines lines={["Use Hodd", "from Claude."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]" />
+              <p className="mb-0 mt-6 max-w-[440px] text-[17px] leading-[1.55] text-[#3b3a36]">Add Hodd to Claude as a connector. Ask in your own words: Claude answers with Hodd’s tools, and anything that would change your treasury lands in Hodd for your approval.</p>
+            </ClaudePreview>
+          </div>
+        </section>
+
         {/* Principles */}
         <section id="principles" className="relative overflow-hidden border-b border-[#0b0b0d] bg-[#e3dfd2]">
           <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
             <div className="flex flex-wrap items-center gap-x-12 gap-y-14">
               <div className="min-w-0 flex-[2.2_1_560px]">
-                <div className={clsx(label, "mb-6 text-[#0a52e8]")}>04 — Principles</div>
+                <div className={clsx(label, "mb-6 text-[#0a52e8]")}>05 — Principles</div>
                 <RevealLines lines={["Proactive.", "Never", "unaccountable."]} className="disp m-0 text-[clamp(1.7rem,4.6vw,4.25rem)]" />
               </div>
               <div className="flex flex-[1_1_300px] justify-center">
@@ -274,12 +349,135 @@ export default async function LandingPage() {
           </div>
         </section>
 
+        {/* Proof */}
+        <section id="proof" className="relative overflow-hidden border-b border-[#0b0b0d] bg-[#0b0b0d] text-[#f4f1e8]" style={{ backgroundImage: "radial-gradient(ellipse 50% 45% at 90% 4%,rgba(40,90,255,.3),rgba(40,90,255,0) 70%)" }}>
+          <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
+            <div className="mb-[clamp(36px,5vw,64px)] flex flex-wrap items-end justify-between gap-x-12 gap-y-6">
+              <div>
+                <div className={clsx(label, "text-[#8fb0ff]")}>06 — Proof</div>
+                <RevealLines lines={["Proof,", "not promises."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]" />
+              </div>
+              <p className="m-0 max-w-[440px] text-[17px] leading-[1.55] text-[#c9cbd3]">Everything here is on Arc Testnet or in the public code. Open any link and check it yourself.</p>
+            </div>
+
+            <div className="grid gap-x-16 gap-y-12 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+              <div className="min-w-0">
+                <h3 className={clsx(label, "m-0 mb-4 text-[#a5a8b3]")}>On ArcScan</h3>
+                <ul className="m-0 list-none border-t border-white/20 p-0">
+                  {onchain.map((item) => (
+                    <li key={item.ref} className="border-b border-white/20">
+                      <a href={`${ARCSCAN}/${item.kind}/${item.ref}`} target="_blank" rel="noopener noreferrer" className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-3 py-6 transition-colors duration-150 hover:bg-white/[0.04]">
+                        <span className="min-w-0 flex-[1_1_280px]">
+                          <span className="disp block text-[clamp(1.3rem,2.3vw,1.85rem)]">{item.title}</span>
+                          <span className="mt-2 block max-w-[52ch] text-[15px] leading-[1.55] text-[#c9cbd3]">{item.body}</span>
+                        </span>
+                        <span className="mono inline-flex items-center gap-2 text-sm text-[#b9ccff] group-hover:underline group-hover:underline-offset-4" title={item.ref}>{shortHex(item.ref)} <Arrow /></span>
+                        {newTab}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="flex min-w-0 flex-col gap-6">
+                <div className="border border-white/20 p-[clamp(20px,3vw,32px)]">
+                  <Stamp className="disp inline-block border-2 border-[#7fe3a8] px-3 py-1.5 text-[clamp(1.2rem,2.3vw,1.75rem)] text-[#7fe3a8]">Allowlisted by Circle</Stamp>
+                  <p className="mb-0 mt-6 text-[15px] leading-[1.55] text-[#c9cbd3]">Circle allowlisted Hodd’s USYC pool on Oct 13, 2026. You hold USYC through the pool without being allowlisted yourself.</p>
+                  <a className={clsx(navLink, "mt-3 gap-2 text-[#b9ccff]")} href={`${GITHUB}/blob/main/docs/usyc-validation.md`} target="_blank" rel="noopener noreferrer">Read the validation record <Arrow />{newTab}</a>
+                </div>
+                <div className="border border-white/20 p-[clamp(20px,3vw,32px)]">
+                  <dl className="m-0 grid gap-6 sm:grid-cols-2">
+                    <div>
+                      <dt className={clsx(label, "text-[#a5a8b3]")}>Unit tests</dt>
+                      <dd className="disp m-0 mt-2 text-[clamp(1.75rem,3vw,2.5rem)]"><CountUp to={testSuite.unit} /></dd>
+                    </div>
+                    <div>
+                      <dt className={clsx(label, "text-[#a5a8b3]")}>Browser test runs</dt>
+                      <dd className="disp m-0 mt-2 text-[clamp(1.75rem,3vw,2.5rem)]"><CountUp to={testSuite.browser} /></dd>
+                    </div>
+                  </dl>
+                  <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-white/15 pt-5">
+                    <CiBadge repo={GITHUB} className={clsx(navLink, "text-[#b9ccff]")} />
+                    <a className={clsx(navLink, "gap-2 text-[#b9ccff]")} href={GITHUB} target="_blank" rel="noopener noreferrer">Code on GitHub <Arrow />{newTab}</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-[clamp(48px,6vw,80px)]">
+              <dl className="m-0 grid grid-cols-1 gap-px border border-white/20 bg-white/20 sm:grid-cols-2 lg:grid-cols-4">
+                {totals.items.map((item) => (
+                  <div key={item.label} className="flex flex-col bg-[#0b0b0d] p-[clamp(20px,2.4vw,28px)]">
+                    <dt className={clsx(label, "text-[#a5a8b3]")}>{item.label}</dt>
+                    {/* mt-auto keeps the figures on one line when a label wraps. */}
+                    <dd className="disp m-0 mt-auto pt-3 text-[clamp(2.25rem,4vw,3.5rem)] text-[#f4f1e8]"><CountUp to={item.value} /></dd>
+                  </div>
+                ))}
+              </dl>
+              <p className={clsx(label, "mt-4 text-[#a5a8b3]")}>Production totals on Arc Testnet, as of {totals.asOf}</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Built for */}
+        <section id="built-for" className="border-b border-[#0b0b0d] bg-[#ece8dd]">
+          <div className={clsx(wrap, "py-[clamp(64px,8vw,112px)]")}>
+            <div className="mb-[clamp(40px,5vw,72px)]">
+              <div className={clsx(label, "text-[#0a52e8]")}>07 — Built for</div>
+              <RevealLines lines={["Built for people", "with bills to pay."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)]" />
+            </div>
+            <ul className="m-0 grid list-none gap-x-8 p-0 md:grid-cols-3">
+              {audiences.map((item) => (
+                <li key={item.title} className="border-t border-[#0b0b0d] pb-10 pt-5">
+                  <Spark className="size-3 text-[#0a52e8]" />
+                  <h3 className="disp mb-3 mt-4 text-[clamp(1.5rem,2.4vw,2rem)]">{item.title}</h3>
+                  <p className="m-0 max-w-[40ch] text-[17px] leading-[1.55] text-[#3b3a36]">{item.body}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* Built on */}
+        <section id="built-on" className="border-b border-[#0b0b0d] bg-[#ece8dd]">
+          <div className={clsx(wrap, "flex flex-wrap items-center gap-x-12 gap-y-6 py-[clamp(36px,4vw,56px)]")}>
+            <div className="flex-[1_1_260px]">
+              <div className={clsx(label, "text-[#0a52e8]")}>08 — Built on</div>
+              <h2 className="disp m-0 mt-3 text-[clamp(1.4rem,2.4vw,1.9rem)]">Circle, Morpho and Arc.</h2>
+            </div>
+            <ul aria-label="Technology Hodd is built on" className="m-0 flex flex-[2_1_520px] list-none flex-wrap gap-2.5 p-0">
+              {stack.map((name) => <li key={name} className={clsx(label, "inline-flex min-h-10 items-center border border-[#0b0b0d] bg-[#f4f1e8] px-3.5")}>{name}</li>)}
+            </ul>
+          </div>
+        </section>
+
+        {/* FAQ */}
+        <section id="faq" className="border-b border-[#0b0b0d] bg-[#e3dfd2]">
+          <div className={clsx(wrap, "grid gap-x-16 gap-y-10 py-[clamp(64px,8vw,112px)] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]")}>
+            <div>
+              <div className={clsx(label, "text-[#0a52e8]")}>09 — FAQ</div>
+              <RevealLines lines={["Fair", "questions."]} className="disp mt-5 text-[clamp(2.1rem,5vw,4.5rem)] lg:text-[clamp(2.1rem,3.6vw,3.6rem)]" />
+            </div>
+            <div className="border-t border-[#0b0b0d]">
+              {faqs.map((item) => (
+                <details key={item.q} className={clsx(styles.faq, "border-b border-[#0b0b0d]")}>
+                  <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-5">
+                    <h3 className="disp m-0 text-[clamp(1.2rem,2.1vw,1.65rem)] leading-[1.05]">{item.q}</h3>
+                    <span aria-hidden="true" className={styles.faqIcon} />
+                  </summary>
+                  <p className="m-0 max-w-[62ch] pb-7 text-[17px] leading-[1.6] text-[#3b3a36]">{item.a}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* CTA */}
         <section id="cta" className="relative overflow-hidden border-b border-[#0b0b0d] bg-[#0a52e8] text-white" style={{ backgroundImage: "linear-gradient(to right,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient(to bottom,rgba(255,255,255,.14) 1px,transparent 1px)", backgroundSize: "120px 120px" }}>
           <div className={clsx(wrap, "relative py-[clamp(64px,8vw,112px)]")}>
             <div className="flex flex-wrap items-center gap-x-12 gap-y-14">
               <div className="min-w-0 flex-[1.4_1_480px]">
-                <div className={clsx(label, "text-[#d6e4ff]")}>05 — Get started</div>
+                <div className={clsx(label, "text-[#d6e4ff]")}>10 — Get started</div>
                 <RevealLines lines={["Money should", "know what’s next."]} className="disp mb-7 mt-[22px] text-[clamp(2.25rem,5.4vw,4.75rem)]" />
                 <p className="mb-9 max-w-[480px] text-lg leading-[1.55] text-[#eaf1ff]">Start with an empty treasury. Connect a wallet on Arc Testnet, get free testnet USDC from the Circle faucet, then invest, add a bill and let Autopilot take it from there.</p>
                 <div className="flex flex-wrap gap-3.5">
@@ -303,10 +501,10 @@ export default async function LandingPage() {
               <Image src="/brand/hodd-lockup-dark.png" alt="Hodd Finance" width={1000} height={318} className="block h-auto w-[200px]" />
               <p className="mt-5 text-base leading-[1.55] text-[#a5a8b3]">Treasury that plans ahead, on Arc.</p>
             </div>
-            <nav aria-label="Footer" className="flex flex-wrap gap-x-[72px] gap-y-10">
+            <nav aria-label="Footer" className="flex flex-wrap gap-x-[56px] gap-y-10">
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Product</div>
-                <div className="flex flex-col"><a className={navLink} href="#system">System</a><a className={navLink} href="#how">How it works</a><a className={navLink} href="#hoddie">Hoddie</a><a className={navLink} href="#principles">Principles</a></div>
+                <div className="flex flex-col"><a className={navLink} href="#system">System</a><a className={navLink} href="#how">How it works</a><a className={navLink} href="#hoddie">Hoddie</a><a className={navLink} href="#claude">Claude</a><a className={navLink} href="#proof">Proof</a><a className={navLink} href="#faq">FAQ</a></div>
               </div>
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Console</div>
@@ -315,21 +513,26 @@ export default async function LandingPage() {
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Onchain</div>
                 <div className="flex flex-col">
-                  <a className={navLink} href="https://testnet.arcscan.app/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389" target="_blank" rel="noopener noreferrer">Vault factory<span className="sr-only"> (opens in a new tab)</span></a>
-                  <a className={navLink} href="https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76" target="_blank" rel="noopener noreferrer">USYC pool<span className="sr-only"> (opens in a new tab)</span></a>
+                  <a className={navLink} href={`${ARCSCAN}/address/${onchain[0].ref}`} target="_blank" rel="noopener noreferrer">Vault factory{newTab}</a>
+                  <a className={navLink} href={`${ARCSCAN}/address/${onchain[1].ref}`} target="_blank" rel="noopener noreferrer">USYC pool{newTab}</a>
                 </div>
+              </div>
+              <div>
+                <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Legal</div>
+                <div className="flex flex-col"><a className={navLink} href="/terms">Terms</a><a className={navLink} href="/risk">Risk</a><a className={navLink} href="/privacy">Privacy</a></div>
               </div>
               <div>
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Contact</div>
                 <div className="flex flex-col">
-                  <a className={navLink} href="mailto:info@hoddfinance.xyz?subject=Hodd%20feedback">Feedback</a>
-                  <a className={clsx(navLink, "gap-3")} href="https://x.com/hoddfinance" target="_blank" rel="noopener noreferrer"><XLogo />@hoddfinance<span className="sr-only"> (opens in a new tab)</span></a>
+                  <a className={mailLink} href="mailto:info@hoddfinance.xyz">info@hoddfinance.xyz</a>
+                  <a className={navLink} href={GITHUB} target="_blank" rel="noopener noreferrer">GitHub{newTab}</a>
+                  <a className={clsx(navLink, "gap-3")} href="https://x.com/hoddfinance" target="_blank" rel="noopener noreferrer"><XLogo />@hoddfinance{newTab}</a>
                 </div>
               </div>
             </nav>
           </div>
           <div className={clsx(label, "mt-16 flex flex-wrap justify-between gap-x-8 gap-y-3 border-t border-[#f4f1e8]/20 pt-5 text-[#a5a8b3]")}>
-            <span>© 2026 Hodd Finance®</span>
+            <span>© 2026 Hodd Finance</span>
             <span>hoddfinance.xyz</span>
             <span>Arc Testnet only · Not financial advice</span>
           </div>
