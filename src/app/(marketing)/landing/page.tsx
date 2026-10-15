@@ -3,11 +3,11 @@ import { Fragment } from "react";
 import { headers } from "next/headers";
 import Image from "next/image";
 import clsx from "clsx";
-import { CiBadge } from "@/components/landing/ci-badge";
 import { SystemTabs } from "@/components/landing/system-tabs";
 import { ClaudePreview } from "@/components/landing/motion/claude-preview";
 import { CountUp } from "@/components/landing/motion/count-up";
 import { CtaStar } from "@/components/landing/motion/cta-star";
+import { HorizonDays } from "@/components/landing/motion/horizon-days";
 import { HeroMark } from "@/components/landing/motion/hero-mark";
 import { HoddiePreview } from "@/components/landing/motion/hoddie-preview";
 import { HowTimeline } from "@/components/landing/motion/how-timeline";
@@ -45,7 +45,7 @@ const facts = [
   { label: "Network", value: "Arc", note: "Testnet today" },
   { label: "Custody", value: "Yours", note: "Your wallet owns your vault", detail: "USYC is held by Hodd’s pool contract. Your pool shares redeem only to you." },
   { label: "Writes", value: "Approved", note: "You sign, or you approved the bill" },
-  { label: "Horizon", value: "30 days", note: "Obligations protected before yield" },
+  { label: "Horizon", value: "3–30 days", note: "You choose 3 to 30 days", detail: "Bills due inside your window are protected before anything is invested." },
 ] as const;
 
 const steps = [
@@ -69,7 +69,6 @@ const claudeSteps = [
 ] as const;
 
 const ARCSCAN = "https://testnet.arcscan.app";
-const GITHUB = "https://github.com/FatihX1X/Hodd";
 
 /** Contracts and the first production Autopilot payment, from docs/autopilot-validation.md and docs/usyc-validation.md. */
 const onchain = [
@@ -90,7 +89,7 @@ const totals = {
 } as const;
 
 /** The test suites on the same date: Vitest cases, and Playwright runs (every browser test on desktop and on mobile). */
-const testSuite = { unit: 884, browser: 102 } as const;
+const testSuite = { unit: 884, browser: 104 } as const;
 
 const audiences = [
   { title: "Small business payroll", body: "Payroll stays covered every cycle, while the cash waiting for payday earns in Morpho and USYC." },
@@ -259,7 +258,7 @@ export default async function LandingPage() {
                 <div key={fact.label} className="flex-[1_1_240px] bg-[#f4f1e8] p-7">
                   <dt className={clsx(label, "text-[#5a5953]")}>{fact.label}</dt>
                   <dd className="m-0">
-                    <span className={clsx("disp mb-2.5 mt-3.5 block whitespace-nowrap text-[clamp(1.75rem,3vw,2.75rem)]", fact.label === "Network" && "text-[#0a52e8]")}>{fact.label === "Horizon" ? <><CountUp to={30} />&nbsp;days</> : fact.value}</span>
+                    <span className={clsx("disp mb-2.5 mt-3.5 block whitespace-nowrap text-[clamp(1.75rem,3vw,2.75rem)]", fact.label === "Network" && "text-[#0a52e8]")}>{fact.label === "Horizon" ? <HorizonDays /> : fact.value}</span>
                     <span className={clsx(label, "text-[#5a5953]")}>{fact.note}</span>
                     {"detail" in fact && <span className="mt-3 block max-w-[34ch] text-sm leading-[1.5] text-[#3b3a36]">{fact.detail}</span>}
                   </dd>
@@ -383,7 +382,6 @@ export default async function LandingPage() {
                 <div className="border border-white/20 p-[clamp(20px,3vw,32px)]">
                   <Stamp className="disp inline-block border-2 border-[#7fe3a8] px-3 py-1.5 text-[clamp(1.2rem,2.3vw,1.75rem)] text-[#7fe3a8]">Allowlisted by Circle</Stamp>
                   <p className="mb-0 mt-6 text-[15px] leading-[1.55] text-[#c9cbd3]">Circle allowlisted Hodd’s USYC pool on Oct 13, 2026. You hold USYC through the pool without being allowlisted yourself.</p>
-                  <a className={clsx(navLink, "mt-3 gap-2 text-[#b9ccff]")} href={`${GITHUB}/blob/main/docs/usyc-validation.md`} target="_blank" rel="noopener noreferrer">Read the validation record <Arrow />{newTab}</a>
                 </div>
                 <div className="border border-white/20 p-[clamp(20px,3vw,32px)]">
                   <dl className="m-0 grid gap-6 sm:grid-cols-2">
@@ -396,9 +394,6 @@ export default async function LandingPage() {
                       <dd className="disp m-0 mt-2 text-[clamp(1.75rem,3vw,2.5rem)]"><CountUp to={testSuite.browser} /></dd>
                     </div>
                   </dl>
-                  <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-white/15 pt-5">
-                    <CiBadge repo={GITHUB} className={clsx(navLink, "text-[#b9ccff]")} />
-                  </div>
                 </div>
               </div>
             </div>
