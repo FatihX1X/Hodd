@@ -180,7 +180,7 @@ test("mobile layout keeps every scene inside the viewport", async ({ page }) => 
   expect(chat!.y).toBeGreaterThan(steps!.y + steps!.height);
 });
 
-test("the footer links to the legal pages, GitHub, X and email", async ({ page }) => {
+test("the footer links to the legal pages, X and email", async ({ page }) => {
   await page.goto("/landing");
   const footer = page.getByRole("navigation", { name: "Footer" });
   const x = footer.getByRole("link", { name: /^X @hoddfinance/ });
@@ -188,7 +188,10 @@ test("the footer links to the legal pages, GitHub, X and email", async ({ page }
   await expect(x).toHaveAttribute("target", "_blank");
   await expect(x).toHaveAttribute("rel", /noopener/);
   await expect(footer.getByRole("link", { name: "info@hoddfinance.xyz" })).toHaveAttribute("href", "mailto:info@hoddfinance.xyz");
-  await expect(footer.getByRole("link", { name: /^github/i })).toHaveAttribute("href", "https://github.com/FatihX1X/Hodd");
+  // No plain GitHub link anywhere; GitHub appears only behind the Proof section's CI badge and validation record.
+  await expect(footer.getByRole("link", { name: /github/i })).toHaveCount(0);
+  await expect(page.locator('a[href="https://github.com/FatihX1X/Hodd"]')).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /code on github/i })).toHaveCount(0);
   for (const [name, href] of [["Terms", "/terms"], ["Risk", "/risk"], ["Privacy", "/privacy"]]) {
     await expect(footer.getByRole("link", { name: new RegExp(`^${name}$`, "i") })).toHaveAttribute("href", href);
   }

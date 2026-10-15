@@ -398,7 +398,6 @@ export default async function LandingPage() {
                   </dl>
                   <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-white/15 pt-5">
                     <CiBadge repo={GITHUB} className={clsx(navLink, "text-[#b9ccff]")} />
-                    <a className={clsx(navLink, "gap-2 text-[#b9ccff]")} href={GITHUB} target="_blank" rel="noopener noreferrer">Code on GitHub <Arrow />{newTab}</a>
                   </div>
                 </div>
               </div>
@@ -525,7 +524,6 @@ export default async function LandingPage() {
                 <div className={clsx(label, "mb-2.5 text-[#8fb0ff]")}>Contact</div>
                 <div className="flex flex-col">
                   <a className={mailLink} href="mailto:info@hoddfinance.xyz">info@hoddfinance.xyz</a>
-                  <a className={navLink} href={GITHUB} target="_blank" rel="noopener noreferrer">GitHub{newTab}</a>
                   <a className={clsx(navLink, "gap-3")} href="https://x.com/hoddfinance" target="_blank" rel="noopener noreferrer"><XLogo />@hoddfinance{newTab}</a>
                 </div>
               </div>
