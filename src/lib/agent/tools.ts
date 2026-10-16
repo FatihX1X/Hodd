@@ -107,7 +107,7 @@ async function commit(auth: AuthInfo | undefined, kind: ChangeKind, args: { scop
   });
   if (error) {
     if (error.code === "23505") throw new AgentError("CONFIRMATION_USED", "This confirmation was already used. Nothing new was written.");
-    if (error.code === "40001" || error.message.includes("revision conflict")) throw new AgentError("WORKSPACE_CHANGED", "The workspace changed while saving. Nothing was written; prepare the change again.");
+    if (error.code === "PT409" || error.code === "40001" || error.message.includes("revision conflict")) throw new AgentError("WORKSPACE_CHANGED", "The workspace changed while saving. Nothing was written; prepare the change again.");
     if (error.message.includes("payment execution requires completion")) throw new AgentError("PAYMENT_PENDING", "A payment is pending in Hodd; finish or review it first. Nothing was written.");
     if (error.message.includes("obligation revision conflict")) throw new AgentError("WORKSPACE_CHANGED", "That obligation changed in the meantime. Prepare the change again.");
     throw new AgentError("WRITE_FAILED", "Hodd could not save this change. Nothing was written.");

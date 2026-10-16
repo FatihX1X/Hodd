@@ -52,4 +52,8 @@ describe("native Hoddie approval isolation", () => {
       await expect(hoddieContext()).rejects.toMatchObject({ code: "AUTH_REQUIRED" }); expect(from).not.toHaveBeenCalled();
     }
   });
+  it("does not ask the database about a session when nobody is signed in", async () => {
+    const rpc = vi.fn(); mocks.client.mockResolvedValue({ auth: { getUser: async () => ({ data: { user: null }, error: { message: "Auth session missing" } }), getClaims: async () => ({ data: null }) }, rpc, from: vi.fn() });
+    await expect(hoddieContext()).rejects.toMatchObject({ code: "AUTH_REQUIRED" }); expect(rpc).not.toHaveBeenCalled();
+  });
 });

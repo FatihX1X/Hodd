@@ -57,3 +57,7 @@ export function applyUsycPosition(workspace: TreasuryWorkspace, position: UsycPo
 export function makeActivity(action: string, summary: string, reason: string, occurredAt: string, actor: ActivityEntry["actor"] = "HUMAN", approval: ActivityEntry["approval"] = "NOT_REQUIRED"): ActivityEntry {
   return { id: crypto.randomUUID(), occurredAt, actor, action, summary, reason, policy: { status: "PASS", label: "Local validation", reason: "The change passed schema and deterministic policy input validation." }, approval, execution: "LOCAL_ONLY" };
 }
+
+/** The activity list keeps the newest entries only, so a long-lived workspace does not grow (and re-upload) without bound. */
+export const MAX_ACTIVITIES = 200;
+export const boundActivities = (activities: ActivityEntry[]) => activities.length > MAX_ACTIVITIES ? activities.slice(0, MAX_ACTIVITIES) : activities;

@@ -23,7 +23,7 @@ begin
   select revision into rev from public.treasury_workspaces where user_id=owner_id;
   if rev <> 1 then raise exception 'replay changed workspace'; end if;
   rejected := false;
-  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','stale','APPLIED',null,w,0); exception when serialization_failure then rejected:=true; end;
+  begin perform public.hodd_apply_hoddie_action(gen_random_uuid(),'UPDATE_POLICY','{}','stale','APPLIED',null,w,0); exception when sqlstate 'PT409' then rejected:=true; end;
   if not rejected then raise exception 'stale cache accepted'; end if;
   -- Normal Hodd session still cannot impersonate an OAuth connector.
   rejected := false;

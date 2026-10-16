@@ -2,7 +2,7 @@ import { getAddress, isAddress } from "viem";
 import { z } from "zod";
 import { treasuryWorkspaceSchema, type Money, type Obligation, type StrategyKind, type TreasuryWorkspace } from "@/lib/treasury/models";
 import { moneyToInput, parseMoneyInput } from "@/lib/treasury/money";
-import { makeActivity } from "@/lib/treasury/live";
+import { boundActivities, makeActivity } from "@/lib/treasury/live";
 import { formatMoney } from "@/lib/treasury/format";
 
 // Pure workspace changes shared by the prepare (preview) and confirm (apply) tools,
@@ -75,7 +75,7 @@ export type AppliedChange = { workspace: TreasuryWorkspace; summary: string; lin
 export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawChange: unknown, now: Date, newId: () => string = () => crypto.randomUUID(), source: "Claude" | "Hoddie" = "Claude"): AppliedChange {
   const stamp = now.toISOString();
   const finish = (next: TreasuryWorkspace, action: string, summary: string, lines: string[]): AppliedChange => {
-    const withActivity = { ...next, updatedAt: stamp, activities: [makeActivity(action.replace("via Claude", `via ${source}`), summary, source === "Claude" ? "Approved by the user in Claude (Hodd connector)." : "Approved by the user with Apply change in Hoddie.", stamp, "AGENT", "APPROVED"), ...next.activities] };
+    const withActivity = { ...next, updatedAt: stamp, activities: boundActivities([makeActivity(action.replace("via Claude", `via ${source}`), summary, source === "Claude" ? "Approved by the user in Claude (Hodd connector)." : "Approved by the user with Apply change in Hoddie.", stamp, "AGENT", "APPROVED"), ...next.activities]) };
     return { workspace: treasuryWorkspaceSchema.parse(withActivity), summary, lines };
   };
   const locked = (id: string) => workspace.paymentReservations?.some((item) => item.obligationId === id);
