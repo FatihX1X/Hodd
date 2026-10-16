@@ -39,27 +39,27 @@ npm run render                              # out/hodd-finance-film.mp4
 
 ## The demo (`HoddDemo`)
 
-A 140-second voiced and subtitled product demo, 1920×1080 at 60 fps. Its sections are hook, live treasury, agent wallet and limits, the AI advisor decision, execution with its Arcscan receipt, USYC, Hoddie/Claude/Gateway, and the outro. Every figure on screen is traced in [`demo/EVIDENCE.md`](demo/EVIDENCE.md). The timed voiceover is [`demo/SCRIPT.md`](demo/SCRIPT.md), and the subtitles are also in [`demo/hodd-demo.srt`](demo/hodd-demo.srt).
+A 140-second product demo told in burned-in English subtitles over an original score (no voiceover), 1920×1080 at 60 fps. Its sections are hook, live treasury, agent wallet and limits, the AI advisor decision, execution with its Arcscan receipt, USYC, Hoddie/Claude/Gateway, and the outro. Every figure on screen is traced in [`demo/EVIDENCE.md`](demo/EVIDENCE.md). The timed subtitle script is [`demo/SCRIPT.md`](demo/SCRIPT.md), and the subtitles are also in [`demo/hodd-demo.srt`](demo/hodd-demo.srt).
 
 | Path | What it is |
 | --- | --- |
 | `src/demo/Demo.tsx`, `src/demo/kit.tsx` | The composition: scenes, the camera over real captures, highlight marks, source tags, ticker and burned-in captions. |
-| `demo/voiceover.json` | The narration. `caption` is what the subtitles show; `say` is the same line spelled for the speech model. |
+| `demo/subtitles.json` | The narration. `caption` is the subtitle; `say` is the same line spelled for the speech model that only times it. |
 | `demo/evidence/*.json` | Arc receipts and state reads, plus the production Autopilot records the film quotes. |
 | `scripts/verify-evidence.mjs`, `read-balances.mjs`, `read-vault-config.mjs` | Read-only chain checks that write `demo/evidence/*.json`. They send no transactions. |
 | `scripts/capture-demo.mjs` | Captures hoddfinance.xyz, the Arcscan pages and the console into `public/demo/shots`. Nothing is signed. |
-| `scripts/voiceover.py` | Kokoro TTS (Apache-2.0, local) → `public/demo/voiceover.wav` and `src/demo/captions.json`. |
-| `scripts/mix_demo.py` | Bed music ducked under the voice → `public/demo/soundtrack.mp3`. |
+| `scripts/pace_captions.py` | Times the subtitles at speaking pace (Kokoro TTS, Apache-2.0, local, measures each line; no audio is kept) → `src/demo/captions.json`. |
+| `src/demo/music-timeline.json` | The score's sections for the demo → `public/audio/hodd-demo-score.mp3`. |
 | `scripts/write_script.py` | `demo/SCRIPT.md` and `demo/hodd-demo.srt` from the captions. |
 
 ```bash
 # from video/
 node scripts/verify-evidence.mjs && node scripts/read-balances.mjs && node scripts/read-vault-config.mjs
 (cd .. && node video/scripts/capture-demo.mjs)       # with the app served on :3107 as above
-python3 scripts/compose_music.py --bed --timeline src/demo/music-timeline.json --out hodd-demo-bed
-pip install kokoro-onnx soundfile scipy               # plus kokoro-v1.0.onnx and voices-v1.0.bin in KOKORO_DIR
-python3 scripts/voiceover.py "$KOKORO_DIR"
-python3 scripts/mix_demo.py && python3 scripts/write_script.py
+python3 scripts/compose_music.py --timeline src/demo/music-timeline.json --out hodd-demo-score
+pip install kokoro-onnx               # plus kokoro-v1.0.onnx and voices-v1.0.bin in KOKORO_DIR
+python3 scripts/pace_captions.py "$KOKORO_DIR"
+python3 scripts/write_script.py
 npm run render:demo                                  # out/hodd-demo.mp4
 ```
 

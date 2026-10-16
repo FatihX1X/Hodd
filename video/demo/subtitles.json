@@ -1,7 +1,7 @@
 {
   "voice": "af_heart",
   "speed": 1.08,
-  "note": "`caption` is what the subtitles show; `say` is the same sentence spelled for the speech model. Every claim is traced in EVIDENCE.md.",
+  "note": "The film has no voiceover. `caption` is the subtitle; `say` is the same line spelled for the speech model that scripts/pace_captions.py uses only to time it. Every claim is traced in EVIDENCE.md.",
   "segments": [
     {
       "id": "hook",
@@ -131,8 +131,8 @@
           "say": "Hoddy answers from the engine's numbers. Claude runs Hodd over M C P, with your approval."
         },
         {
-          "caption": "Circle Gateway unifies USDC across 12 testnets, Arc included.",
-          "say": "Circle Gateway unifies U S D C across twelve testnets, Arc included."
+          "caption": "Circle Gateway unifies USDC from 12 testnets and brings it to Arc.",
+          "say": "Circle Gateway unifies U S D C from twelve testnets and brings it to Arc."
         }
       ]
     },

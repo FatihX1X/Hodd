@@ -6,7 +6,7 @@ import { D, Header, In, Mark, Rise, Screen, Stage, Tag, bodyText, chromeText, di
 
 export const DEMO_FPS = 60;
 export const DEMO_SECONDS = 140;
-/** Sections in seconds, matched to demo/voiceover.json. */
+/** Sections in seconds, matched to demo/subtitles.json. */
 const SECTIONS = [
   { id: "hook", from: 0, to: 12 },
   { id: "treasury", from: 12, to: 29.4 },
@@ -371,7 +371,8 @@ const Captions: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
-  const cue = captions.find((c) => t >= c.start - 0.05 && t <= c.end + 0.25);
+  // The outro sets its own lines as titles, so they are not repeated as subtitles.
+  const cue = captions.find((c) => c.segment !== "outro" && t >= c.start - 0.05 && t <= c.end + 0.25);
   if (!cue) return null;
   const opacity = Math.min(tw(t, cue.start - 0.05, cue.start + 0.1), 1 - tw(t, cue.end + 0.1, cue.end + 0.25));
   return (
@@ -404,7 +405,7 @@ const Sweeps: React.FC = () => {
 
 const SCENES: Record<(typeof SECTIONS)[number]["id"], React.FC> = { hook: Hook, treasury: Treasury, mandate: Mandate, decision: Decision, execution: Execution, usyc: Usyc, ecosystem: Ecosystem, outro: Outro };
 
-/** The Hodd demo: 140 s at 60 fps, voiced and captioned, every figure traced in demo/EVIDENCE.md. */
+/** The Hodd demo: 140 s at 60 fps, subtitled over an original score, every figure traced in demo/EVIDENCE.md. */
 export const Demo: React.FC = () => (
   <AbsoluteFill style={{ background: D.black }}>
     {SECTIONS.map(({ id, from, to }) => {
@@ -414,6 +415,6 @@ export const Demo: React.FC = () => (
     <Sweeps />
     <Tape />
     <Captions />
-    <Audio src={staticFile("demo/soundtrack.mp3")} />
+    <Audio src={staticFile("audio/hodd-demo-score.mp3")} />
   </AbsoluteFill>
 );

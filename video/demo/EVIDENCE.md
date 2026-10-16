@@ -1,6 +1,6 @@
 # Hodd demo · shot-by-shot evidence checklist
 
-Film: `HoddDemo` (1920×1080, 60 fps, 140 s), `src/demo/Demo.tsx`. Voiceover and subtitles: [SCRIPT.md](./SCRIPT.md).
+Film: `HoddDemo` (1920×1080, 60 fps, 140 s), `src/demo/Demo.tsx`. No voiceover; the film is told in burned-in English subtitles ([SCRIPT.md](./SCRIPT.md), `hodd-demo.srt`) over an original score.
 
 Every figure, hash and decision in the film comes from one of these sources:
 
@@ -100,7 +100,7 @@ Caveats, also stated on screen and in the narration:
 |---|---|---|---|
 | 2:02–2:05 | Hoddie answers "Can I pay this week's bills?" from the engine's numbers | `console-hoddie-bills.png`: a real answer from the local build, on the **sample bills** | LIVE + SAMPLE |
 | 2:04–2:08 | Claude runs Hodd over MCP; every change needs approval | `console-connections.png` (the URL text is localised, see above). MCP endpoint `src/app/api/mcp/route.ts`; tools in `src/lib/agent/tools.ts` return a preview and require the user's explicit approval before a write, and payments are signed by the user's own wallet in Hodd. | CODE |
-| 2:07–2:12 | Circle Gateway unifies USDC across 12 testnets, Arc included | `console-overview-full.png` Gateway panel, read live from `/api/gateway/balances`; the 12 chains (Arc Testnet plus 11 others) are `GATEWAY_CHAINS` in `src/lib/gateway/chains.ts` | LIVE + CODE |
+| 2:07–2:12 | Circle Gateway unifies USDC from 12 testnets and brings it to Arc | `console-overview-full.png` Gateway panel, read live from `/api/gateway/balances`; the 12 Gateway testnets (Arc Testnet among them, so USDC from the other 11 can be minted on Arc) are `GATEWAY_CHAINS` in `src/lib/gateway/chains.ts` | LIVE + CODE |
 
 ### 02:12–02:20 · Outro
 Hodd Finance mark, the tagline "Money should know when it will be needed." and `app.hoddfinance.xyz`.
@@ -120,7 +120,6 @@ Each ticker item maps to a row above:
 - Move 19.523539 USDC to the vault: [0x68a0751a…dda3](https://testnet.arcscan.app/tx/0x68a0751a2160d9b2a3d19126d223b45ee1f993b579dd3de555fc096894a7dda3)
 - Autopilot pays the approved 2 USDC bill: [0x35ca2d3c…796b](https://testnet.arcscan.app/tx/0x35ca2d3c7b45b55a32a1b9aec31c70f292259efc71edbe8763374a46c09d796b)
 
-## Audio
-- **Voice.** Kokoro v1.0 (Apache-2.0), voice `af_heart`, generated locally by `scripts/voiceover.py`. Checked against the script with faster-whisper. Whisper writes the brand name "Hodd" as "Hard" or "HOD", which is how the word is pronounced.
-- **Music.** Original, synthesised in `scripts/compose_music.py --bed`. Mixed with the voice in `scripts/mix_demo.py`, which ducks the music −11 dB under speech.
-- **Licensed material.** None. The music and voice involve no third-party samples or recordings.
+## Sound and subtitles
+- **No voiceover.** The narration is subtitles only. `scripts/pace_captions.py` times them at speaking pace: each line is spoken with Kokoro v1.0 (Apache-2.0, local) only to measure its length, and no audio is kept. Each subtitle then stays up until the next one, at most 17.7 characters per second on screen.
+- **Music.** Original score, synthesised in `scripts/compose_music.py --timeline src/demo/music-timeline.json`. It uses no samples and no third-party audio.

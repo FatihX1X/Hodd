@@ -1,187 +1,187 @@
 [
  {
   "start": 1.2,
-  "end": 4.891,
+  "end": 4.879,
   "text": "Payroll on Friday. Rent on the first. An invoice next week.",
   "segment": "hook"
  },
  {
-  "start": 5.211,
-  "end": 8.432,
+  "start": 5.249,
+  "end": 12.03,
   "text": "Hodd is a treasury on Arc that keeps money ahead of what it owes.",
   "segment": "hook"
  },
  {
   "start": 12.4,
-  "end": 16.965,
+  "end": 16.953,
   "text": "Hodd reads your wallet's live USDC on Arc Testnet, and the bills you enter.",
   "segment": "dashboard"
  },
  {
-  "start": 17.285,
-  "end": 21.033,
+  "start": 17.323,
+  "end": 20.721,
   "text": "The Treasury Engine protects every bill inside your lead time,",
   "segment": "dashboard"
  },
  {
-  "start": 21.033,
-  "end": 23.451,
+  "start": 21.091,
+  "end": 23.472,
   "text": "from 3 to 30 days, plus a safety buffer.",
   "segment": "dashboard"
  },
  {
-  "start": 23.771,
-  "end": 25.684,
+  "start": 23.842,
+  "end": 25.405,
   "text": "Only what is left is deployable.",
   "segment": "dashboard"
  },
  {
-  "start": 25.684,
-  "end": 28.016,
+  "start": 25.775,
+  "end": 29.03,
   "text": "No language model calculates an amount.",
   "segment": "dashboard"
  },
  {
   "start": 29.4,
-  "end": 31.733,
+  "end": 31.375,
   "text": "Autopilot runs from a vault contract.",
   "segment": "mandate"
  },
  {
-  "start": 31.733,
-  "end": 36.525,
+  "start": 31.745,
+  "end": 36.513,
   "text": "The owner's wallet owns it; Hodd's Circle agent wallet is only its operator.",
   "segment": "mandate"
  },
  {
-  "start": 36.845,
-  "end": 41.005,
+  "start": 36.883,
+  "end": 41.048,
   "text": "This owner funded Autopilot with 30 USDC from their own wallet.",
   "segment": "mandate"
  },
  {
-  "start": 41.325,
-  "end": 44.666,
+  "start": 41.418,
+  "end": 44.403,
   "text": "The contract allows Morpho, Hodd's USYC pool,",
   "segment": "mandate"
  },
  {
-  "start": 44.666,
-  "end": 48.749,
+  "start": 44.773,
+  "end": 48.823,
   "text": "one approved recipient capped at 7 USDC, and the owner.",
   "segment": "mandate"
  },
  {
-  "start": 49.069,
-  "end": 53.379,
+  "start": 49.193,
+  "end": 53.63,
   "text": "Anything else reverts. The owner can pause, or take everything back without Hodd.",
   "segment": "mandate"
  },
  {
   "start": 54.0,
-  "end": 57.343,
+  "end": 56.984,
   "text": "On October 15, the engine proposed:",
   "segment": "decision"
  },
  {
-  "start": 57.343,
-  "end": 62.597,
+  "start": 57.354,
+  "end": 62.575,
   "text": "invest 10.52 USDC into Morpho, at a 4.20% recent yield.",
   "segment": "decision"
  },
  {
-  "start": 62.917,
-  "end": 68.002,
+  "start": 62.945,
+  "end": 67.688,
   "text": "The AI advisor, gpt-oss-120b on Groq, saw aggregate figures only,",
   "segment": "decision"
  },
  {
-  "start": 68.002,
-  "end": 72.069,
+  "start": 68.058,
+  "end": 72.098,
   "text": "and answered FOLLOW: higher yield, no pending bills.",
   "segment": "decision"
  },
  {
-  "start": 72.389,
-  "end": 76.122,
+  "start": 72.468,
+  "end": 75.844,
   "text": "It may follow, allocate, wait or move between strategies.",
   "segment": "decision"
  },
  {
-  "start": 76.122,
-  "end": 80.837,
+  "start": 76.214,
+  "end": 80.897,
   "text": "Bills never reach the model; answers outside its envelope are discarded.",
   "segment": "decision"
  },
  {
-  "start": 81.157,
-  "end": 84.677,
+  "start": 81.267,
+  "end": 85.03,
   "text": "Many runs end in no action, and the history records those too.",
   "segment": "decision"
  },
  {
   "start": 85.4,
-  "end": 89.219,
+  "end": 89.202,
   "text": "Before signing, the runner checks the decision against fresh balances.",
   "segment": "execution"
  },
  {
-  "start": 89.539,
-  "end": 94.488,
+  "start": 89.572,
+  "end": 94.504,
   "text": "The Circle agent wallet signed one call on the owner's vault: depositToStrategy.",
   "segment": "execution"
  },
  {
-  "start": 94.808,
-  "end": 100.44,
+  "start": 94.874,
+  "end": 105.03,
   "text": "Arc confirmed it. Hodd verified the receipt from the vault's own events, then marked the run complete.",
   "segment": "execution"
  },
  {
   "start": 105.4,
-  "end": 110.52,
+  "end": 110.513,
   "text": "Cash can also earn in Hodd's USYC pool, the one contract Circle allowlisted.",
   "segment": "usyc"
  },
  {
-  "start": 110.84,
-  "end": 115.043,
+  "start": 110.883,
+  "end": 115.068,
   "text": "A 1 USDC round trip returned 0.999895 USDC.",
   "segment": "usyc"
  },
  {
-  "start": 115.363,
-  "end": 120.973,
+  "start": 115.438,
+  "end": 121.23,
   "text": "Autopilot's USYC path was verified on a test vault; this account has used Morpho.",
   "segment": "usyc"
  },
  {
   "start": 121.6,
-  "end": 124.194,
+  "end": 123.838,
   "text": "Hoddie answers from the engine's numbers.",
   "segment": "ecosystem"
  },
  {
-  "start": 124.194,
-  "end": 127.104,
+  "start": 124.208,
+  "end": 127.085,
   "text": "Claude runs Hodd over MCP, with your approval.",
   "segment": "ecosystem"
  },
  {
-  "start": 127.424,
-  "end": 132.181,
-  "text": "Circle Gateway unifies USDC across 12 testnets, Arc included.",
+  "start": 127.455,
+  "end": 132.23,
+  "text": "Circle Gateway unifies USDC from 12 testnets and brings it to Arc.",
   "segment": "ecosystem"
  },
  {
   "start": 132.6,
-  "end": 133.624,
+  "end": 133.549,
   "text": "Hodd Finance.",
   "segment": "outro"
  },
  {
-  "start": 133.944,
-  "end": 135.757,
+  "start": 133.919,
+  "end": 138.63,
   "text": "Money should know when it will be needed.",
   "segment": "outro"
  }
