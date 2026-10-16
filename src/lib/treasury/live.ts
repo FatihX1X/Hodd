@@ -1,4 +1,5 @@
 import type { EarnPosition, EarnPortfolioResponse } from "@/lib/earn/models";
+import type { UsycPosition } from "@/lib/usyc/models";
 import type { ActivityEntry, TreasuryWorkspace, WalletSnapshot } from "./models";
 import { addMoney, moneyLike } from "./money";
 
@@ -24,9 +25,39 @@ export function applyEarnPortfolio(workspace: TreasuryWorkspace, portfolio: Port
   const morphoBalance = addMoney(zero, ...portfolio.positions.map((position) => position.currentBalance));
   const redeemable = addMoney(zero, ...portfolio.positions.map((position) => position.liquidityStatus === "READY" ? position.redeemable : zero));
   const strategies = workspace.strategies.map((strategy) => strategy.kind === "MORPHO" ? { ...strategy, ...(portfolio.positions.length === 0 && portfolio.integration.positionAccess === "READY" && portfolio.observedAt ? { observedAt: portfolio.observedAt, liquidityStatus: "READY" as const } : strategyObservation(portfolio.positions)), name: portfolio.vaults[0]?.name ?? strategy.name, balance: morphoBalance, redeemable, apyBps: portfolio.positions[0]?.apyBps ?? portfolio.vaults[0]?.apyBps ?? null, integration: portfolio.integration.positionAccess === "READY" ? "LIVE" as const : "UNAVAILABLE" as const } : strategy);
-  return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, morphoBalance), strategies };
+  // A USYC position read earlier in the same chain stays part of the total, whatever order the reads are applied in.
+  const usycHeld = workspace.strategies.filter((strategy) => strategy.kind === "USYC" && strategy.integration === "LIVE").map((strategy) => strategy.balance);
+  return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, morphoBalance, ...usycHeld), strategies };
+}
+
+/** The strategy name for USYC: users reach it through Hodd's pool, depositing and withdrawing USDC only. */
+export const USYC_STRATEGY_NAME = "USYC · via Hodd's pool";
+
+/** What a withdrawal could pay now: the position's value, capped by what the pool can pay out (Circle's daily limit, fund liquidity). */
+export function usycRedeemableMinor(position: Pick<UsycPosition, "valueUsdc" | "maxWithdrawUsdc">): bigint {
+  const value = BigInt(position.valueUsdc), most = BigInt(position.maxWithdrawUsdc);
+  return most < value ? most : value;
+}
+
+/**
+ * The connected wallet's share of Hodd's USYC pool, read fresh, as a live position: balance is its USDC value, redeemable
+ * is what a withdrawal could pay now, and it only counts as ready liquidity while Circle permits the pool and USYC is
+ * not paused. Only the wallet can withdraw it, always to itself. Included in the treasury total like Morpho.
+ */
+export function applyUsycPosition(workspace: TreasuryWorkspace, position: UsycPosition): TreasuryWorkspace {
+  const zero = moneyLike(workspace.liquidUsdc, 0n);
+  const balance = moneyLike(zero, BigInt(position.valueUsdc));
+  const redeemable = moneyLike(zero, usycRedeemableMinor(position));
+  const ready = position.circle === "OK";
+  const strategies = workspace.strategies.map((strategy) => strategy.kind === "USYC" ? { ...strategy, name: USYC_STRATEGY_NAME, balance, redeemable, apyBps: null, observedAt: position.observedAt, liquidityStatus: ready ? "READY" as const : "UNAVAILABLE" as const, integration: "LIVE" as const } : strategy);
+  const others = strategies.filter((strategy) => strategy.kind !== "LIQUID" && strategy.kind !== "USYC").map((strategy) => strategy.balance);
+  return { ...workspace, totalTreasury: addMoney(workspace.liquidUsdc, ...others, balance), strategies };
 }
 
 export function makeActivity(action: string, summary: string, reason: string, occurredAt: string, actor: ActivityEntry["actor"] = "HUMAN", approval: ActivityEntry["approval"] = "NOT_REQUIRED"): ActivityEntry {
   return { id: crypto.randomUUID(), occurredAt, actor, action, summary, reason, policy: { status: "PASS", label: "Local validation", reason: "The change passed schema and deterministic policy input validation." }, approval, execution: "LOCAL_ONLY" };
 }
+
+/** The activity list keeps the newest entries only, so a long-lived workspace does not grow (and re-upload) without bound. */
+export const MAX_ACTIVITIES = 200;
+export const boundActivities = (activities: ActivityEntry[]) => activities.length > MAX_ACTIVITIES ? activities.slice(0, MAX_ACTIVITIES) : activities;

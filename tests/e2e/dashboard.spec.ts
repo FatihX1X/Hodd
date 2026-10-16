@@ -142,11 +142,44 @@ test("Autopilot Invest signs with MetaMask inside the server's gas ceiling and n
   // In-app navigation keeps the in-memory signer.
   await page.getByRole("link", { name: "Autopilot" }).first().click();
   const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
-  await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click();
+  await page.getByLabel("Amount (USDC)").fill("15"); await page.getByRole("button", { name: "Invest 15 USDC" }).click(); await page.getByRole("button", { name: "Confirm?" }).click();
   await expect(page.getByRole("region", { name: "Invest progress" })).toContainText("Done.", { timeout: 20_000 });
   const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string }[] }).sent);
   expect(sent).toHaveLength(1); expect(BigInt(sent[0].gas)).toBe(59_206n); expect(BigInt(sent[0].gasPrice)).toBe(50_000_000_000n); expect(sent[0].to.toLowerCase()).toBe("0x3600000000000000000000000000000000000000");
   expect(calls.slice(0, 3)).toEqual(["invest", "funding", "run"]); expect(rpc).toEqual([]);
+});
+
+test("USYC pool deposit is one click: exact approval then deposit, each inside the server's gas ceiling, no Arc RPC from the browser", async ({ page }) => {
+  await liveSession(page); await liveReads(page, "20000000");
+  const pool = "0x4F1E3B1c0A9D8E7f6a5B4C3D2E1f0A9b8C7d6E5f", usdcToken = "0x3600000000000000000000000000000000000000";
+  const hashes = ["0x" + "a".repeat(64), "0x" + "b".repeat(64)];
+  await page.addInitScript(({ address, hashes }) => {
+    const sent: unknown[] = []; (window as unknown as { sent: unknown[] }).sent = sent;
+    Object.defineProperty(window, "ethereum", { value: { isMetaMask: true, request: async ({ method, params }: { method: string; params?: unknown[] }) => { if (method === "eth_chainId") return "0x4cef52"; if (method === "eth_accounts" || method === "eth_requestAccounts") return [address]; if (method === "eth_sendTransaction") { sent.push(params?.[0]); return hashes[sent.length - 1]; } throw new Error(`Unexpected wallet request: ${method}`); }, on: () => undefined, removeListener: () => undefined } });
+  }, { address, hashes });
+  let deposited = false; const posted: unknown[] = [];
+  const position = () => ({ wallet: address, pool, circle: "OK", depositsPaused: false, maxDepositUsdc: "1000000000", shares: deposited ? "4385000000000" : "0", usycMinor: deposited ? "4385000" : "0", valueUsdc: deposited ? "4997600" : "0", maxWithdrawShares: deposited ? "4385000000000" : "0", maxWithdrawUsdc: deposited ? "4997600" : "0", priceUsdcPerUsyc: "1139744957475496722", subscribePriceUsdcPerUsyc: "1139744957475496722", afterHoursPricing: false, observedAt: new Date().toISOString() });
+  const step = (stage: string, to: string, data: string, gasLimit: string) => ({ stage, call: { to, data, value: "0" }, gasBudgetWei: (BigInt(gasLimit) * 50_000_000_000n).toString(), gasCeiling: { gasLimit, gasPriceWei: "50000000000" } });
+  await page.route("**/api/usyc", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { status: "READY", position: position(), executionEnabled: true, executionNote: null, walletCanSign: true } });
+    const body = route.request().postDataJSON() as { action: string; step?: string }; posted.push(body);
+    if (body.action === "QUOTE_DEPOSIT") return route.fulfill({ json: { status: "READY", quote: { kind: "DEPOSIT", wallet: address, amountMinor: "5000000", steps: [step("APPROVE", usdcToken, "0x095ea7b3", "46447"), step("DEPOSIT", pool, "0x6e553f65", "397200")], preview: { usdcMinor: "5000000", shares: "4385000000000", minimum: "4363075000000", afterHoursPricing: false }, networkFeeMinor: "22183", gasSimulated: true, observedAt: new Date().toISOString() } } });
+    if (body.step === "DEPOSIT") deposited = true;
+    return route.fulfill({ json: body.step === "APPROVE" ? { status: "CONFIRMED", step: "APPROVE", txHash: hashes[0] } : { status: "CONFIRMED", step: "DEPOSIT", txHash: hashes[1], depositedUsdcMinor: "5000000", receivedShares: "4385000000000" } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: /choose wallet/i }).click(); await page.getByRole("button", { name: "MetaMask", exact: true }).click();
+  await expect(page.getByText("Custody: user")).toBeVisible();
+  await page.getByRole("link", { name: "Invest" }).first().click();
+  const rpc: string[] = []; page.on("request", (request) => { if (/rpc\.testnet\.arc/.test(request.url())) rpc.push(request.url()); });
+  await expect(page.getByText("Circle enabled")).toBeVisible();
+  await page.getByLabel("USYC pool amount").fill("5"); await page.getByRole("button", { name: "Deposit", exact: true }).click(); await page.getByRole("button", { name: "Confirm?" }).click();
+  await expect(page.getByRole("region", { name: "Deposit progress" })).toContainText("Deposit verified on Arc Testnet", { timeout: 20_000 });
+  const sent = await page.evaluate(() => (window as unknown as { sent: { gas: string; gasPrice: string; to: string; data: string }[] }).sent);
+  expect(sent.map((item) => [item.to.toLowerCase(), BigInt(item.gas), BigInt(item.gasPrice)])).toEqual([[usdcToken, 46_447n, 50_000_000_000n], [pool.toLowerCase(), 397_200n, 50_000_000_000n]]);
+  expect(posted.map((item) => (item as { action: string; step?: string }).step ?? (item as { action: string }).action)).toEqual(["QUOTE_DEPOSIT", "APPROVE", "DEPOSIT"]);
+  // The refreshed position shows the new balance.
+  await expect(page.getByText("4.997600 USDC").first()).toBeVisible();
+  expect(rpc).toEqual([]);
 });
 
 test("policy page explains and saves the same live workspace policy", async ({ page }) => {

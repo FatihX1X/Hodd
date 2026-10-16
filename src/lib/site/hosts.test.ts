@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APP_ORIGIN, isMarketingAsset, normalizeHost, siteForHost } from "./hosts";
+import { APP_ORIGIN, demoVideoUrl, isMarketingAsset, isMarketingPage, landingPathForHost, normalizeHost, siteForHost } from "./hosts";
 
 describe("site hosts", () => {
   it("serves the landing page on the apex and www hosts only", () => {
@@ -31,5 +31,19 @@ describe("site hosts", () => {
   it("recognises public marketing assets", () => {
     for (const path of ["/robots.txt", "/sitemap.xml", "/brand/hodd-star.png", "/icon.png", "/apple-icon.png", "/opengraph-image.png"]) expect(isMarketingAsset(path)).toBe(true);
     for (const path of ["/", "/login", "/api/payments", "/invest", "/iconography"]) expect(isMarketingAsset(path)).toBe(false);
+  });
+
+  it("serves the legal pages on the marketing host", () => {
+    for (const path of ["/terms", "/risk", "/privacy", "/terms/"]) expect(isMarketingPage(path)).toBe(true);
+    for (const path of ["/", "/landing", "/termsx", "/terms/extra", "/login", "/waitlist"]) expect(isMarketingPage(path)).toBe(false);
+    expect(landingPathForHost("hoddfinance.xyz")).toBe("/");
+    expect(landingPathForHost("app.hoddfinance.xyz")).toBe("/landing");
+    expect(landingPathForHost("localhost:3000")).toBe("/landing");
+  });
+
+  it("shows the demo video link only for an https address", () => {
+    expect(demoVideoUrl("https://youtu.be/abc123")).toBe("https://youtu.be/abc123");
+    expect(demoVideoUrl("  https://www.loom.com/share/x  ")).toBe("https://www.loom.com/share/x");
+    for (const value of [undefined, null, "", "   ", "http://example.com/video", "javascript:alert(1)", "not a url", "/demo.mp4"]) expect(demoVideoUrl(value)).toBeNull();
   });
 });

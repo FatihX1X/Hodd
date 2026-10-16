@@ -126,6 +126,16 @@ export async function connectInjectedWallet(kind: InjectedKind): Promise<{ runti
     if (typeof signature !== "string" || !/^0x[\da-fA-F]{130}$/.test(signature)) throw new Error("The wallet returned an invalid signature.");
     return signature as `0x${string}`;
   };
+  // A permit on another testnet: wallets only sign typed data for the chain they are on, so switch first. The deposit
+  // that spends it follows right away through sendOnChain, which returns the wallet to Arc; a refusal returns it here.
+  const signTypedDataOn: NonNullable<ActiveWalletRuntime["signTypedDataOn"]> = async (target, typedData) => {
+    await walletPreflight(async () => { await assertSameAccount(); await switchChain(provider, target); });
+    let signature: unknown;
+    try { signature = await provider.request({ method: "eth_signTypedData_v4", params: [walletConnection.address, JSON.stringify(typedData)] }); }
+    catch (error) { await ensureArcTestnet(provider).catch(() => undefined); throw error; }
+    if (typeof signature !== "string" || !/^0x[\da-fA-F]{130}$/.test(signature)) throw new Error("The wallet returned an invalid signature.");
+    return signature as `0x${string}`;
+  };
   // Gateway deposits on another testnet: switch, send each call after the previous one is mined, then return to Arc.
   const sendOnChain: NonNullable<ActiveWalletRuntime["sendOnChain"]> = async (target, calls, onSent) => {
     await walletPreflight(async () => { await assertSameAccount(); await switchChain(provider, target); });
@@ -144,7 +154,7 @@ export async function connectInjectedWallet(kind: InjectedKind): Promise<{ runti
     } finally { await ensureArcTestnet(provider).catch(() => undefined); }
     return hashes;
   };
-  return { runtime: { connection: walletConnection, adapter, sendCalls, signMessage, signGatewayIntent, sendOnChain, expiresAt: Date.now() + 55 * 60_000 }, provider };
+  return { runtime: { connection: walletConnection, adapter, sendCalls, signMessage, signGatewayIntent, signTypedDataOn, sendOnChain, expiresAt: Date.now() + 55 * 60_000 }, provider };
 }
 
 async function switchChain(provider: InjectedProvider, target: Readonly<{ chainId: number; label: string; rpc: string; nativeSymbol: string; explorerTx: string }>) {

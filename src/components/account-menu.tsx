@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
-const accountButton = "mono inline-flex min-h-8 items-center border border-white/25 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#f4f1e8] hover:bg-white/10";
+const accountButton = "inline-flex min-h-8 items-center border border-white/25 px-3 text-[12px] font-semibold text-[#f4f1e8] hover:bg-white/10";
 
 export function AccountMenu() {
   const [signedIn, setSignedIn] = useState(false);

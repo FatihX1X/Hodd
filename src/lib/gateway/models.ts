@@ -25,6 +25,8 @@ export const gatewayMoveSchema = z.object({
   handle: z.string(), sourceKey: z.string(), amount: usdc, fee: usdc, forwardingFee: usdc, recipient: z.string(),
   intent: burnIntentSchema, typedData: z.record(z.string(), z.unknown()).optional(), transferId: z.string().uuid().nullable(),
   mintTxHash: hash.nullable(), message: z.string(),
+  /** Set on a quote whose Gateway balance is short: deposit this much on the source chain first (one transaction with a permit). */
+  deposit: z.object({ amountMinor: z.string().regex(/^\d+$/), permit: z.object({ deadline: z.string().regex(/^\d+$/), typedData: z.record(z.string(), z.unknown()) }).nullable() }).nullable().optional(),
 });
 export type GatewayMove = z.infer<typeof gatewayMoveSchema>;
 export const gatewayErrorSchema = z.object({ status: z.literal("ERROR"), code: z.string(), message: z.string() });

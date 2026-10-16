@@ -99,7 +99,8 @@ export function WeeklyOutflowChart({ weeks }: { weeks: readonly WeekBucket[] }) 
   const hi = niceMax(max || 1);
   const total = weeks.reduce((sum, week) => sum + week.total, 0);
   return (
-    <div className="relative h-[280px]" role="img" aria-label={`Scheduled outflows by week for the next ${weeks.length} weeks: ${fixed(total)} USDC in total.`}>
+    <div className="relative h-[240px]" role="img" aria-label={`Scheduled outflows by week for the next ${weeks.length} weeks: ${fixed(total)} USDC in total.`}>
+      {total === 0 && <p className="absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-xs text-white/50">Nothing is scheduled in these {weeks.length} weeks.</p>}
       <div className="absolute inset-y-0 left-[64px] right-2 top-7 bottom-8">
         <div className="absolute inset-x-0 top-0 h-px" style={{ background: GRID }} />
         <div className="absolute inset-x-0 top-1/2 h-px" style={{ background: GRID }} />
@@ -109,7 +110,7 @@ export function WeeklyOutflowChart({ weeks }: { weeks: readonly WeekBucket[] }) 
             const height = week.total > 0 ? Math.max(2, (week.total / hi) * 100) : 0;
             const hot = hover === index;
             return (
-              <div key={week.start} className="relative flex h-full min-w-0 flex-1 flex-col items-center justify-end" onPointerEnter={() => setHover(index)} onPointerLeave={() => setHover(null)}>
+              <div key={week.start} className="relative flex h-full min-w-0 flex-1 flex-col items-center justify-end" style={index === 0 ? { background: "rgba(233,185,73,0.07)" } : undefined} title={index === 0 ? "This week" : undefined} onPointerEnter={() => setHover(index)} onPointerLeave={() => setHover(null)}>
                 {week.total > 0 && week.total === max && !hot && <span className={clsx(labelClass, "absolute whitespace-nowrap text-white")} style={{ bottom: `calc(${height}% + 6px)` }}>{compact(week.total)}</span>}
                 <div className="w-[min(24px,60%)] rounded-t-[4px] transition-colors" style={{ height: `${height}%`, background: hot ? "#9ec5f4" : "#5598e7" }} />
                 {hot && (

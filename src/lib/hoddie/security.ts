@@ -33,9 +33,12 @@ export function sameOrigin(request: Request) {
 export async function hoddieContext() {
   const client = await createSupabaseServerClient();
   if (!client) throw new HoddieError("AUTH_REQUIRED", "Sign in to use your treasury with Hoddie.", 401);
-  const [{ data: user, error }, { data: claims }, { data: active, error: activeError }] = await Promise.all([client.auth.getUser(), client.auth.getClaims(), client.rpc("hodd_earn_session_active")]);
+  const [{ data: user, error }, { data: claims }] = await Promise.all([client.auth.getUser(), client.auth.getClaims()]);
   const sid = claims?.claims.session_id;
-  if (error || !user.user || user.user.is_anonymous || typeof sid !== "string" || claims?.claims.client_id || activeError || active !== true) throw new HoddieError("AUTH_REQUIRED", "Your Hodd session expired. Sign in again.", 401);
+  if (error || !user.user || user.user.is_anonymous || typeof sid !== "string" || claims?.claims.client_id) throw new HoddieError("AUTH_REQUIRED", "Your Hodd session expired. Sign in again.", 401);
+  // Only a signed-in request reaches the database session check (anon would just answer false).
+  const { data: active, error: activeError } = await client.rpc("hodd_earn_session_active");
+  if (activeError || active !== true) throw new HoddieError("AUTH_REQUIRED", "Your Hodd session expired. Sign in again.", 401);
   const { data: row, error: readError } = await client.from("treasury_workspaces").select("workspace,revision").eq("user_id", user.user.id).maybeSingle();
   const parsed = treasuryWorkspaceSchema.safeParse(row?.workspace);
   if (readError || !parsed.success) throw new HoddieError("WORKSPACE_REQUIRED", "Open Portfolio and sync your main workspace before using Hoddie.", 409);

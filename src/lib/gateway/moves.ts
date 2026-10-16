@@ -8,15 +8,20 @@ import { EarnAccessError } from "@/lib/earn/security";
 import type { earnServerContext } from "@/lib/earn/server-context";
 import { assertLiveAmount, assertLiveReady } from "@/lib/execution/live-readiness";
 import { GatewayApiError, estimateForwardedTransfer, gatewayBalances, gatewayTransferStatus, submitForwardedTransfer } from "./api";
+import { walletUsdc } from "./balances";
 import { gatewayChainByKey } from "./chains";
 import { openGatewayHandle, sealGatewayHandle } from "./handles";
 import { buildArcTransferSpec, burnIntentSchema, burnIntentTypedData, burnIntentTypedDataJson, fromBytes32, type BurnIntent } from "./intent";
 import type { GatewayMove } from "./models";
+import { gatewayDepositPermit } from "./permit";
 import { verifyGatewayMint } from "./receipts";
 
 type Context = Awaited<ReturnType<typeof earnServerContext>>;
 const QUOTE_TTL_MS = 5 * 60_000;
+/** A quote that needs a deposit first is signed now and submitted once Gateway credits it (up to ~20 minutes). */
+const DEPOSIT_QUOTE_TTL_MS = 60 * 60_000;
 const money = (minor: bigint | string) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits: minor.toString() });
+const usdcText = (minor: bigint) => (Number(minor) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 6 });
 const quoteHandle = z.object({ kind: z.literal("MOVE_QUOTE"), uid: z.string(), binding: z.string(), wallet: z.string(), sourceKey: z.string(), intent: z.string(), startBlock: z.string(), forwardingFee: z.string(), exp: z.number() }).strict();
 const submittedHandle = z.object({ kind: z.literal("MOVE_SUBMITTED"), uid: z.string(), wallet: z.string(), sourceKey: z.string(), intent: burnIntentSchema, startBlock: z.string(), transferId: z.string().uuid(), fee: z.string(), forwardingFee: z.string() }).strict();
 
@@ -31,15 +36,21 @@ export async function verifyIntentSignature(intent: BurnIntent, signature: `0x${
   if (!valid) throw new EarnAccessError("GATEWAY_SIGNATURE_INVALID", "The signature does not match this transfer and wallet. Nothing was sent.", 400);
 }
 
-function moveView(input: { stage: GatewayMove["stage"]; handle: string; sourceKey: string; intent: BurnIntent; fee: string; forwardingFee: string; transferId: string | null; mintTxHash: string | null; message: string; withTypedData?: boolean }): GatewayMove {
+function moveView(input: { stage: GatewayMove["stage"]; handle: string; sourceKey: string; intent: BurnIntent; fee: string; forwardingFee: string; transferId: string | null; mintTxHash: string | null; message: string; withTypedData?: boolean; deposit?: GatewayMove["deposit"] }): GatewayMove {
   return {
     status: "READY", stage: input.stage, handle: input.handle, sourceKey: input.sourceKey, amount: money(input.intent.spec.value), fee: money(input.fee), forwardingFee: money(input.forwardingFee),
     recipient: fromBytes32(input.intent.spec.destinationRecipient), intent: input.intent, transferId: input.transferId, mintTxHash: input.mintTxHash, message: input.message,
     ...(input.withTypedData ? { typedData: burnIntentTypedDataJson(input.intent) } : {}),
+    ...(input.deposit !== undefined ? { deposit: input.deposit } : {}),
   };
 }
 
-/** Builds a Gateway → Arc move into the signed-in user's own wallet. Signing is free; Circle submits the Arc mint. */
+/**
+ * Builds a Gateway → Arc move into the signed-in user's own wallet. Signing is free; Circle submits the Arc mint.
+ * When the Gateway balance on the source chain is short of the amount plus fees, the quote also says how much to
+ * deposit from the wallet there first, with an exact-amount permit so the deposit is a single transaction. The same
+ * signed intent is submitted once Gateway credits that deposit.
+ */
 export async function quoteGatewayMove(context: Context, mode: ExecutionMode, sourceKey: string, amountMinor: bigint): Promise<GatewayMove> {
   assertGatewaySigner(context);
   const source = gatewayChainByKey(sourceKey);
@@ -51,10 +62,29 @@ export async function quoteGatewayMove(context: Context, mode: ExecutionMode, so
   let estimate;
   try { estimate = await estimateForwardedTransfer(buildArcTransferSpec({ source, depositor: wallet, recipient: wallet, valueMinor: amountMinor })); }
   catch (error) { throw new EarnAccessError(error instanceof GatewayApiError ? error.code : "GATEWAY_UNAVAILABLE", error instanceof Error ? error.message : "Circle Gateway is unavailable.", 503); }
-  const [available, block] = await Promise.all([gatewayBalances(wallet).then((map) => map.get(source.domain) ?? 0n), arcClient.getBlockNumber()]);
-  if (available < amountMinor + estimate.feeMinor) throw new EarnAccessError("GATEWAY_BALANCE_INSUFFICIENT", `Your Gateway balance on ${source.label} must cover the amount plus up to ${Number(estimate.feeMinor) / 1e6} USDC in Gateway and forwarding fees.`, 409);
-  const handle = sealGatewayHandle({ kind: "MOVE_QUOTE", uid: context.userId, binding: context.binding, wallet: wallet.toLowerCase(), sourceKey, intent: digest(estimate.intent), startBlock: block.toString(), forwardingFee: estimate.forwardingFeeMinor.toString(), exp: Date.now() + QUOTE_TTL_MS });
-  return moveView({ stage: "SIGN", handle, sourceKey, intent: estimate.intent, fee: estimate.feeMinor.toString(), forwardingFee: estimate.forwardingFeeMinor.toString(), transferId: null, mintTxHash: null, withTypedData: true, message: `Sign once in your wallet (free, no gas). Circle then mints ${Number(amountMinor) / 1e6} USDC to your own Arc wallet.` });
+  const [available, block, held] = await Promise.all([
+    gatewayBalances(wallet).then((map) => map.get(source.domain) ?? 0n),
+    arcClient.getBlockNumber(),
+    walletUsdc(source, wallet as `0x${string}`).catch(() => null),
+  ]);
+  const needed = amountMinor + estimate.feeMinor;
+  const shortfall = available >= needed ? 0n : needed - available;
+  if (shortfall > 0n) {
+    if (held === null) throw new EarnAccessError("GATEWAY_WALLET_UNREADABLE", `Hodd could not read your wallet on ${source.label} just now. Nothing was sent; try again.`, 503);
+    if (held < shortfall) {
+      const most = held + available > estimate.feeMinor ? held + available - estimate.feeMinor : 0n;
+      throw new EarnAccessError("GATEWAY_BALANCE_INSUFFICIENT", `Your wallet and Gateway balance on ${source.label} hold ${usdcText(held + available)} USDC, and moving ${usdcText(amountMinor)} USDC needs up to ${usdcText(needed)} with fees. ${most > 0n ? `You can bring up to ${usdcText(most)} USDC from ${source.label} now.` : "Add USDC on that chain first."} Nothing was sent.`, 409);
+    }
+  }
+  const permit = shortfall > 0n ? await gatewayDepositPermit(source, wallet, shortfall).catch(() => null) : null;
+  const handle = sealGatewayHandle({ kind: "MOVE_QUOTE", uid: context.userId, binding: context.binding, wallet: wallet.toLowerCase(), sourceKey, intent: digest(estimate.intent), startBlock: block.toString(), forwardingFee: estimate.forwardingFeeMinor.toString(), exp: Date.now() + (shortfall > 0n ? DEPOSIT_QUOTE_TTL_MS : QUOTE_TTL_MS) });
+  return moveView({
+    stage: "SIGN", handle, sourceKey, intent: estimate.intent, fee: estimate.feeMinor.toString(), forwardingFee: estimate.forwardingFeeMinor.toString(), transferId: null, mintTxHash: null, withTypedData: true,
+    deposit: shortfall > 0n ? { amountMinor: shortfall.toString(), permit } : null,
+    message: shortfall > 0n
+      ? `Sign the transfer (free), then deposit ${usdcText(shortfall)} USDC into Gateway on ${source.label}. Circle mints ${usdcText(amountMinor)} USDC to your own Arc wallet once Gateway credits the deposit (${source.depositWait}).`
+      : `Sign once in your wallet (free, no gas). Circle then mints ${usdcText(amountMinor)} USDC to your own Arc wallet.`,
+  });
 }
 
 /** Verifies the wallet's EIP-712 signature for exactly the sealed intent, then hands it to Gateway once. */

@@ -77,3 +77,25 @@ describe("one-run return all",()=>{
   expect((await advanceAgentRun(run))).toMatchObject({state:"PARTIAL",failure:"AGENT_RETURN_HAS_RESIDUAL_ASSETS"});
  });
 });
+describe("advised runs are re-checked against the engine before every signature",()=>{
+ const deRisk=()=>({...mocks.decision,kind:"DE_RISK",depositMinor:"0",withdrawMinor:"500",transferMinor:"0"}) as AgentRun["decision"];
+ const position=async(redeemable:string)=>mocks.inputs.mockResolvedValue({...await mocks.inputs(),agentPosition:{currentBalance:{minorUnits:"800"},redeemable:{minorUnits:redeemable}}});
+ it("lets a de-risk withdrawal proceed while the engine would only invest or wait",async()=>{
+  run.decision=deRisk();run.quote={...run.quote!,operation:"WITHDRAW"};await position("800");
+  for(const kind of ["INVEST","NO_ACTION"]){mocks.fresh={...mocks.decision,kind};mocks.sdk.mockClear();mocks.steps=[{...step}];mocks.run=run;
+   expect((await advanceAgentRun({...run})).state).toBe("RUNNING");expect(mocks.sdk).toHaveBeenCalledTimes(1);}
+ });
+ it("stops a de-risk withdrawal when the engine now needs a safety move or the position cannot cover it",async()=>{
+  run.decision=deRisk();run.quote={...run.quote!,operation:"WITHDRAW"};
+  await position("800");mocks.fresh={...mocks.decision,kind:"LIQUIDITY_TOP_UP",depositMinor:"0",transferMinor:"300"};
+  expect(await advanceAgentRun(run)).toMatchObject({failure:"AGENT_FRESH_POLICY_BLOCKED"});expect(mocks.sdk).not.toHaveBeenCalled();
+  mocks.run=run;mocks.steps=[{...step}];await position("499");mocks.fresh={...mocks.decision};
+  expect(await advanceAgentRun({...run,state:"RUNNING"})).toMatchObject({failure:"AGENT_FRESH_POLICY_BLOCKED"});expect(mocks.sdk).not.toHaveBeenCalled();
+ });
+ it("lets a reduced investment proceed only while it stays at or below the engine's fresh amount",async()=>{
+  run.decision={...mocks.decision,depositMinor:"60"} as AgentRun["decision"];
+  mocks.fresh={...mocks.decision,depositMinor:"100"};expect((await advanceAgentRun(run)).state).toBe("RUNNING");expect(mocks.sdk).toHaveBeenCalledTimes(1);
+  mocks.sdk.mockClear();mocks.steps=[{...step}];mocks.run=run;mocks.fresh={...mocks.decision,depositMinor:"59"};
+  expect(await advanceAgentRun({...run})).toMatchObject({failure:"AGENT_FRESH_POLICY_BLOCKED"});expect(mocks.sdk).not.toHaveBeenCalled();
+ });
+});

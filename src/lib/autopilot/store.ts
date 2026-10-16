@@ -6,7 +6,7 @@ import type { EarnCall, EarnStage } from "@/lib/earn/router";
 import type { StepState } from "./state";
 export const agentDb = paymentAdmin;
 export interface AgentRun { id: string; user_id: string; state: RunStatus; snapshot: Record<string,unknown>; decision: Decision; quote: EarnQuote | null; return_all: boolean; created_at: string; failure: string | null; }
-export interface AgentStep { id: string; run_id: string; user_id: string; state: StepState; stage: EarnStage | "TRANSFER"; call: EarnCall; gas_limit: string; gas_price_wei: string; started_block: string; circle_transaction_id: string | null; tx_hash: string | null; receipt: Record<string,unknown> | null; amount_minor: string; }
+export interface AgentStep { id: string; run_id: string; user_id: string; state: StepState; stage: EarnStage | "TRANSFER" | "VAULT"; call: EarnCall; gas_limit: string; gas_price_wei: string; started_block: string; circle_transaction_id: string | null; tx_hash: string | null; receipt: Record<string,unknown> | null; amount_minor: string; }
 export async function loadWallet(userId: string) {
   const {data,error} = await agentDb().from("agent_wallets").select("*").eq("user_id",userId).maybeSingle();
   if (error) throw new Error("AGENT_SCHEMA_UNAVAILABLE");

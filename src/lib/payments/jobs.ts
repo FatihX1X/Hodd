@@ -20,6 +20,7 @@ import { assessPayment } from "./policy";
 import { verifyPaymentReceipt, verifyPaymentRevert } from "./receipts";
 import type { PaymentProposal } from "./models";
 import { verifyPaymentUserOperation, resolvePaymentUserOperation } from "./user-operation";
+import { consumedNonceProof, type NonceReader } from "./nonce-proof";
 
 const integer = z.string().regex(/^\d+$/);
 export const paymentPendingSchema = z.object({
@@ -32,7 +33,11 @@ const SIGNATURE_GRACE_MS = 60_000;
 const admin = () => paymentAdmin();
 const pendingOf = (row: Row) => { const parsed = paymentPendingSchema.safeParse(row.pending); return parsed.success ? parsed.data : null; };
 // Gateway-rail payments have their own state machine (src/lib/gateway/payments.ts).
-const arcOnly = (proposal: PaymentProposal) => { if (proposal.rail === "GATEWAY") throw new EarnAccessError("GATEWAY_PAYMENT", "This payment is paid from your Gateway balance. Use the cross-chain payment controls.", 409); };
+const arcOnly = (proposal: PaymentProposal) => {
+  if (proposal.rail === "GATEWAY") throw new EarnAccessError("GATEWAY_PAYMENT", "This payment is paid from your Gateway balance. Use the cross-chain payment controls.", 409);
+  // Autopilot vault payments are signed by the agent and settled by the Autopilot runner, never from this dialog.
+  if (proposal.rail === "AUTOPILOT_VAULT") throw new EarnAccessError("AUTOPILOT_PAYMENT", "Autopilot is paying this bill from your vault. Follow it on the Autopilot page.", 409);
+};
 const answered = (row: Row, pending: Pending) => Boolean(row.tx_hash || row.user_operation_hash || pending.challengeApproved);
 
 async function validateClaimedPolicy(context: PaymentContext, proposal: PaymentProposal) {
@@ -236,8 +241,10 @@ export async function advancePayment(context: PaymentContext, id: string, candid
 
 /**
  * Releases an expired payment only with proof nothing was sent: the wallet's
- * nonce is unchanged (and the user confirms the wallet request was closed), or
- * Circle reports the PIN challenge as failed or expired.
+ * nonce is unchanged (and the user confirms the wallet request was closed), the
+ * nonce it was prepared with was used by a different mined transaction (so no
+ * signed copy can ever be included), or Circle reports the PIN challenge as
+ * failed or expired.
  */
 export async function recoverPayment(context: PaymentContext, id: string, acknowledged: boolean) {
   const { row, record } = await readPayment(context, id, true); arcOnly(record.proposal); const pending = pendingOf(row);
@@ -253,6 +260,13 @@ export async function recoverPayment(context: PaymentContext, id: string, acknow
       const [latest, mempool] = await Promise.all([arcClient.getTransactionCount({ address, blockTag: "latest" }), arcClient.getTransactionCount({ address, blockTag: "pending" })]);
       if (BigInt(latest) === BigInt(pending.nonce) && BigInt(mempool) === BigInt(pending.nonce)) proof = { kind: "EOA_NONCE", nonce: pending.nonce };
     } else if (context.wallet.provider === "CIRCLE_MODULAR" && (await (await modularReadClient(context.wallet)).account.getNonce()) === BigInt(pending.nonce)) proof = { kind: "MSCA_NONCE", nonce: pending.nonce };
+  }
+  if (!proof && pending.nonce && context.wallet.accountType === "EOA") {
+    // The wallet moved on: find the transaction that used this nonce. A different one means this payment can never land.
+    // Any read failure proves nothing: the payment stays held.
+    const consumed = await consumedNonceProof(arcClient as unknown as NonceReader, context.wallet.address, BigInt(pending.nonce), BigInt(record.proposal.startBlock), pending.calls[0]).catch(() => null);
+    if (consumed && "payment" in consumed) throw new EarnAccessError("RECOVERY_NOT_PROVEN", `This payment was sent: ${consumed.payment}. Paste that hash to verify it.`, 409);
+    if (consumed) proof = consumed.proof;
   }
   if (!proof) throw new EarnAccessError("RECOVERY_NOT_PROVEN", "Hodd cannot prove that nothing was sent. Paste the transaction hash to verify it instead.", 409);
   const { error } = await admin().rpc("hodd_release_unsubmitted_payment", { p_user: context.userId, p_scope: context.scope, p_id: id, p_proof: { ...proof, releasedAt: new Date().toISOString() } });

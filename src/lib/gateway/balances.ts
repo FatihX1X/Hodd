@@ -7,10 +7,13 @@ import type { UnifiedUsdcView } from "./models";
 
 const money = (minor: bigint) => ({ currency: "USDC" as const, decimals: 6 as const, minorUnits: minor.toString() });
 
-async function walletUsdc(chain: GatewayChain, address: `0x${string}`) {
-  const rpc = chain.domain === 26 ? arcRpcUrl() : chain.rpc;
-  const client = createPublicClient({ transport: http(rpc, { timeout: 6_000, retryCount: 0 }) });
-  return client.readContract({ address: chain.usdc, abi: erc20Abi, functionName: "balanceOf", args: [address] });
+/** Read-only client for a Gateway chain (Arc uses Hodd's configured RPC). */
+export function gatewayChainClient(chain: GatewayChain) {
+  return createPublicClient({ transport: http(chain.domain === 26 ? arcRpcUrl() : chain.rpc, { timeout: 6_000, retryCount: 0 }) });
+}
+
+export async function walletUsdc(chain: GatewayChain, address: `0x${string}`) {
+  return gatewayChainClient(chain).readContract({ address: chain.usdc, abi: erc20Abi, functionName: "balanceOf", args: [address] });
 }
 
 /**

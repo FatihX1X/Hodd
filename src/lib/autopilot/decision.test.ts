@@ -35,6 +35,6 @@ describe("deterministic agent decisions",()=>{
  it("preserves exact rounding for one-unit budgets",()=>{const i=inputs();i.mandate={...i.mandate,budgetMinor:"1",reserveMinor:"0",maxPerRunMinor:"1"};i.cashMinor="1";i.feeReserveMinor="1";expect(decideAutopilot(i).kind).toBe("NO_ACTION");});
 });
 describe("mandate validation",()=>{
- it("rejects over-budget/per-run/reserve/policy caps and non-integer input",()=>{const i=inputs();for(const patch of [{budgetMinor:"1000000001"},{budgetMinor:"0"},{reserveMinor:"50000001"},{maxPerRunMinor:"50000001"},{maxPerRunMinor:"0"},{maxMorphoBps:6001},{budgetMinor:"1.5"},{budgetMinor:1},{maxMorphoBps:1.1}])expect(()=>validateMandate({...i.mandate,...patch},i.workspace.policy)).toThrow();});
+ it("rejects over-budget/per-run/reserve/policy caps and non-integer input",()=>{const i=inputs();for(const patch of [{budgetMinor:"1000000000000001"},{budgetMinor:"0"},{reserveMinor:"50000001"},{maxPerRunMinor:"50000001"},{maxPerRunMinor:"0"},{maxMorphoBps:6001},{budgetMinor:"1.5"},{budgetMinor:1},{maxMorphoBps:1.1}])expect(()=>validateMandate({...i.mandate,...patch},i.workspace.policy)).toThrow();});
  it("rejects unknown fields and a disabled Morpho strategy",()=>{const i=inputs();expect(()=>validateMandate({...i.mandate,recipient:"attacker"},i.workspace.policy)).toThrow();i.workspace.policy.enabledStrategies.MORPHO=false;expect(()=>validateMandate(i.mandate,i.workspace.policy)).toThrow();});
 });

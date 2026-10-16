@@ -15,9 +15,9 @@ import { EASE_OUT, loadFeatures, useArmed, usePageVisible } from "./hooks";
 const steps = [
   { key: "income", label: "Income", caption: "10,000 USDC arrives from a customer.", liquid: 10_000, morpho: 0, due: 5_600, sign: false },
   { key: "protect", label: "Protect", caption: "6,600 USDC is held back: payroll plus the 1,000 USDC buffer.", liquid: 10_000, morpho: 0, due: 5_600, sign: false },
-  { key: "morpho", label: "Morpho", caption: "The other 3,400 USDC goes to work in Morpho, signed by you.", liquid: 6_600, morpho: 3_400, due: 5_600, sign: true },
+  { key: "morpho", label: "Invest", caption: "The other 3,400 USDC goes to work in Morpho and USYC, signed by you.", liquid: 6_600, morpho: 3_400, due: 5_600, sign: true },
   { key: "bill", label: "Bill due", caption: "A 600 USDC tax bill lands, due in three days.", liquid: 6_600, morpho: 3_400, due: 6_200, sign: false },
-  { key: "withdraw", label: "Withdraw", caption: "600 USDC comes back from Morpho so the buffer stays whole.", liquid: 7_200, morpho: 2_800, due: 6_200, sign: true },
+  { key: "withdraw", label: "Withdraw", caption: "600 USDC comes back from your positions so the buffer stays whole.", liquid: 7_200, morpho: 2_800, due: 6_200, sign: true },
   { key: "paid", label: "Paid", caption: "6,200 USDC paid on time. The 1,000 USDC buffer is untouched.", liquid: 1_000, morpho: 2_800, due: 0, sign: true },
 ] as const;
 
@@ -53,7 +53,7 @@ export function LiveTreasury() {
   const current = steps[step];
   const counters = [
     { name: "Liquid", short: "Liquid", value: current.liquid },
-    { name: "In Morpho", short: "Morpho", value: current.morpho },
+    { name: "Invested", short: "Invested", value: current.morpho },
     { name: "Due in 30 days", short: "Due", value: current.due },
   ];
 
@@ -138,7 +138,7 @@ export function LiveTreasury() {
             </div>
           </div>
         </div>
-        <figcaption className="sr-only">Illustration of one month in Hodd: 10,000 USDC arrives, 6,600 USDC is protected for payroll and a 1,000 USDC buffer, 3,400 USDC goes to Morpho with your signature, a 600 USDC tax bill lands, 600 USDC comes back from Morpho, and 6,200 USDC is paid on time with the buffer intact.</figcaption>
+        <figcaption className="sr-only">Illustration of one month in Hodd: 10,000 USDC arrives, 6,600 USDC is protected for payroll and a 1,000 USDC buffer, 3,400 USDC goes to work in Morpho and USYC with your signature, a 600 USDC tax bill lands, 600 USDC comes back to cash, and 6,200 USDC is paid on time with the buffer intact.</figcaption>
       </figure>
     </LazyMotion>
   );

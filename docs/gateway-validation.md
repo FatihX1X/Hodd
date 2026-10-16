@@ -19,14 +19,34 @@ Depositor: dev test signer `0xB7a07a8184412A160bACe9DA3EeC914c0021a19C`. Third-p
 
 Fees seen: forwarded 0.1 USDC Arc → Arc capped at 0.021387 (0.0035 base + 0.017887 forwarding); forwarded 0.3 to Base Sepolia capped at 0.056379. The cap (`maxFee`) is taken from the Gateway balance on the source chain on top of the amount; the recipient receives the exact amount.
 
+## One button: deposit and move in one go (2026-10-13)
+
+"Bring USDC to Arc" is now a single button. The user presses it twice: the first press shows "Confirm?" and the second starts the move.
+
+The server quotes the move. If the Gateway balance on the source chain is short of the amount plus fees, the quote also includes the shortfall. It adds an EIP-2612 permit for exactly that amount, made out to the GatewayWallet. The token's own `DOMAIN_SEPARATOR` must match the domain Hodd builds. If it does not, the quote has no permit, and the wallet falls back to approve + deposit.
+
+The wallet then:
+1. signs the transfer (free);
+2. signs the permit (free);
+3. sends one `depositWithPermit` transaction.
+
+The page waits for Gateway to credit the deposit, submits the transfer signed at the start, and verifies the Arc mint. `GatewayWallet.depositWithPermit` and `depositWithAuthorization` are in the deployed implementation on Arc, Base Sepolia, Ethereum Sepolia, Avalanche Fuji and Arbitrum Sepolia (bytecode checked). The burn intent's `maxBlockHeight` from the estimate is days ahead, so an intent signed before the deposit is still valid when it is submitted.
+
+Live evidence uses the dev test signer `0xB7a0…a19C` and `src/lib/gateway/move.live.test.ts`, with Arc as the source:
+
+- **Quote:** Gateway held 0.370776 USDC. Asked for 0.570776; the fee was 0.020679, so the shortfall was 0.220679.
+- **Deposit:** one transaction, `0xe20860730edf13b615b1b843fbfaed9fa7aff056fc8497a386f0bdfc3ea78a1e` (gas 113,403). This replaces the approval plus deposit.
+- **Credit and transfer:** Gateway credited it within seconds. The intent, signed before the deposit, was submitted as transfer `08c0fa9d-3f33-49df-b7c1-05f3ae70c618`.
+- **Mint:** `0x9d2a19104e03a769f3aa799144f01ca945a02cec71a52e500af25ad480100b3f` on Arc (block 67044131), verified as `Transfer(0x0 → signer, 0.570776)`.
+
 ## Safety rules in code
 
 - The estimate endpoint must echo the exact spec Hodd built (it answers with 20-byte addresses; words are compared after padding). Hodd signs its own 32-byte spec with Gateway's `maxBlockHeight`/`maxFee`.
 - The server verifies the EIP-712 signature against the session wallet before sending it anywhere.
-- Own-wallet moves are stateless: an HMAC handle binds user, session, wallet and the exact intent for five minutes.
+- Own-wallet moves are stateless: an HMAC handle binds user, session, wallet and the exact intent for five minutes, or one hour when the quote includes a deposit (the intent is signed before the deposit and submitted once Gateway credits it).
 - Payments reuse the payment ledger (reservation, per-wallet lease, `hodd_finish_payment`). A wallet rejection or a definitive Gateway refusal releases the bill (`FAILED`, nothing sent). A lost answer stays `UNKNOWN`; recheck searches Arc for the mint and may resend the *identical* signed intent, which cannot mint twice. Release needs proof: never signed and expired, or Gateway reports `failed`/`expired` and Arc has no matching mint.
 - Gateway signing is EOA-only (MetaMask, Rabby, dev test signer). Circle passkey/PIN wallets see balances only.
 
 ## Not verified live
 
-Browser-wallet signing (MetaMask/Rabby `eth_signTypedData_v4`), the deposit step on non-Arc chains (needs that chain's gas token) and the server routes with a signed-in session. Automated tests: `src/lib/gateway/gateway.test.ts`, `src/lib/gateway/payments.test.ts`.
+Browser-wallet signing (MetaMask/Rabby `eth_signTypedData_v4`), the deposit step on non-Arc chains (needs that chain's gas token) and the server routes with a signed-in session. Automated tests: `src/lib/gateway/gateway.test.ts`, `src/lib/gateway/payments.test.ts`, `src/lib/gateway/moves.test.ts`, `src/components/gateway-move-dialog.test.tsx`.

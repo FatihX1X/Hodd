@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assessPayment, assessTreasury } from "./engine";
 import { initialWorkspace, usdc } from "@/test/fixtures";
-import { allocationByLiquidity, capUsage, liquidityRamp, policyChecks, policySentences, runwayProjection, usdcNumber, weeklyOutflows } from "./views";
+import { allocationByLiquidity, capUsage, policyChecks, policySentences, runwayProjection, strategyColor, usdcNumber, weeklyOutflows } from "./views";
 
 const clone = () => structuredClone(initialWorkspace);
 const at = new Date("2026-09-27T00:00:00.000Z");
@@ -54,7 +54,7 @@ describe("allocation by liquidity", () => {
     const rows = allocationByLiquidity(workspace.strategies);
     expect(rows.map((row) => row.kind)).toEqual(["LIQUID", "MORPHO", "USYC"]);
     expect(rows.map((row) => Math.round(row.share * 100))).toEqual([60, 30, 10]);
-    expect(rows.map((row) => row.color)).toEqual([...liquidityRamp].slice(0, 3));
+    expect(rows.map((row) => row.color)).toEqual(rows.map((row) => strategyColor[row.kind]));
   });
 
   it("is empty when nothing is held", () => {
