@@ -17,7 +17,7 @@ begin
   select revision into rev from public.treasury_workspaces where user_id = owner_id;
   if rev <> 1 then raise exception 'revision did not advance'; end if;
   rejected := false;
-  begin update public.treasury_workspaces set workspace = w, revision = 0 where user_id = owner_id; exception when serialization_failure then rejected := sqlerrm = 'workspace revision conflict'; end;
+  begin update public.treasury_workspaces set workspace = w, revision = 0 where user_id = owner_id; exception when sqlstate 'PT409' then rejected := sqlerrm = 'workspace revision conflict'; end;
   if not rejected then raise exception 'stale revision accepted'; end if;
   update public.treasury_workspaces set workspace = w where user_id = owner_id; -- legacy writer without revision still works
   select revision into rev from public.treasury_workspaces where user_id = owner_id;
@@ -40,7 +40,7 @@ begin
   select revision into rev from public.treasury_workspaces where user_id = owner_id;
   if rev <> 3 then raise exception 'replay changed the workspace'; end if;
   rejected := false;
-  begin perform public.hodd_apply_agent_action(gen_random_uuid(), 'TREASURY', 'UPDATE_POLICY', '{}', 'stale', 'APPLIED', null, w, 2); exception when serialization_failure then rejected := true; end;
+  begin perform public.hodd_apply_agent_action(gen_random_uuid(), 'TREASURY', 'UPDATE_POLICY', '{}', 'stale', 'APPLIED', null, w, 2); exception when sqlstate 'PT409' then rejected := true; end;
   if not rejected then raise exception 'stale connector write accepted'; end if;
   rev := public.hodd_apply_agent_action(request_id, 'TREASURY', 'PAYMENT_REQUEST', '{"obligationId":"x"}', 'Pay rent', 'OPEN', now() + interval '1 day', w, 3);
 

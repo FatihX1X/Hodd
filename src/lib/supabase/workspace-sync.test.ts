@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initialWorkspace } from "@/test/fixtures";
-import { loadCloudWorkspace, refreshCloudLedger, syncWorkspaceToCloud } from "./workspace-sync";
+import { __resetWorkspaceSyncForTests, loadCloudWorkspace, refreshCloudLedger, syncWorkspaceToCloud } from "./workspace-sync";
 
 const { client } = vi.hoisted(() => ({ client: { auth: { getUser: vi.fn() }, from: vi.fn() } }));
 vi.mock("./client", () => ({ createSupabaseBrowserClient: () => client }));
-beforeEach(() => { vi.clearAllMocks(); client.auth.getUser.mockResolvedValue({ data: { user: { id: "alice" } } }); });
+beforeEach(() => { __resetWorkspaceSyncForTests(); vi.clearAllMocks(); client.auth.getUser.mockResolvedValue({ data: { user: { id: "alice" } } }); });
 
 describe("Workspace ownership", () => {
   it("does not upload a guest workspace when an authenticated session exists", async () => {

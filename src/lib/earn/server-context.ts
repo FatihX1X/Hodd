@@ -11,6 +11,8 @@ export async function earnServerContext(scope: WorkspaceScope = "TREASURY") {
   const client = await createSupabaseServerClient();
   if (!client) throw new EarnAccessError("AUTH_REQUIRED", "Sign in before reviewing Earn operations.", 401);
   const { data, error } = await client.auth.getUser();
+  // Without a user the RPC would only run as anon; ask the database only for a signed-in user.
+  if (error || !data.user) throw new EarnAccessError("AUTH_REQUIRED", "Your session expired or was revoked. Sign in again.", 401);
   const { data: sessionActive, error: sessionError } = await client.rpc("hodd_earn_session_active");
   const { data: claims } = await client.auth.getClaims();
   const sessionId = claims?.claims.session_id;
@@ -40,6 +42,7 @@ export async function earnServerContext(scope: WorkspaceScope = "TREASURY") {
 
 export async function assertEarnContextCurrent(context: Awaited<ReturnType<typeof earnServerContext>>) {
   const { data, error } = await context.client.auth.getUser();
+  if (error || data.user?.id !== context.userId) throw new EarnAccessError("SESSION_OR_WORKSPACE_CHANGED", "Reconnect and request a new quote after a session or workspace change.", 409);
   const { data: activeSession, error: sessionError } = await context.client.rpc("hodd_earn_session_active");
   const { data: row, error: readError } = await context.client.from(context.table).select("workspace").eq("user_id", context.userId).single();
   const parsed = treasuryWorkspaceSchema.safeParse(row?.workspace);
