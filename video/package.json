@@ -7,6 +7,7 @@
     "music": "python3 scripts/compose_music.py",
     "studio": "remotion studio",
     "render": "remotion render HoddFilm out/hodd-finance-film.mp4 --browser-executable=${HEADLESS_SHELL:-/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell}",
+    "render:demo": "remotion render HoddDemo out/hodd-demo.mp4 --browser-executable=${HEADLESS_SHELL:-/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell}",
     "typecheck": "tsc --noEmit",
     "stills": "node scripts/stills.mjs"
   },

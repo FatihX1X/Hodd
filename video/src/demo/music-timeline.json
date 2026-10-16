@@ -1,0 +1,14 @@
+{
+  "fps": 60,
+  "bpm": 120,
+  "framesPerBar": 120,
+  "note": "Bars for the demo's music bed (140 s). Scene ids reuse the score's names: reveal = first lift at 12 s, autopilot = second lift at 54 s, outro = final lift at 128 s with the last chord at 132 s.",
+  "scenes": [
+    { "id": "intro", "bars": 3, "music": "intro" },
+    { "id": "problem", "bars": 3, "music": "build" },
+    { "id": "reveal", "bars": 20, "music": "dropA" },
+    { "id": "agentBreak", "bars": 1, "music": "break" },
+    { "id": "autopilot", "bars": 37, "music": "dropB" },
+    { "id": "outro", "bars": 6, "music": "outro" }
+  ]
+}

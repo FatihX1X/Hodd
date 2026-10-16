@@ -1,0 +1,14 @@
+{
+ "owner": "0xDEf09d06764EE3cA611Ce186f47dBd3f546d2e7C",
+ "operator": "0xae407AA884d859e10475E609aD03a7Cb6C11750b",
+ "maxDepositPerTx": "18446744073709551615",
+ "depositLimit24h": "18446744073709551615",
+ "maxPaymentPerTx": "18446744073709551615",
+ "paymentLimit24h": "18446744073709551615",
+ "paused": "false",
+ "morphoAllowed": "true",
+ "usycAllowed": "true",
+ "recipientApproved": "true",
+ "recipientCap": "7000000",
+ "block": "67488501"
+}

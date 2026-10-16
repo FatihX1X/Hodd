@@ -1,0 +1,155 @@
+{
+  "voice": "af_heart",
+  "speed": 1.08,
+  "note": "`caption` is what the subtitles show; `say` is the same sentence spelled for the speech model. Every claim is traced in EVIDENCE.md.",
+  "segments": [
+    {
+      "id": "hook",
+      "start": 1.2,
+      "end": 12,
+      "lines": [
+        {
+          "caption": "Payroll on Friday. Rent on the first. An invoice next week.",
+          "say": "Payroll on Friday. Rent on the first. An invoice next week."
+        },
+        {
+          "caption": "Hodd is a treasury on Arc that keeps money ahead of what it owes.",
+          "say": "Hodd is a treasury on Arc that keeps money ahead of what it owes."
+        }
+      ]
+    },
+    {
+      "id": "dashboard",
+      "start": 12.4,
+      "end": 32,
+      "lines": [
+        {
+          "caption": "Hodd reads your wallet's live USDC on Arc Testnet, and the bills you enter.",
+          "say": "Hodd reads your wallet's live U S D C on Arc testnet, and the bills you enter."
+        },
+        {
+          "caption": "The Treasury Engine protects every bill inside your lead time, from 3 to 30 days, plus a safety buffer.",
+          "say": "The treasury engine protects every bill inside your lead time, from three to thirty days, plus a safety buffer."
+        },
+        {
+          "caption": "Only what is left is deployable. No language model calculates an amount.",
+          "say": "Only what is left is deployable. No language model calculates an amount."
+        }
+      ]
+    },
+    {
+      "id": "mandate",
+      "start": 29.4,
+      "end": 55,
+      "lines": [
+        {
+          "caption": "Autopilot runs from a vault contract. The owner's wallet owns it; Hodd's Circle agent wallet is only its operator.",
+          "say": "Autopilot runs from a vault contract. The owner's wallet owns it. Hodd's Circle agent wallet is only its operator."
+        },
+        {
+          "caption": "This owner funded Autopilot with 30 USDC from their own wallet.",
+          "say": "This owner funded Autopilot with thirty U S D C from their own wallet."
+        },
+        {
+          "caption": "The contract allows Morpho, Hodd's USYC pool, one approved recipient capped at 7 USDC, and the owner.",
+          "say": "The contract allows Morpho, Hodd's U S Y C pool, one approved recipient capped at seven U S D C, and the owner."
+        },
+        {
+          "caption": "Anything else reverts. The owner can pause, or take everything back without Hodd.",
+          "say": "Anything else reverts. The owner can pause, or take everything back without Hodd."
+        }
+      ]
+    },
+    {
+      "id": "decision",
+      "start": 54.0,
+      "end": 85,
+      "lines": [
+        {
+          "caption": "On October 15, the engine proposed: invest 10.52 USDC into Morpho, at a 4.20% recent yield.",
+          "say": "On October fifteenth, the engine proposed: invest ten point five two U S D C into Morpho, at a four point two percent recent yield."
+        },
+        {
+          "caption": "The AI advisor, gpt-oss-120b on Groq, saw aggregate figures only, and answered FOLLOW: higher yield, no pending bills.",
+          "say": "The A I advisor, G P T O S S one twenty B on Grok, saw aggregate figures only, and answered: follow. Higher yield, no pending bills."
+        },
+        {
+          "caption": "It may follow, allocate, wait or move between strategies. Bills never reach the model; answers outside its envelope are discarded.",
+          "say": "It may follow, allocate, wait, or move between strategies. Bills never reach the model, and answers outside its envelope are discarded."
+        },
+        {
+          "caption": "Many runs end in no action, and the history records those too.",
+          "say": "Many runs end in no action, and the history records those too."
+        }
+      ]
+    },
+    {
+      "id": "execution",
+      "start": 85.4,
+      "end": 105,
+      "lines": [
+        {
+          "caption": "Before signing, the runner checks the decision against fresh balances.",
+          "say": "Before signing, the runner checks the decision against fresh balances."
+        },
+        {
+          "caption": "The Circle agent wallet signed one call on the owner's vault: depositToStrategy.",
+          "say": "The Circle agent wallet signed one call on the owner's vault: deposit to strategy."
+        },
+        {
+          "caption": "Arc confirmed it. Hodd verified the receipt from the vault's own events, then marked the run complete.",
+          "say": "Arc confirmed it. Hodd verified the receipt from the vault's own events, then marked the run complete."
+        }
+      ]
+    },
+    {
+      "id": "usyc",
+      "start": 105.4,
+      "end": 122,
+      "lines": [
+        {
+          "caption": "Cash can also earn in Hodd's USYC pool, the one contract Circle allowlisted.",
+          "say": "Cash can also earn in Hodd's U S Y C pool, the one contract Circle allow-listed."
+        },
+        {
+          "caption": "A 1 USDC round trip returned 0.999895 USDC.",
+          "say": "A one U S D C round trip returned zero point nine nine nine nine."
+        },
+        {
+          "caption": "Autopilot's USYC path was verified on a test vault; this account has used Morpho.",
+          "say": "Autopilot's U S Y C path was verified on a test vault. This account has used Morpho."
+        }
+      ]
+    },
+    {
+      "id": "ecosystem",
+      "start": 121.6,
+      "end": 132,
+      "lines": [
+        {
+          "caption": "Hoddie answers from the engine's numbers. Claude runs Hodd over MCP, with your approval.",
+          "say": "Hoddy answers from the engine's numbers. Claude runs Hodd over M C P, with your approval."
+        },
+        {
+          "caption": "Circle Gateway unifies USDC across 12 testnets, Arc included.",
+          "say": "Circle Gateway unifies U S D C across twelve testnets, Arc included."
+        }
+      ]
+    },
+    {
+      "id": "outro",
+      "start": 132.6,
+      "end": 140,
+      "lines": [
+        {
+          "caption": "Hodd Finance.",
+          "say": "Hodd Finance."
+        },
+        {
+          "caption": "Money should know when it will be needed.",
+          "say": "Money should know when it will be needed."
+        }
+      ]
+    }
+  ]
+}

@@ -16,8 +16,9 @@ const notches = Array.from({ length: 24 }, (_, index) => index).filter((index) =
  * lands at `land` with a flash, rays, halo and notches, then glints; `ticks` turn it a quarter with an overshoot.
  * `dark` renders the wordmark in paper colour for ink backgrounds.
  */
-export const Mark: React.FC<{ width: number; land: number; dark?: boolean; reveal?: number; ticks?: number[]; style?: CSSProperties; dial?: boolean }> = ({ width, land, dark = false, reveal, ticks = [], style, dial = true }) => {
-  const frame = useCurrentFrame();
+export const Mark: React.FC<{ width: number; land: number; dark?: boolean; reveal?: number; ticks?: number[]; style?: CSSProperties; dial?: boolean; rate?: number }> = ({ width, land, dark = false, reveal, ticks = [], style, dial = true, rate = 1 }) => {
+  // `rate` keeps the 30 fps timing in faster compositions: at 60 fps pass 0.5, and `land`/`ticks` stay in 30 fps frames.
+  const frame = useCurrentFrame() * rate;
   const t = frame - land;
   const flight = 36;
   const p = tween(frame, land - flight, land, 0, 1, EASE_IN_OUT);

@@ -1,0 +1,123 @@
+1
+00:00:01,200 --> 00:00:05,091
+Payroll on Friday. Rent on the first. An invoice next week.
+
+2
+00:00:05,211 --> 00:00:08,632
+Hodd is a treasury on Arc that keeps money ahead of what it owes.
+
+3
+00:00:12,400 --> 00:00:17,165
+Hodd reads your wallet's live USDC on Arc Testnet, and the bills you enter.
+
+4
+00:00:17,285 --> 00:00:21,033
+The Treasury Engine protects every bill inside your lead time,
+
+5
+00:00:21,033 --> 00:00:23,651
+from 3 to 30 days, plus a safety buffer.
+
+6
+00:00:23,771 --> 00:00:25,684
+Only what is left is deployable.
+
+7
+00:00:25,684 --> 00:00:28,216
+No language model calculates an amount.
+
+8
+00:00:29,400 --> 00:00:31,733
+Autopilot runs from a vault contract.
+
+9
+00:00:31,733 --> 00:00:36,725
+The owner's wallet owns it; Hodd's Circle agent wallet is only its operator.
+
+10
+00:00:36,845 --> 00:00:41,205
+This owner funded Autopilot with 30 USDC from their own wallet.
+
+11
+00:00:41,325 --> 00:00:44,666
+The contract allows Morpho, Hodd's USYC pool,
+
+12
+00:00:44,666 --> 00:00:48,949
+one approved recipient capped at 7 USDC, and the owner.
+
+13
+00:00:49,069 --> 00:00:53,579
+Anything else reverts. The owner can pause, or take everything back without Hodd.
+
+14
+00:00:54,000 --> 00:00:57,343
+On October 15, the engine proposed:
+
+15
+00:00:57,343 --> 00:01:02,797
+invest 10.52 USDC into Morpho, at a 4.20% recent yield.
+
+16
+00:01:02,917 --> 00:01:08,002
+The AI advisor, gpt-oss-120b on Groq, saw aggregate figures only,
+
+17
+00:01:08,002 --> 00:01:12,269
+and answered FOLLOW: higher yield, no pending bills.
+
+18
+00:01:12,389 --> 00:01:16,122
+It may follow, allocate, wait or move between strategies.
+
+19
+00:01:16,122 --> 00:01:21,037
+Bills never reach the model; answers outside its envelope are discarded.
+
+20
+00:01:21,157 --> 00:01:24,877
+Many runs end in no action, and the history records those too.
+
+21
+00:01:25,400 --> 00:01:29,419
+Before signing, the runner checks the decision against fresh balances.
+
+22
+00:01:29,539 --> 00:01:34,688
+The Circle agent wallet signed one call on the owner's vault: depositToStrategy.
+
+23
+00:01:34,808 --> 00:01:40,640
+Arc confirmed it. Hodd verified the receipt from the vault's own events, then marked the run complete.
+
+24
+00:01:45,400 --> 00:01:50,720
+Cash can also earn in Hodd's USYC pool, the one contract Circle allowlisted.
+
+25
+00:01:50,840 --> 00:01:55,243
+A 1 USDC round trip returned 0.999895 USDC.
+
+26
+00:01:55,363 --> 00:02:01,173
+Autopilot's USYC path was verified on a test vault; this account has used Morpho.
+
+27
+00:02:01,600 --> 00:02:04,194
+Hoddie answers from the engine's numbers.
+
+28
+00:02:04,194 --> 00:02:07,304
+Claude runs Hodd over MCP, with your approval.
+
+29
+00:02:07,424 --> 00:02:12,381
+Circle Gateway unifies USDC across 12 testnets, Arc included.
+
+30
+00:02:12,600 --> 00:02:13,824
+Hodd Finance.
+
+31
+00:02:13,944 --> 00:02:15,957
+Money should know when it will be needed.

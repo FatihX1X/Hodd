@@ -1,0 +1,21 @@
+{
+  "chainId": 5042002,
+  "block": "67488244",
+  "observedAt": "2026-10-16T10:57:00.695Z",
+  "ownerWalletMinor": "31563327",
+  "agentWalletMinor": "481986",
+  "vaultCashMinor": "0",
+  "vaultMorpho": {
+    "shares": "30454552031893866394",
+    "assetsMinor": "30486784"
+  },
+  "vaultUsyc": {
+    "shares": "0",
+    "assetsMinor": "0"
+  },
+  "accounts": {
+    "owner": "0xDEf09d06764EE3cA611Ce186f47dBd3f546d2e7C",
+    "agent": "0xae407AA884d859e10475E609aD03a7Cb6C11750b",
+    "vault": "0xA425dD0ACC673405E648EBe64eED2fC4Da0AD02d"
+  }
+}

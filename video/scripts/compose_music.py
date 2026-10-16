@@ -18,7 +18,15 @@ ROOT = Path(__file__).resolve().parent.parent
 SR = 44_100
 RNG = np.random.default_rng(7)
 
-timeline = json.loads((ROOT / "src" / "timeline.json").read_text())
+def arg(name, default=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+# --timeline picks another timeline (same scene ids); --bed makes a quieter score to sit under a voiceover:
+# no lead hook, softer drums and arpeggio. --out names the mp3.
+BED = "--bed" in sys.argv
+OUT_NAME = arg("--out", "hodd-score")
+timeline = json.loads((ROOT / arg("--timeline", "src/timeline.json")).read_text())
 BPM = timeline["bpm"]
 BEAT = 60 / BPM
 BAR = 4 * BEAT
@@ -406,7 +414,7 @@ for bar in range(TOTAL_BARS):
             place(buses["arp"], start + sixteenth * STEP, stereo(pluck(note, STEP * 1.8, brightness), 0.15 if sixteenth % 2 else -0.15), gain)
 
     # Lead hook over the second drop.
-    if section == "dropB" or (section == "outro" and bar < final_hit):
+    if not BED and (section == "dropB" or (section == "outro" and bar < final_hit)):
         phrase_bar = (bar - scene_start["autopilot"]) % 4
         for eighth, note, length in HOOK:
             if eighth // 8 == phrase_bar:
@@ -453,7 +461,7 @@ for scene in timeline["scenes"]:
 
 # The ending: one Am chord rings out over a final impact.
 end = bar_time(final_hit)
-place(buses["pad"], end, supersaw([45, 57, 60, 64, 69, 76], BAR * 2, 3000, attack=0.005, release=3.6), 0.85)
+place(buses["pad"], end, supersaw([45, 57, 60, 64, 69, 76], BAR * (3.6 if BED else 2), 3000, attack=0.005, release=3.6), 0.85)
 place(buses["fx"], end, impact(), 0.9)
 place(buses["fx"], end, crash(), 0.5)
 place(buses["bass"], end, bass_note(33, 3.0, 400, 1.2), 0.6)
@@ -482,6 +490,8 @@ buses["drums"] = reverb(buses["drums"], IR_ROOM, 0.18)
 buses["fx"] = reverb(buses["fx"], IR_HALL, 0.25)
 
 levels = {"kick": 0.7, "drums": 0.85, "bass": 0.5, "pad": 0.95, "arp": 0.7, "lead": 0.75, "fx": 0.6}
+if BED:
+    levels.update({"kick": 0.62, "drums": 0.45, "bass": 0.45, "pad": 1.0, "arp": 0.5, "fx": 0.5})
 mix = sum(buses[name] * level for name, level in levels.items())
 
 # Keep the low end mono and clean.
@@ -507,11 +517,11 @@ mix *= 0.93 / np.max(np.abs(mix))
 
 out_dir = ROOT / "public" / "audio"
 out_dir.mkdir(parents=True, exist_ok=True)
-wav = out_dir / "hodd-score.wav"
+wav = out_dir / f"{OUT_NAME}.wav"
 from scipy.io import wavfile  # noqa: E402
 
 wavfile.write(wav, SR, (mix.T * 32767).astype(np.int16))
-mp3 = out_dir / "hodd-score.mp3"
+mp3 = out_dir / f"{OUT_NAME}.mp3"
 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-codec:a", "libmp3lame", "-b:a", "256k", str(mp3)], check=True)
 if "--keep-wav" not in sys.argv:
     wav.unlink()

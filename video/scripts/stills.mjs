@@ -15,7 +15,7 @@ const frames = process.argv.slice(2).map((arg) => { const [id, offset = "0"] = a
 const out = join(root, "out", "stills");
 mkdirSync(out, { recursive: true });
 const serveUrl = await bundle({ entryPoint: join(root, "src", "index.ts") });
-const composition = await selectComposition({ serveUrl, id: "HoddFilm", browserExecutable });
+const composition = await selectComposition({ serveUrl, id: process.env.COMPOSITION || "HoddFilm", browserExecutable });
 for (const frame of frames) {
   await renderStill({ composition, serveUrl, frame, output: join(out, `${String(frame).padStart(4, "0")}.jpg`), imageFormat: "jpeg", jpegQuality: 85, scale: 0.5, browserExecutable });
   console.log("still", frame);
