@@ -7,7 +7,7 @@ Hodd keeps a business's money ahead of what it owes. It does five things:
 - tracks bills and their due dates;
 - protects the cash those bills need;
 - puts what is left to work in Morpho or Circle's USYC;
-- pays bills from the owner's own wallet;
+- pays bills from the owner's own wallet or vault;
 - keeps a record of every decision.
 
 **Autopilot** runs that loop from the owner's own vault contract. The owner's wallet owns it; Hodd's agent is only its operator. The agent may invest the whole balance. An AI advisor decides how much goes into Morpho and how much into USYC, when to move between them and when to bring money back to cash for upcoming bills, and writes down why. Each bill the owner approved is paid on its payment day whatever the advisor did. The only limit on the agent is where money can go, and the contract enforces that list.
@@ -20,6 +20,7 @@ Built from scratch for the **[Tameion Agents Hackathon](https://tameion.thecante
 | Landing page | [hoddfinance.xyz](https://hoddfinance.xyz) |
 | Network | Arc Testnet (chain ID `5042002`), USDC for value and gas |
 | Contracts | [`contracts/`](./contracts) (Foundry). HoddieVaultFactory [`0x3115…e389`](https://testnet.arcscan.app/address/0x311578B21F269ca0E45f5c16324A3E51f69ce389) creates each user's vault; HoddUSYCVault [`0x97A7…0b76`](https://testnet.arcscan.app/address/0x97A7BAaA5416e0aC0674C395cec22FF606120b76) is allowlisted by Circle. Both verified on ArcScan |
+| Contact | info@hoddfinance.xyz |
 
 ## Why Hodd
 
@@ -40,18 +41,18 @@ Every page reads live balances from Arc Testnet, and every money movement ends w
 
 | Page | What you can do there |
 | --- | --- |
-| **Overview** | See where the money sits: a reservoir of liquid cash, Morpho and USYC holdings with the protected line drawn through it, coverage and share rings, and the next 30 days of bills. The **USDC on every chain** card shows the wallet's USDC on 12 Circle Gateway testnets as one balance. **Bring USDC to Arc** moves it to Arc with one button. |
-| **Invest** | Deposit into, withdraw from or fully redeem an allowlisted **Morpho** vault through Circle's App Kit. Deposit USDC into **USYC** through Hodd's pooled vault and take USDC back, with no allowlisting needed for the user. The page also shows strategy limits and a live target mix. |
-| **Obligations** | Add bills with due dates and Arc recipients and see them on a payment calendar and weekly outflow bars. Pay a bill from the connected wallet; it becomes **PAID** only after the canonical USDC transfer is verified. A bill can also be paid **from another chain** through Gateway. |
-| **Policy** | Set the safety buffer, the minimum liquidity coverage, the cap per strategy, the planning horizon and how early bills are protected. The page shows today's checks as meters and states the policy in plain language. |
-| **Autopilot** | **Invest N USDC** creates the owner's vault on first use and funds it. The agent splits the vault between Morpho and USYC by their recent yields. Approve a bill once with **Let Autopilot pay**, and the agent pays it from the vault on its payment day (a day before it is due). **Return everything** brings it all back through the agent; **Take everything back yourself** does it from the owner's wallet without Hodd. A progress rail follows each step to the verified receipt. **History** shows every run: what triggered it, what the engine proposed, what the AI advisor decided and why. |
+| **Overview** | See where the money sits: liquid cash, Morpho and USYC holdings with the protected line drawn through them, coverage and the next 30 days of bills. The **USDC on every chain** card shows the wallet's USDC on 12 Circle Gateway testnets as one balance. **Bring USDC to Arc** moves it to Arc with one button. |
+| **Invest** | Deposit into, withdraw from or fully redeem an allowlisted **Morpho** vault through Circle's App Kit. Deposit USDC into **USYC** through Hodd's pooled vault and take USDC back, with no allowlisting needed for the user. |
+| **Obligations** | Add bills with due dates and Arc recipients, and see them on a payment calendar and weekly outflow bars. Pay a bill from the connected wallet; it becomes **PAID** only after the USDC transfer is verified. A bill can also be paid **from another chain** through Gateway. |
+| **Policy** | Set the safety buffer, the minimum liquidity coverage, the cap per strategy, the planning horizon (3 to 30 days) and how early bills are protected. Today's checks are shown as meters and the policy is stated in plain language. |
+| **Autopilot** | **Invest N USDC** creates the owner's vault on first use and funds it. Approve a bill once with **Let Autopilot pay**, and the agent pays it from the vault on its payment day (a day before it is due). **Return everything** brings it all back through the agent; **Take everything back yourself** does it from the owner's wallet without Hodd. A progress rail follows each step to the verified receipt. **History** shows every run: what triggered it, what the engine proposed, what the AI advisor decided and why. |
 | **Hoddie** | A treasury assistant in English and Turkish. It answers from the engine's own numbers ("Can I pay tomorrow's bills?") and drafts bills, policy changes and payment or Earn requests for the owner to approve. It never moves money. |
 | **Activity** | A timeline of everything that happened. Local audit records are kept apart from onchain receipts. |
 | **Connections** | Connect Hodd to Claude as a remote MCP connector with 19 tools. Reads are instant. Every write is previewed, approved by the user in Claude and recorded, and a connection can be revoked in one click. |
 
-Actions that send money with one tap ask once: the first press turns the button into **Confirm?** and the second press sends. These are Invest, Return everything, the Earn "now" buttons, the USYC deposit and withdrawals, and Bring to Arc.
+Actions that send money with one tap ask once: the first press turns the button into **Confirm?** and the second press sends.
 
-Wallets: **Circle Passkey** (Modular Wallets, gas sponsored by the Gas Station paymaster), **MetaMask** or **Rabby**. The owner proves control of the wallet with a free signed message before any live operation. Circle Embedded (PIN) is built but stays switched off on the live host until it is verified there.
+**Wallets:** **MetaMask** and **Rabby** are verified end to end on the live host. **Circle Passkey** (Modular Wallets, gas sponsored by the Gas Station paymaster) and **Circle Embedded (PIN)** are built into the app; PIN stays switched off on the live host until it is verified there. Before any live operation the owner proves control of the wallet with a free signed message.
 
 ## How the agent decides
 
@@ -65,35 +66,26 @@ flowchart LR
   W --> R["Receipt verified on Arc<br/>run, trigger, engine proposal and rationale logged"]
 ```
 
-1. **When it runs.** A Supabase scheduler ticks every hour and starts a run for each Autopilot when one of these is true:
-   - six hours have passed since its last run;
-   - the owner's policy changed;
-   - a bill has entered its protection window, reached its payment day (one day before it is due) or fallen due.
-
-   The owner can also start a run directly with Invest or Return everything.
-2. **What comes first.** Hodd's Treasury Engine reads live balances, positions and bills in integer USDC minor units. It pays approved bills on their payment day (taking any missing part out of Morpho, then USYC) and tops up the owner's wallet for the bills the owner pays alone. Its proposal for the rest: bring approved bills inside the protection window back to cash, and invest the remaining cash at the higher recent yield (Morpho's from the vault, USYC's from Circle's price over the last six days), split evenly when the two are within half a point. That proposal is what happens when the advisor is unavailable.
-3. **What it chooses.** The AI advisor decides where all of the vault's money sits. It can invest the whole balance, including what the engine would keep for bills, split it between Morpho and USYC in any proportion, keep money invested until a bill's payment day or bring it back to cash earlier, or move between the strategies. It sees each approved bill's amount and days to its payment day. It must give a reason. Every answer is checked against what each strategy can take and pay out right now. It sees aggregate figures only (balances, yields, liquidity, coverage, bill amounts and days), never addresses or bill names.
+1. **When it runs.** A Supabase scheduler ticks every hour and starts a run when six hours have passed since the last one, the owner's policy changed, or a bill has entered its protection window, reached its payment day or fallen due. The owner can also start a run directly with Invest or Return everything.
+2. **What comes first.** Hodd's Treasury Engine reads live balances, positions and bills in integer USDC minor units. It pays approved bills on their payment day (taking any missing part out of Morpho, then USYC) and tops up the owner's wallet for the bills the owner pays alone. It also proposes a plan for the rest, which is what happens when the advisor is unavailable.
+3. **What the advisor chooses.** Where all of the vault's money sits. It can invest the whole balance, split it between Morpho and USYC in any proportion, keep money invested until a bill's payment day or bring it back to cash earlier, or move between the strategies. It must give a reason, and every answer is checked against what each strategy can take and pay out right now. It sees aggregate figures only, never addresses or bill names.
    - **Not its call:** paying a due bill, the owner's top-ups and returning everything never reach the model.
    - **Invalid answers:** an answer outside those bounds, an unparseable one or no answer at all leaves the engine's decision in place.
 4. **Execution.** Before signing, the runner re-reads fresh state and refuses if anything moved. Then Circle's developer-controlled agent wallet signs, and the receipt is verified on Arc.
-5. **The record.** Each run stores its inputs, the trigger, the engine's proposal, the advisor's action and rationale, the transactions and the verified receipts. The Autopilot page shows them as a timeline.
-
-The advisor is always on for every Autopilot, behind an operator switch.
+5. **The record.** Each run stores its inputs, the trigger, the engine's proposal, the advisor's action and rationale, the transactions and the verified receipts.
 
 ## Where the agent's authority stops
 
-The judging FAQ asks how much autonomy an agent should have. In Hodd the limits live outside the model and outside the browser:
-
-- **Where money can go, not how much.** The money sits in the owner's HoddieVault. The agent can send it to four places only: the allowlisted Morpho vault, Hodd's USYC pool, recipients the owner approved (never more per payment than the bill the owner approved) and the owner's own wallet. How much goes where is the agent's call; Hodd sets no Morpho share, budget or per-run cap. The contract refuses anything else, and the owner can always run `withdrawAll`, even with Hodd offline.
-- **The owner stays in charge.** The owner can pause the agent, ask for everything back, or set amount limits on the vault again with `setLimits` (vaults created before 2026-10-15 started with 1,000/2,000 USDC limits; the Autopilot page removes them with one signature).
-- **Bounds the model cannot widen.** The advisor can only place the vault's own cash and positions inside the two strategies or cash, within what each can take and pay out now. It can never pick another destination or skip a bill: on a bill's payment day the engine pays it first and redeems whatever is missing.
-- **Bills first.** The engine never invests protected capital. A liquidity shortfall on the owner's side is covered before anything is invested.
+- **Where money can go, not how much.** The money sits in the owner's HoddieVault. The agent can send it to four places only: the allowlisted Morpho vault, Hodd's USYC pool, recipients the owner approved (never more per payment than the approved bill) and the owner's own wallet. The contract refuses anything else, and the owner can always run `withdrawAll`, even with Hodd offline.
+- **The owner stays in charge.** The owner can pause the agent, ask for everything back, or set amount limits on the vault again with `setLimits`.
+- **Bounds the model cannot widen.** The advisor can never pick another destination or skip a bill: on a bill's payment day the engine pays it first.
+- **Bills first.** The engine never invests protected capital.
 - **No guessing.** Amounts are integer USDC minor units computed by the engine. Stale balances mean no action. An uncertain outcome is never resubmitted automatically.
 - **People confirm their own money.** Owner actions need the owner's wallet signature, and one-tap actions need a second press.
 - **A complete record.** Every run, payment and Earn operation keeps its inputs, decision, transaction hash and server-verified receipt.
 - **Kill switches.** One database row pauses all live execution within 30 seconds. Other rows pause just Earn, payments, Autopilot, the advisor, USYC or a single wallet provider.
 
-The destinations are enforced onchain by [`HoddieVault`](./contracts/src/HoddieVault.sol): an allowlist of strategies, owner-approved recipients with a cap each, the owner as the only other destination, and slippage bounds on every strategy call. Hodd's server and database add a second layer: owner-only row-level security, single-use quotes, a per-wallet lease, and a payment ledger that never lets two payments of the same bill run at once.
+The destinations are enforced onchain by [`HoddieVault`](./contracts/src/HoddieVault.sol): an allowlist of strategies, owner-approved recipients with a cap each, and slippage bounds on every strategy call. Hodd's server and database add a second layer: owner-only row-level security, single-use quotes, a per-wallet lease, and a payment ledger that never lets two payments of the same bill run at once.
 
 ## Circle and Arc stack
 
@@ -101,10 +93,10 @@ The destinations are enforced onchain by [`HoddieVault`](./contracts/src/HoddieV
 | --- | --- |
 | **Arc Testnet + USDC** | Settlement in USDC, with USDC as gas |
 | **Circle Wallets, user-controlled** | Circle Passkey (Modular Wallets) and Circle Embedded (PIN) for the owner's own wallet, alongside MetaMask and Rabby |
-| **Circle Wallets, developer-controlled** | One Autopilot agent wallet per user |
+| **Circle agent wallet** | One Autopilot agent wallet per user, on Circle's developer-controlled Wallets through the App Kit Circle Wallets adapter. It is the vault's operator and signs every Autopilot step |
 | **Gas Station paymaster** | Sponsored passkey transactions on Arc Testnet |
 | **Circle App Kit (Earn)** | Vault discovery, Morpho deposits, withdrawals and redemptions |
-| **Circle Gateway + Forwarding Service** | Unified USDC balance across 12 testnets. Bringing USDC to Arc with one button: the shortfall is deposited with an EIP-2612 permit in a single `depositWithPermit` transaction, and a burn intent signed up front is submitted once Gateway credits it. Paying bills from another chain |
+| **Circle Gateway + Forwarding Service** | Unified USDC balance across 12 testnets. One button brings USDC to Arc: the shortfall is deposited with an EIP-2612 permit in a single `depositWithPermit` transaction, and a burn intent signed up front is submitted once Gateway credits it. Paying bills from another chain |
 | **USYC** | Yield on reserve cash through [HoddUSYCVault](./contracts/src/HoddUSYCVault.sol). Circle allowlisted this one pooled contract, so users deposit and withdraw plain USDC and never need allowlisting themselves |
 | **Contracts** | HoddieVaultFactory (one CREATE2 vault per owner and agent) and HoddUSYCVault, both deployed and verified on Arc Testnet |
 
@@ -112,40 +104,42 @@ The destinations are enforced onchain by [`HoddieVault`](./contracts/src/HoddieV
 
 | Flow | Evidence |
 | --- | --- |
-| **Autopilot, full cycle in production** (2026-10-11) | Invest: approval [`0x1dfe…8376`](https://testnet.arcscan.app/tx/0x1dfe79052419b228247398e55a40873343c0e0c7d1a60c0b20880e6678c78376), Morpho deposit of 8.955895 USDC [`0xb784…d953`](https://testnet.arcscan.app/tx/0xb78410ce3819829b843fdb5e14e396056acf99a726b254a04d7250664a58d953). Return everything: withdrawal [`0x81a6…bc96`](https://testnet.arcscan.app/tx/0x81a6ece8d993972592a50d754bc83cdd0ea8e612a7971427dd823811dd2dbc96), then 14.973529 USDC back to the owner [`0xd604…45b5`](https://testnet.arcscan.app/tx/0xd6048d1deadf6682feefb7176e471dc72071340c79ca8a20827354995dc045b5). See [Autopilot validation](./docs/autopilot-validation.md) |
-| **Autopilot vault, full lifecycle** (2026-10-14) | Owner creates the vault, funds it and approves a recipient; the Circle agent deposits into Morpho, withdraws, pays the bill, redeems to the owner and sends cash to the owner; the contract refuses a payment over the cap and to an unknown address; the owner runs `withdrawAll`. Pay: [`0x6f25…6a01`](https://testnet.arcscan.app/tx/0x6f252005839251353d689cc8300f66ff73bbe1b51e52c14aeee238d104aa6a01). See [Autopilot validation](./docs/autopilot-validation.md) |
-| **Autopilot vault with USYC, no amount limits** (2026-10-14) | An older vault's owner lifts its limits with one `setLimits` ([`0x0b34…cb1e`](https://testnet.arcscan.app/tx/0x0b34d3cc443556bd42971d9a775c6342d2cd21a8d5711348f736b4b25698cb1e)); a new vault starts without them. The Circle agent deposits 0.6 USDC into Hodd's USYC pool ([`0x0dfd…054d`](https://testnet.arcscan.app/tx/0x0dfd6795a8dc5b75370e01631f35d3b29b0109676f2dd10f31954247d456054d)), redeems 0.2 USDC back into the vault as for a bill ([`0x5baa…dea6`](https://testnet.arcscan.app/tx/0x5baadc5c4d405e7a6dbfb9fba7870fd577c5d07e6be816c9d6e7446b55cbdea6)) and the rest straight to the owner ([`0x5e98…7bb5`](https://testnet.arcscan.app/tx/0x5e987a7cdb946ec016b75aa27e7501260ba68d481df20b7508e17d2d933e7bb5)). See [Autopilot validation](./docs/autopilot-validation.md) |
+| **Autopilot, full cycle in production** (2026-10-11) | Invest: approval [`0x1dfe…8376`](https://testnet.arcscan.app/tx/0x1dfe79052419b228247398e55a40873343c0e0c7d1a60c0b20880e6678c78376), Morpho deposit of 8.955895 USDC [`0xb784…d953`](https://testnet.arcscan.app/tx/0xb78410ce3819829b843fdb5e14e396056acf99a726b254a04d7250664a58d953). Return everything: withdrawal [`0x81a6…bc96`](https://testnet.arcscan.app/tx/0x81a6ece8d993972592a50d754bc83cdd0ea8e612a7971427dd823811dd2dbc96), then 14.973529 USDC back to the owner [`0xd604…45b5`](https://testnet.arcscan.app/tx/0xd6048d1deadf6682feefb7176e471dc72071340c79ca8a20827354995dc045b5) |
+| **Autopilot vault, full lifecycle** (2026-10-14) | The owner creates the vault, funds it and approves a recipient; the Circle agent deposits into Morpho, withdraws, pays the bill and sends cash to the owner; the contract refuses a payment over the cap and to an unknown address; the owner runs `withdrawAll`. Pay: [`0x6f25…6a01`](https://testnet.arcscan.app/tx/0x6f252005839251353d689cc8300f66ff73bbe1b51e52c14aeee238d104aa6a01) |
+| **Autopilot vault with USYC, no amount limits** (2026-10-14) | Limits lifted with one `setLimits` ([`0x0b34…cb1e`](https://testnet.arcscan.app/tx/0x0b34d3cc443556bd42971d9a775c6342d2cd21a8d5711348f736b4b25698cb1e)). The Circle agent deposits 0.6 USDC into Hodd's USYC pool ([`0x0dfd…054d`](https://testnet.arcscan.app/tx/0x0dfd6795a8dc5b75370e01631f35d3b29b0109676f2dd10f31954247d456054d)), redeems 0.2 USDC back into the vault as for a bill ([`0x5baa…dea6`](https://testnet.arcscan.app/tx/0x5baadc5c4d405e7a6dbfb9fba7870fd577c5d07e6be816c9d6e7446b55cbdea6)) and the rest straight to the owner ([`0x5e98…7bb5`](https://testnet.arcscan.app/tx/0x5e987a7cdb946ec016b75aa27e7501260ba68d481df20b7508e17d2d933e7bb5)) |
 | **Autopilot pays a real bill in production** (2026-10-14) | The owner approved the recipient once. Autopilot then paid the 2 USDC bill from the owner's vault, [`0x35ca…796b`](https://testnet.arcscan.app/tx/0x35ca2d3c7b45b55a32a1b9aec31c70f292259efc71edbe8763374a46c09d796b). The bill is PAID through the payment ledger |
 | **AI advisor** | A live Groq call returned a decision inside the envelope with its reason. The hourly scheduler tick answered `200 READY` in production |
-| **Bill payment with a verified receipt** | 0.1 USDC from the treasury wallet, [`0xf5df…6de7`](https://testnet.arcscan.app/tx/0xf5df364fd1cb752ad08c2cfef31dea260c7a1d5acd7e65cc724315c5f30c6de7) |
-| **USYC through HoddUSYCVault** | Deposit 1 USDC, then withdraw everything back to the same wallet. See [USYC validation](./docs/usyc-validation.md) |
-| **Gateway, one button** | Shortfall deposited in one `depositWithPermit` transaction, the transfer signed before the deposit, minted on Arc. See [Gateway validation](./docs/gateway-validation.md) |
-| **Gateway to a third-party recipient** | The basis for paying bills from another chain. See [Gateway validation](./docs/gateway-validation.md) |
-| **Morpho through App Kit** | Rabby deposit, withdrawal and redeem-all with zero residual shares |
+| **MetaMask and Rabby** | Wallet ownership proofs and verified bill payments with both; Morpho deposit, withdrawal and redeem-all with zero residual shares through Rabby |
+| **Bill payment with a verified receipt** | 0.1 USDC, [`0xf5df…6de7`](https://testnet.arcscan.app/tx/0xf5df364fd1cb752ad08c2cfef31dea260c7a1d5acd7e65cc724315c5f30c6de7) |
+| **USYC through HoddUSYCVault** | Deposit 1 USDC, then withdraw everything back to the same wallet |
+| **Gateway, one button** | Shortfall deposited in one `depositWithPermit` transaction, the transfer signed before the deposit, minted on Arc |
 | **Claude connector** | Dynamic registration, consent, all 19 tools, an approved write, a refused replay and revocation, on the production host |
+
+Details: [Autopilot validation](./docs/autopilot-validation.md), [Gateway validation](./docs/gateway-validation.md), [USYC validation](./docs/usyc-validation.md), [Hoddie validation](./docs/hoddie-unified-validation.md).
 
 ## Usage so far
 
-Snapshot from the production database on 2026-10-13. All values are testnet USDC.
+Snapshot from the production database on 2026-10-16. All values are testnet USDC.
 
 | | |
 | --- | --- |
-| Accounts on the live app | 1 (our own test business) |
-| Autopilot runs | 9: 4 invest, 4 return everything, 1 no action |
-| USDC moved by the agent in verified steps | 68.79 (Morpho deposits and withdrawals, plus transfers back to the owner) |
-| Morpho operations through the Earn dialog | 11: 6 deposits, 3 withdrawals, 2 redeem-all |
-| Bills paid with a verified receipt | 3 |
+| Accounts | 6: our own test business and 5 people from our circle |
+| Arc transactions sent through Hodd, each with a server-verified receipt | 81: 20 signed by the Circle agent wallet, 51 Morpho Earn steps (including approvals) and 10 bill payments from owner wallets. 37 of them were signed by users' own wallets (MetaMask, Rabby) or the agent; the rest by the development test signer used for regression runs. Gateway, USYC and vault-setup transactions come on top |
+| Autopilot runs | 28: 11 completed, 13 with nothing to do, 1 partial, 3 stopped safely |
+| USDC moved by the agent in verified steps | 143.81 |
+| Completed Morpho operations | 24: 12 deposits, 7 withdrawals, 5 redeem-all |
+| Bills paid with a verified receipt | 13 (3 of them paid by Autopilot from the owner's vault) |
 | Changes approved through Claude or Hoddie | 9 (6 Claude, 3 Hoddie) |
 
 ## Try it
 
 1. Open [app.hoddfinance.xyz](https://app.hoddfinance.xyz) and sign up with your email.
-2. Connect a wallet (Rabby or MetaMask is the quickest) and sign the free ownership message.
+2. Connect a wallet (MetaMask or Rabby is the quickest) and sign the free ownership message.
 3. Get free testnet USDC from the [Circle faucet](https://faucet.circle.com): Arc Testnet, and optionally another chain such as Base Sepolia.
 4. On **Obligations**, add a bill. Watch protected and deployable capital change on **Overview**.
-5. On **Invest**, deposit into Morpho or the USYC pool: press once, then **Confirm?**. The progress rail follows each step until the receipt is verified.
-6. If you have USDC on another testnet, use **Bring USDC to Arc** on Overview. It is one button and needs only free signatures plus at most one transaction.
-7. On **Autopilot**, press **Invest 5 USDC**, then **Confirm?**. The first time, your wallet also creates your vault. Under **Bills Autopilot pays**, press **Let Autopilot pay** for a bill. Open **History** to see each decision, its trigger and the advisor's reason. **Return everything** brings it all back.
+5. On **Invest**, deposit into Morpho or the USYC pool: press once, then **Confirm?**.
+6. If you have USDC on another testnet, use **Bring USDC to Arc** on Overview.
+7. On **Autopilot**, press **Invest 5 USDC**, then **Confirm?**. The first time, your wallet also creates your vault. Press **Let Autopilot pay** for a bill. Open **History** to see each decision and the advisor's reason. **Return everything** brings it all back.
 8. Ask **Hoddie** "Can I pay tomorrow's bills?", then check **Activity** for the record.
 
 Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gateway moves need MetaMask or Rabby.
@@ -156,45 +150,31 @@ Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gatewa
 | --- | --- |
 | Sep 27 – Oct 2 | Treasury Engine and console, Circle wallets (Passkey, Embedded, MetaMask, Rabby), guarded Morpho Earn, payment ledger |
 | Oct 6 – 9 | Live testnet host with kill switches, wallet ownership proofs, durable Earn and payment state machines, Claude connector (MCP), Hoddie assistant, landing page |
-| Oct 10 – 11 | Autopilot agent wallet (one-click Invest and Return everything), Circle Gateway (unified balance, bring to Arc, pay from another chain), animated progress rail |
-| Oct 12 – 13 | HoddieVault and factory, HoddUSYCVault deployed and allowlisted by Circle, USYC in the app, AI advisor with six-hourly and event triggers, one-button Gateway with permit deposits, a visual redesign of every page, Confirm? on one-tap actions |
+| Oct 10 – 11 | Autopilot agent wallet (one-click Invest and Return everything), Circle Gateway (unified balance, bring to Arc, pay from another chain), MetaMask verified live |
+| Oct 12 – 13 | HoddieVault and factory, HoddUSYCVault deployed and allowlisted by Circle, USYC in the app, AI advisor with six-hourly and event triggers, one-button Gateway with permit deposits, a visual redesign of every page |
 | Oct 14 | HoddieVaultFactory deployed; Autopilot runs from each owner's vault and pays approved bills through the payment ledger |
+| Oct 15 – 16 | Landing page with the Claude connector, proof, use cases and FAQ; terms, risk and privacy pages; CI on GitHub Actions; hardened database write handling |
 
 ## Architecture and tests
 
 - **Next.js 16** (App Router) on Vercel. One project serves the landing page on `hoddfinance.xyz` and the console on `app.hoddfinance.xyz`.
-- **Supabase** handles authentication and owner-scoped workspaces. It stores quotes, executions, receipts, leases and agent runs behind owner-only row-level security. It also runs the scheduler (pg_cron) and keeps secrets in Vault.
+- **Supabase** handles authentication and owner-scoped workspaces, and stores quotes, executions, receipts, leases and agent runs behind owner-only row-level security. It also runs the scheduler (pg_cron) and keeps secrets in Vault.
 - **Treasury Engine** (`src/lib/treasury`): pure, deterministic functions over integer minor units.
 - **Execution** is a durable, request-driven state machine. The server records the exact next call, the wallet signs, the server verifies the receipt and moves on. It works on serverless hosts and survives restarts.
 - **Contracts** (`contracts/`): Solidity 0.8 with Foundry and OpenZeppelin 5.
-- **Tests:** 711 Vitest unit and component tests, 89 Playwright checks on desktop and mobile, 245 Foundry tests (unit, fuzz, invariant, Arc fork). Opt-in live tests run against Arc Testnet.
+- **Tests:** 884 Vitest unit and component tests, 104 Playwright browser checks on desktop and mobile, 245 Foundry tests (unit, fuzz, invariant, Arc fork). GitHub Actions runs lint, typecheck and unit tests on every push. Opt-in live tests run against Arc Testnet.
 
-**Not done yet:**
-- Circle Passkey acceptance on the live host.
-- Circle PIN (switched off).
-- Outside businesses.
+## Roadmap
+
+- Verify Circle Passkey and Circle PIN on the live host and switch them on.
+- Onboard outside businesses.
+- An independent security audit of the contracts and preparation for mainnet.
 
 Contracts are testnet-grade and unaudited. Everything runs on testnet.
 
 ---
 
 # Developer guide
-
-## Wallets
-
-The wallet ownership update adds user choice: Circle Embedded (Hodd email/Google sign-in plus Circle PIN), Circle Passkey (WebAuthn), or an existing MetaMask/Rabby wallet. One selected wallet is authoritative at a time. Funds remain in that wallet; balances are never pooled into the previous developer-controlled treasury.
-
-- Deterministic Treasury Engine with integer minor-unit arithmetic, obligations, policy and allocation previews.
-- Workspace schema v4; migration preserves policy and obligations while disconnecting legacy shared wallets.
-- Public Arc Testnet USDC and ERC-4626 Morpho position reads for any selected wallet.
-- Circle App Kit vault discovery, canonical USDC and a verified vault allowlist.
-- Supabase SSR email/Google authentication and owner-scoped workspace persistence.
-- Guest and authenticated local caches use separate keys. Account changes clear the in-memory signer.
-- Supabase RLS limits each user to their own rows. A server-only secret key writes verified payment/evidence records; browser clients cannot write them.
-
-Stage 4 adds user-approved Earn execution (local development, or the live testnet host described below). The server loads the authenticated owner's persisted policy and obligations, reads fresh wallet balances and vault positions, and creates a five-minute quote. Client-supplied policy limits and wallet overrides are rejected. Quote confirmation is separate from the provider signature. Approval, UserOperation submission and verified Arc receipts are distinct events.
-
-**Rabby (EOA) live Earn verification passed on 2026-10-07 and MetaMask on 2026-10-11; Circle Passkey is still pending on the live host, and Circle PIN/SCA Earn fails closed.** Automated mocks do not prove that Circle sponsorship, PIN challenges or browser-wallet execution are configured correctly. Unsupported/unavailable providers fail closed. Legacy developer-wallet signing code is not used.
 
 ## Setup
 
@@ -203,89 +183,46 @@ pnpm install
 pnpm dev
 ```
 
-Copy `.env.example` to git-ignored `.env.local`. Configure:
+Copy `.env.example` to git-ignored `.env.local`:
 
-- `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` from your Supabase project.
-- `CIRCLE_API_KEY` as a server-only Circle testnet API key for user-controlled wallet sessions.
-- `NEXT_PUBLIC_CIRCLE_APP_ID` from Circle User-Controlled Wallet configuration.
-- `NEXT_PUBLIC_CLIENT_KEY` from Circle Modular Wallet Client Keys, restricted to the intended domain.
-- `NEXT_PUBLIC_CLIENT_URL` defaults to the official Modular RPC endpoint.
-- `HODD_EARN_EXECUTION_ENABLED=true` / `HODD_PAYMENT_EXECUTION_ENABLED=true` enable execution under `next dev` on loopback, with a matching Origin and JSON request. Hosted builds ignore them; see **Live testnet demo**.
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase project |
+| `SUPABASE_SECRET_KEY` | Server only; writes verified payment and evidence records |
+| `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET` | Circle user wallets and the Autopilot agent wallet (server only) |
+| `NEXT_PUBLIC_CIRCLE_APP_ID`, `NEXT_PUBLIC_CLIENT_KEY` | Circle User-Controlled Wallets and Modular Wallets (client key restricted to your domain) |
+| `GROQ_API_KEY` | Autopilot advisor (falls back to Supabase Vault) |
+| `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | Hoddie's command interpretation |
+| `HODD_EARN_EXECUTION_ENABLED`, `HODD_PAYMENT_EXECUTION_ENABLED`, `HODD_AGENT_EXECUTION_ENABLED` | Enable execution locally (`next dev` on loopback) |
 
-An entity secret, private key or seed phrase is not required for these user-owned wallet choices. End users connect through the browser, PIN or passkey; they do not run Circle CLI.
+Apply every migration in `supabase/migrations`. User wallets need no private key, seed phrase or entity secret; users connect through the browser, a PIN or a passkey.
 
-The Hodd Supabase project is provisioned in Frankfurt (`eu-central-1`) on the Free plan. Apply migrations in `supabase/migrations`, including `20261001142934_earn_smoke_session_guard.sql`. Owner RLS protects the main and smoke workspaces. The Earn session guard checks the JWT owner against an active `auth.sessions` row, including expiry/revocation. `supabase/tests/earn-isolation.sql` verifies cross-owner access and revoked-session rejection in a rolled-back transaction. The advisor currently reports disabled leaked-password protection; it is not silently enabled or represented as a clean advisory report.
+## Live testnet mode
 
-Enable Email Auth and optionally Google, and allow `/auth/callback` for your local/hosted origins. For SSR email confirmation use `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email` in the Supabase email template. Set Site URL to the intended app origin. Google OAuth uses `/auth/callback`. The schema explicitly grants authenticated Data API access and enables owner RLS.
+Live mode opens only when all of these hold: a Vercel production deployment, the request host exactly `app.hoddfinance.xyz`, `HODD_TESTNET_LIVE=true` and the database's main switch on. Preview URLs stay closed.
 
-In Circle Console configure the User-Controlled Wallet App ID, Modular Client Key and Passkey Domain. Passkeys are bound to that domain. Sessions are deliberately memory-only and require reconnecting after refresh. Recovery is managed through the wallet provider; no private keys or PINs are stored in the workspace.
-
-For passkey execution, Hodd requires the official Gas Station paymaster. [Circle's current transfer guide](https://developers.circle.com/wallets/modular/transfer-tokens) says Arc Testnet sponsorship is automatic; a Console policy is required for mainnet, which Hodd does not enable. Hodd refuses any unsponsored/paid-paymaster fallback. Embedded execution uses the official User-Controlled Wallet server adapter; the browser SDK presents the PIN challenge. MetaMask/Rabby verify the selected account and Arc Testnet before each single-call transaction. Logout, reconnect, expiry and account/network changes invalidate the in-memory signer; quotes are bound to the original authenticated session, selected wallet, scope and policy snapshot.
-
-For hosting, configure environment variables in the host project. `.env.local` stays on your machine. Public-prefixed configuration is included in the browser bundle; the Circle API key stays server-side.
-
-## Live testnet demo
-
-Anyone can sign up and use their own wallet on Arc Testnet at `app.hoddfinance.xyz`. Execution runs as a durable, request-driven state machine, so it works on serverless hosts: quotes (`earn_quotes`), Earn executions (`earn_executions`), verified receipts and one shared per-wallet lease (`wallet_leases`, Earn and payments) live in Supabase. Each request advances one step: the server records the exact next call, the browser wallet signs and reports the hash, the server verifies the receipt and moves on. Earn Kit's next call is captured without signing (`src/lib/earn/capture.ts`) and validated before any wallet sees it (`src/lib/earn/router.ts`: allowlisted vault and router only, every swept token back to the user's wallet, input equal to the quote, enough time before the router deadline).
-
-Live mode (`TESTNET_LIVE`) opens only when all of these hold: Vercel production deployment, request host exactly `app.hoddfinance.xyz`, `HODD_TESTNET_LIVE=true` (Production scope), and the database kill switch on. Preview URLs and `hodd.vercel.app` stay closed. The Origin must equal `https://app.hoddfinance.xyz`. The dev test signer never exists on a hosted build.
-
-- **Kill switch:** `update public.hodd_live_controls set enabled = false where key = 'EXECUTION';` pauses all live execution within 30 seconds (`EARN`, `PAYMENTS` and `PROVIDER:<name>` pause one area). Circle PIN (`PROVIDER:CIRCLE_USER_CONTROLLED`) starts disabled until its first production run is verified.
-- **Ownership:** before live operations, a free signed message proves the signed-in user controls the wallet (EOA signature, or ERC-1271/6492 for passkeys; Circle PIN wallets are proven by Circle).
-- **Limits:** per user 6 quotes/reviews a minute and 60 a day, 2 execution starts a minute and 20 a day, 60 status polls a minute, 5 Circle sessions an hour, plus global daily caps. Each deposit or payment is capped at 1,000 testnet USDC; withdrawals are never capped. One open execution per user and per wallet.
-- **Uncertainty:** an unanswered request past its deadline closes as FAILED for Earn only when the wallet nonce is unchanged (a late router call reverts on its signed deadline); payments never auto-release and need a pasted hash, or an unchanged nonce plus the user's confirmation.
-
-Production environment (Vercel, Production scope), then redeploy: `SUPABASE_SECRET_KEY`, `CIRCLE_API_KEY`, `NEXT_PUBLIC_CIRCLE_APP_ID`, `NEXT_PUBLIC_CLIENT_KEY` (restricted to `app.hoddfinance.xyz`), `HODD_TESTNET_LIVE=true`, and optionally `ARC_TESTNET_RPC_URL` and the Hoddie keys. Never set `HODD_TEST_SIGNER_*` or the local execution flags there. Public sign-up also needs custom SMTP in Supabase Auth (the built-in sender allows only a few emails an hour).
+- **Kill switch:** `update public.hodd_live_controls set enabled = false where key = 'EXECUTION';` pauses all live execution within 30 seconds. `EARN`, `PAYMENTS`, `AGENT`, `AGENT_ADVISOR`, `USYC` and `PROVIDER:<name>` pause one area.
+- **Limits:** per-user quote and execution rate limits per minute and per day; each deposit or payment is capped at 1,000 testnet USDC; withdrawals are never capped; one open execution per user and per wallet.
+- **Uncertainty:** an uncertain outcome is never retried automatically. The user resolves it with **Check again** or **Verify this transaction** (paste a hash).
 
 ## Sites and domains
 
-One Vercel project serves two sites, chosen by the request host in `src/proxy.ts` (host lists live in `src/lib/site/hosts.ts`):
-
 | Host | Serves |
 | --- | --- |
-| `hoddfinance.xyz`, `www.hoddfinance.xyz` | Landing page (`/landing`, rewritten from `/`). API routes return 404; console paths redirect to the app host. |
-| `app.hoddfinance.xyz` | Treasury console, login, auth callbacks and API routes. Not indexed (`robots.txt` disallows everything). |
-| any other host (`hodd.vercel.app`, preview URLs, localhost) | Treasury console, so existing sessions and previews keep working. The landing page is always available at `/landing`. |
+| `hoddfinance.xyz`, `www.hoddfinance.xyz` | Landing page and legal pages (`/terms`, `/risk`, `/privacy`) |
+| `app.hoddfinance.xyz` | Treasury console, sign-in and API routes (not indexed) |
+| Any other host (previews, localhost) | The console; the landing page is at `/landing` |
 
-DNS (at the registrar, unless the domain's nameservers are moved to Vercel): `A hoddfinance.xyz → 76.76.21.21`, `CNAME www → cname.vercel-dns.com`, `CNAME app → cname.vercel-dns.com`. Use the exact values Vercel shows for the project if they differ.
+Routing lives in `src/proxy.ts`, host lists in `src/lib/site/hosts.ts`.
 
-Moving the console to `app.hoddfinance.xyz` needs matching provider settings, otherwise sign-in and passkeys fail on the new origin:
+## Further reading
 
-- Supabase Auth: add `https://app.hoddfinance.xyz/auth/callback` and `https://app.hoddfinance.xyz/auth/confirm` to the redirect allow list and set the Site URL to `https://app.hoddfinance.xyz`.
-- Circle Console: set the Passkey Domain to `app.hoddfinance.xyz` (passkeys are bound to the domain and will not carry over from `hodd.vercel.app`) and allow the new domain on the Modular client key.
-
-Brand assets live in `public/brand` (derived from the master logo and star artwork; do not redraw them). Fonts are self-hosted from `src/app/fonts`: Archivo and IBM Plex Mono, both under the SIL Open Font License.
-
-## Persistence
-
-Signed-out visitors see a sign-in gate with a Circle testnet faucet link. Signed-in users start with an empty live Arc Testnet workspace. Legacy sample records and unchanged sample settings are cleaned automatically on load after cloud acceptance; paid, referenced or reserved bills and user-created records are preserved, with one SYSTEM activity recording the cleanup. Signed-in users load their own cloud record and a separate local cache. Changes are saved locally first and synchronized to Supabase; a visible message reports failed sync. Offline edits can be restored from the same account's cache. Ordinary workspace fields use last-write-wins; Stage 5 obligation revision checks reject conflicting edits, and pending payments lock financial mutations. Local activity is not a tamper-proof audit ledger. Wallet addresses are public metadata, not proof of wallet ownership for server authorization.
-
-## Financial rules
-
-```text
-protected capital = obligations within 30 days + safety buffer + pending transactions
-deployable capital = max(total treasury - protected capital, 0)
-```
-
-Draft/paid obligations are excluded. Active overdue obligations are included. APY is for display only. Morpho redeemable liquidity is the minimum of position value, `maxWithdraw` and vault liquidity. Public reads use one block per position. Missing/stale positions contribute no redeemable liquidity and are labeled unavailable. P&L is unavailable without principal history.
-
-Arc Testnet chain ID is `5042002`; canonical 6-decimal USDC is `0x3600000000000000000000000000000000000000`. The native gas and ERC-20 views represent one economic USDC balance and are counted once.
-
-Deposit plus fee reserve must fit deployable capital, liquid funds and the Morpho strategy cap while preserving obligations, safety buffer and minimum coverage. Withdrawal/redeem is bounded by fresh position value, max withdrawal and vault liquidity, not the allocation cap. Missing gas estimates or stale/unavailable data block execution. Earn quotes reserve a 20% integer gas margin for each reported step, with a bounded gas price and Arc's 20 Gwei floor; native 18-decimal fee reserves round up to 6-decimal USDC. At signing, the server simulates the exact pending call and binds its gas limit and price to the quote. Browser wallets receive those explicit ceilings, so the browser does not need a separate public RPC gas simulation. A fresh estimate or price above the quote stops before the wallet signature request. APY never determines amounts.
-
-## Execution and recovery
-
-Circle PIN/SCA requires `feeLevel` for SCA transactions (SDK error 155232), so its challenges use `feeLevel: MEDIUM`; the fee reserve is enforced by policy rather than by the challenge. The provider stays switched off on the live host until a production run is verified. See [Circle contract execution](https://developers.circle.com/api-reference/wallets/user-controlled-wallets/create-user-transaction-contract-execution-challenge) and [Gas Station](https://developers.circle.com/wallets/gas-station).
-
-Quotes are single-use rows consumed atomically when an execution starts. The database lease prevents overlapping Earn or payment executions from spending the same wallet across users, hosts and restarts; uncertain outcomes keep it until resolved with evidence. Earn and payment dialogs offer **Check again**, **Verify this transaction** (paste a hash) and **I rejected or closed the wallet request** (released only with an unchanged nonce). The local `.hodd-local` directory is no longer used.
-
-Injected-wallet account/network/gas checks run before the transaction API is invoked. A typed, sanitized preflight failure cancels that signature request without marking a submission; ambiguous errors after the transaction API boundary retain UNKNOWN and the lease. Failed confirmations disable the consumed quote in the dialog. Legacy leases require explicit user history review and fresh chain checks; a reviewed lease can be archived locally without removing its quote consumption marker. No automatic retry or blanket stale-lock cleanup is performed.
-
-After a timeout or ambiguous error, inspect the displayed transaction/UserOperation hash in ArcScan and the wallet provider. Re-read the wallet balance, position and approvals before requesting anything else. Hodd never retries an uncertain submit automatically. A successful receipt must match the vault, operation, exact assets and receiving wallet; redeem-all with residual shares is `PARTIAL`, with no automatic second withdrawal. Local activity is not immutable proof; only verified receipt events are labeled onchain confirmation.
-
-Use **Open isolated smoke workspace** after sign-in. It has a separate owner-scoped database row and local cache, no obligations, a 1 USDC safety buffer and the normal strategy cap/coverage rules. The server rejects the main treasury's connected wallet in smoke scope. Connect a separate test wallet, fund it sufficiently for the buffer, fees and cap, then explicitly approve at most 1 USDC deposit, a partial withdrawal and redeem-all. The server also enforces the smoke deposit limit. Main obligations and policy are never replaced. Returning to the main workspace clears the signer and requires reconnecting.
-
-Wallet recovery belongs to the provider, not Hodd: retain access to the passkey's device/sync or backup mechanism; configure Circle Embedded recovery through Circle's supported PIN/recovery flow; use MetaMask/Rabby's own backup procedures outside Hodd. Hodd cannot export a private key or recover funds with a Supabase login. Never send a seed phrase, private key, PIN or entity secret to Hodd or chat. Wallet addresses in the workspace are public metadata, not recovery material.
+| Topic | Document |
+| --- | --- |
+| Autopilot, vault mode, advisor and scheduler | [docs/autopilot-validation.md](./docs/autopilot-validation.md) |
+| Circle Gateway | [docs/gateway-validation.md](./docs/gateway-validation.md) |
+| USYC and HoddUSYCVault | [docs/usyc-validation.md](./docs/usyc-validation.md), [contracts/README.md](./contracts/README.md) |
+| Hoddie | [docs/hoddie-unified-validation.md](./docs/hoddie-unified-validation.md) |
 
 ## Verification
 
@@ -295,129 +232,8 @@ pnpm lint
 pnpm test
 pnpm build
 pnpm test:e2e
-pnpm audit --prod
+cd contracts && forge test
 ```
-
-Live authentication, passkey/PIN provisioning, database RLS and wallet execution require configured projects and provider settings. Automated tests use mocks for provider APIs.
-
-Current checkpoint (2026-10-13): typecheck, lint and build pass; 711 Vitest tests and 89 desktop/mobile Playwright checks pass; `forge test` covers the contracts (unit, fuzz, invariant, Arc fork). Opt-in live tests against Arc Testnet: `HODD_USYC_TX_LIVE=1` (`src/lib/usyc/usyc.tx.live.test.ts`), `HODD_GATEWAY_MOVE_LIVE=1` (`src/lib/gateway/move.live.test.ts`), `HODD_GATEWAY_LIVE=1`, `HODD_AUTOPILOT_LIVE=1` and `AUTOPILOT_ADVISOR_LIVE=1`. The paragraphs below are earlier checkpoints.
-
-Dependency audit (2026-10-06): patched `undici`, `uuid`, `@grpc/grpc-js`, `source-map-js` (1.2.2) and `sharp` (0.35.5) transitives. No high/critical advisories remain. One low-severity [elliptic advisory](https://github.com/advisories/GHSA-848j-6mx2-7j84) remains through Circle/Ethers dependencies; the registry's latest release is still 6.6.1 and no patched release is published. Audit does not currently pass cleanly.
-
-Supabase security advisor reports the existing [leaked-password protection setting](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) as disabled. The payment migrations introduced no additional security-advisor finding. Current automated checkpoint (2026-10-07): strict typecheck/lint/build passed, 139 Vitest tests and 26 desktop/mobile Playwright checks passed; production payment routes are tested closed even with execution flags set. Client static bundles were scanned for configured server credential values without printing those values; no matches were found. Both payment ledger and evidence/recovery SQL tests passed in rolled-back transactions against the configured project.
-
-Live preflight exposed a browser-only SDK transport (`window is not defined`) on the server. The server now uses a Node-safe Circle RPC transport with fixed localhost application metadata, an explicit read/estimation method allowlist, no redirects and no automatic retries. Signing, submission and recovery writes are denied by the transport. A real read-only preflight returned HTTP 200 and Arc Testnet chain ID 5042002. This verifies server connectivity, not user signing or payment execution; those acceptance tests still require the user-owned test wallet.
-
-## Live Earn findings (2026-10-07)
-
-Rabby smoke evidence for a fresh test wallet: deposit 0.5 USDC (block 66009558), withdraw 0.25 USDC (66009751) and redeem-all with zero residual shares (66009872), each server-verified and stored in `earn_provider_evidence`. Fixes found during the live run:
-
-- Earn Kit routes deposits and withdrawals through a router contract. Receipts are accepted only when the wallet's exact USDC/share transfer to the router, the router's exact-amount vault event and the forwarded shares/assets to the wallet all match.
-- The allowlisted vault is a Morpho Vault V2, whose `maxWithdraw` always returns 0. Redeemable liquidity is proven with a same-block `withdraw` simulation instead.
-- The quote's gas price ceiling already includes the 2x buffer; signing compares the raw network price against it and never signs above it.
-- Earn Kit cannot simulate a deposit before its approval exists and quotes ~265k gas; a fresh wallet's first routed deposit needs ~447k. Unsimulated deposits reserve at least 500k gas before buffering.
-- Earn Kit rewraps signer errors as `RPC_ENDPOINT_ERROR`; Hodd records its own `SIGNING_PREPARATION` code first. A verified approval followed by a pre-signature failure ends FAILED and releases the lease.
-- Signers are memory-only. The wallet panel shows signer state live with **Reconnect signer**; quotes and confirmations require an active matching signer, and the workspace scope survives reloads per tab.
-- Rabby may raise the gas limit it was given; the signed gas price is still the bounded one. Circle's Earn position index can lag the chain by several minutes after a withdrawal, temporarily rejecting withdrawal quotes.
-
-## Local test signer (development only)
-
-For repeatable Arc Testnet regression runs, `next dev` can expose a server-held test signer. Put `HODD_TEST_SIGNER_ENABLED=true` and `HODD_TEST_SIGNER_PRIVATE_KEY` (a dedicated, testnet-only key) in git-ignored `.env.development.local`; production builds never load that file. The signer exists only under `next dev` on loopback, and `POST /api/dev/test-signer` additionally requires the Earn execution guard (flag, loopback, same origin, JSON) and a signed-in workspace that selected this signer. It signs only the exact call and server-bound gas ceiling of that session's pending Earn request, or the exact USDC transfer of a pending payment within its approved EOA fee quote, once; arbitrary calldata is refused. Because the server holds the key, an unclaimed TEST_SIGNER payment request is provably unsigned and ends FAILED instead of UNKNOWN. Payment execution additionally requires `HODD_PAYMENT_EXECUTION_ENABLED=true` (keep it in `.env.development.local`).
-
-Live TEST_SIGNER run (2026-10-07, smoke scope): Earn deposit 0.5 / withdraw 0.25 / redeem-all (zero residual) and a 0.10 USDC Stage 5 payment to a user-owned test recipient, CONFIRMED with a verified canonical USDC receipt (block 66015915) and the obligation PAID. These prove Hodd's server/ledger path, not MetaMask, Rabby or Circle signing. The browser learns only the public address. Evidence is stored as `TEST_SIGNER` and never counts for MetaMask, Rabby or Circle acceptance.
-
-## Payments
-
-Single-obligation, full-amount Arc Testnet USDC payment review uses server-owned policy inputs, fresh balances/positions and integer fee reserves. It does not use investment deployable capital as a payment limit. Earlier obligations, safety buffer, pending reservations and post-payment coverage must remain protected. Pending payments replace their protected obligation with amount + fee reserve, rather than double-counting the same obligation.
-
-The payment ledger migration introduces owner-readable, server-written obligations and proposals, revision checks, atomic five-minute proposal claims, unique active wallet/obligation constraints and unique confirmed receipt references. Only server-verified canonical USDC Transfer evidence may finalize PAID. Browser activity remains local audit, not payment proof. Additive workspace fields preserve existing obligations/policy and schema-v4 caches.
-
-`SUPABASE_SECRET_KEY` belongs only in git-ignored `.env.local` and server-only code. No entity secret or private key is required. Payment execution needs an open execution mode (local flag on loopback, or live testnet mode) and a server fee quote; every payment is then proven by its own verified receipt. Per-wallet smoke evidence no longer gates payments (it is still recorded for smoke runs as an operator audit trail). Preview URLs, `hodd.vercel.app`, non-loopback development hosts and mismatched origins remain closed. EOA, Circle PIN and sponsored Circle Passkey signing are supported; PIN is switched off on the live host until verified.
-
-`WalletFeeQuote` binds provider, wallet, Arc chain, operation digest and five-minute expiry. EOA uses a bounded Arc gas limit/price. PIN reserves Circle's official `estimateContractExecutionFee` (HIGH, doubled) and creates the challenge with `feeLevel`, which Circle requires for SCA wallets. Neither assumes sponsorship. Passkey server-side estimation uses only public credential ID/key and the SDK's estimation stub; it includes deployment, call, verification, pre-verification and paymaster gas. Only the [official Arc Gas Station address](https://developers.circle.com/wallets/gas-station/contract-addresses) qualifies as sponsored. The browser signs the exact quoted operation with its actual passkey; an estimation stub is never submitted. Reconnect existing passkey sessions to add this public metadata. No raw authenticator credential or signature is persisted.
-
-`earn_provider_evidence` records server-verified smoke operations and SDK versions. Readiness re-reads real Arc receipts for this owner/wallet/provider, requires an allowlisted vault, ordered deposit (at most 1 USDC), partial withdrawal and redemption with no residual shares. Hand-entered flags and the old `wallet_provider_verifications` table do not enable execution. Evidence-table writes are server-only and owner reads use RLS. A `PARTIAL` redemption is not accepted as complete provider verification.
-
-Payment and Earn share a durable per-wallet lease. Once a signing request is exposed, an uncertain outcome keeps its reservation and lease even if the browser reports cancellation. Known hashes can be rechecked without sending a new transaction. The lease is a database row (`wallet_leases`) maintained by triggers; releasing it requires evidence, never a manual delete. Receipt network fees are not represented as a sponsored wallet's actual debit.
-
-PIN approval acknowledgment, Circle-observed approval, UserOperation hash, transaction submission and confirmed receipt are distinct. A UserOperation receipt must match the original account, nonce, exact calldata, factory, paymaster and approved gas ceilings. An outer transaction succeeding does not imply its UserOperation succeeded. Receipt recovery can resolve an existing UserOperation hash without sending anything. Verified EOA or passkey reverts atomically release the reservation but leave the obligation active; missing/ambiguous proof holds the lease. A lost claim response cannot release a lease until the ledger confirms cancellation. The UI refreshes PAID, reservations, Portfolio inputs and Activity from canonical cloud facts without re-uploading stale ledger data.
-
-The ledger and state-audit migrations are applied. Rollback-only synthetic database tests cover owner isolation, browser write denial, PAID forgery, single-use claims, pending reservations and release. Automated jobs/routes test EOA signing orchestration, replay, parallel wallet leases, uncertain outcomes and environment guards. The UI reads owner-scoped server payment history and separates LOCAL AUDIT from ONCHAIN RECEIPT events. A newer local cache cannot revert a confirmed PAID record or override server reservations.
-
-Apply all migrations, including `20261006151235_payment_provider_evidence_recovery.sql` and `20261006153410_payment_user_operation_receipt.sql`. Rollback-only `supabase/tests/payment_evidence_recovery.sql` additionally verifies evidence owner isolation/browser write denial, UNKNOWN retention, stale/cross-user failure rejection and EOA/UserOperation failure release without PAID.
-
-Outstanding acceptance work: register real Stage 4 smoke receipt evidence, complete live payment smoke tests of at most 1 USDC to a user-owned test recipient for each enabled signer (Circle PIN, Circle Passkey, MetaMask and Rabby), and compare receipts, balances, positions and canonical records on real sessions. All current automated provider tests are mocks. No live payment has been performed by this checkpoint. Stage 6 originally waited for full Stage 5 live acceptance; on 2026-10-08 the owner chose to start it while MetaMask and Circle Passkey acceptance remain open. The Claude connector never signs or moves money, so it does not depend on those providers. No OpenAI/Anthropic API key, private key, PIN, seed phrase or entity secret is needed for this verification.
-
-## Claude connector (MCP)
-
-Users can connect Hodd to Claude (claude.ai, Claude Desktop, Claude mobile) as a custom connector at `https://<app host>/api/mcp` (Streamable HTTP, stateless, `mcp-handler` 2). ChatGPT is not supported yet. The **Connections** page shows the URL, setup steps, connected apps (revocable) and every change made through Claude.
-
-- **Sign-in:** Supabase Auth acts as the OAuth 2.1 server (beta). Claude registers dynamically, the user signs in to Hodd and approves on `/oauth/consent`. A pending consent survives the sign-in round trip (`hodd_after_login` cookie, consent path only). Unauthenticated MCP calls get `401` + `WWW-Authenticate: Bearer resource_metadata=…`; `/.well-known/oauth-protected-resource/api/mcp` publishes `resource` = the exact MCP URL and Supabase as the authorization server.
-- **Tokens:** verified with `jose` against Supabase JWKS (issuer, `aud=authenticated`, expiry) and must carry a `client_id` claim, so normal browser session tokens are refused. Every call re-checks the session (`auth.getUser`), then acts as the user through owner RLS; no service-role key is used.
-- **Reads** (`readOnlyHint`): overview, obligations, "can I pay it?" (`assessPayment` with live balances, a fee estimate and a Morpho funding plan), allocation preview, vaults/positions, policy, activity, payments, Claude requests.
-- **Writes** are two steps. `hodd_prepare_change` changes nothing and returns a preview plus a 10-minute HMAC confirmation (`HODD_MCP_HANDLE_SECRET`, server only) bound to user, connector client, scope, kind, the exact values and the workspace revision. The write tools (`destructiveHint`) repeat the exact values with that confirmation; `hodd_apply_agent_action` writes the workspace and the `agent_actions` record atomically, once (primary key), only for connector tokens. Claude asks the user before each write tool; keep them on "Needs approval" (claude.ai has no MCP elicitation, so "Always allow" would skip the question).
-- **Money:** `hodd_request_payment` / `hodd_request_earn` only create requests (24 h). They appear on the Portfolio page under **Claude requests**, open the normal payment/Earn dialog pre-filled, and finish with a fresh quote and the user's wallet signature (live testnet host or local development).
-- **Concurrency:** workspace rows have a `revision`; every update must name the revision it was based on (`workspace revision conflict` otherwise). Browsers send it and reload on conflict or when the tab regains focus, so a stale tab cannot overwrite a change approved in Claude, and vice versa.
-- **Audit:** connector changes add an `AGENT` activity marked "approved in Claude" and an `agent_actions` row (owner-readable; browsers cannot insert).
-
-Live verification (2026-10-08, production `app.hoddfinance.xyz`): a client registered through dynamic registration, the consent page approved it, and the issued ES256 token (with `client_id` and `session_id`) listed all 19 tools; overview and "can I pay?" returned live Arc balances; in the smoke workspace a bill was created (altered values and a replay were refused), a payment request appeared under **Claude requests** and was dismissed in the app, a stale browser tab picked up the change on focus without conflict, and revoking the connection on **Connections** made the same token fail immediately.
-
-One-time setup (done for the hosted project): in Supabase enable **Authentication → OAuth Server**, set the authorization path to `/oauth/consent`, allow dynamic client registration, and keep the Site URL on the app host. No host variable is required: the confirmation key comes from `HODD_MCP_HANDLE_SECRET` if set, else HKDF of `SUPABASE_SECRET_KEY`/`CIRCLE_API_KEY` (label `hodd-mcp-confirmation-v1`), else a random key the database generated (`hodd_agent_confirmation_key()`, connector tokens only). Without Supabase variables the app falls back to the hosted project's public URL and publishable key. Apply `20261008125003_agent_actions.sql` and `20261008133206_agent_confirmation_key.sql`; `supabase/tests/agent_actions.sql` verifies revisions, connector-only writes, replay rejection, isolation and request resolution in a rolled-back transaction. A stale revision fails once with SQLSTATE `PT409` (HTTP 409); `20261016082747_workspace_conflict_no_retry.sql` replaced the earlier 40001, which PostgREST retries forever (one stale upsert ran ~100 times a second for 19 hours on 2026-10-15/16). `supabase/tests/workspace_conflict.sql` checks this for browser, Claude connector and Hoddie writes, and that `hodd_earn_session_active()` answers false (not 42501) without a session.
-
-## Hoddie — treasury assistant
-
-See [unified Hoddie validation](./docs/hoddie-unified-validation.md) for this merge and [the earlier checkpoint](./docs/hoddie-validation.md) for historical acceptance work.
-
-Open `/hoddie` from the desktop sidebar or mobile navigation. EN/TR commands can read the main treasury, obligations, activity, policy, payment feasibility and allocation previews. New obligations, edits, policy/target changes and payment/Earn requests require an explicit review button in Hodd. A request never submits a transaction: existing fresh quote, policy, separate confirmation and wallet signing still apply. Earn/Send use the existing execution access policy; this assistant never changes it. The smoke-test workspace is not exposed to Hoddie.
-
-Hoddie uses AI SDK 7 with pinned Google/OpenRouter adapters. It sends **only the latest masked command** and a selection-present boolean for structured intent parsing (2048 output-token maximum per provider attempt, no same-provider retry). Gemini is tried first; unavailable/unconfigured Gemini can fall back once to the verified free NVIDIA endpoint. Cancellation, quota and financial-policy errors never trigger another provider attempt. Missing consent goes directly to the read-only engine fallback. No account snapshot, financial result, previous result card, credentials or signing data is model context. Hodd's existing deterministic engine computes all financial outputs and uses exact minor units; the model cannot calculate or execute amounts. Known obligation names/recipient descriptions, addresses, emails, literal amounts, percentages, quoted new titles and ISO dates become placeholders; values stay on the server. This is not universal personal-data detection: do not enter confidential, sensitive or personal information into free services. New free-text fields can be completed in the native Hodd form instead.
-
-Configure only in ignored `.env.local` (or server environment, never `NEXT_PUBLIC_`):
-
-```dotenv
-GEMINI_API_KEY=your_server_key
-HODDIE_GEMINI_FREE_TIER_CONFIRMED=true
-OPENROUTER_API_KEY=your_server_key
-```
-
-Verify the Gemini project's unpaid tier in Console before setting the confirmation flag. Automatic routing prefers `gemini-3.8-flash`, then OpenRouter's `nvidia/nemotron-3-super-120b-a12b:free`. There is no user model selector. OpenRouter remains NVIDIA-only, its own provider fallback is off and maximum prompt/completion price is zero. Its public endpoint catalog must advertise zero prices and structured outputs; otherwise the call fails closed. API metadata records the actual interpreter; the UI does not display its name. Check current [Gemini unpaid terms](https://ai.google.dev/gemini-api/terms), [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing) and [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection) before enabling real keys. Free quotas/availability are not guaranteed.
-
-The first-party Supabase session is verified on each request; OAuth connector tokens are rejected. Explicit consent for automatic external command interpretation uses a signed HttpOnly session cookie; an old single-provider consent is not upgraded silently. Reviews bind user, session, wallet, routing permission, consent epoch, workspace revision and exact payload for ten minutes. Only `/api/hoddie/confirm` applies them; the model has no confirm/apply/execute tool. `hodd_apply_hoddie_action` atomically advances the workspace and records a `HODDIE` action; duplicate action IDs or stale revisions roll back. Existing MCP OAuth-only writer requirements are unchanged. Hoddie signing handles require an existing server-only root (`SUPABASE_SECRET_KEY`, `CIRCLE_API_KEY` or `HODD_MCP_HANDLE_SECRET`), with a separate HKDF label; no private key, seed, PIN or entity secret is needed.
-
-The hosted project already has `20261008203912_hoddie_first_party.sql` applied as version `20261008203912`; do not reapply it there. Atomic content-free counters limit a user to ten provider attempts/form requests per minute and the entire app to 45 OpenRouter model attempts per UTC day. A fallback reserves its own quota (so one command may consume two minute slots); reservations failing on either limit roll back together. Counters expire after two days; no chat database is created. Conversation lives only in React memory across route navigation; refresh/logout/account/wallet changes clear it and pending reviews. The compact chat places suggested commands in a horizontally scrollable row directly above the composer; wallet review requests are collapsed until opened. Stop cancels interpretation, not an already-approved write; an uncertain confirmation must be checked in Activity, never automatically retried.
-
-`supabase/tests/hoddie.sql` uses rollback-only synthetic sessions to check first-party/OAuth isolation, revisions, replay, owner reads, expired sessions and exact quotas. Unit/component/E2E provider tests use mocks and are **not live model acceptance**. Real Gemini/OpenRouter interpretation plus user-approved workspace changes still require configured keys and separate live verification.
-
-Security advisor notes: the private quota table deliberately has no client RLS policy/privileges; authenticated SECURITY DEFINER RPCs deliberately enforce active first-party ownership inside the function. The hosted project's existing leaked-password protection warning is outside this change; see [Supabase password protection](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection). Review [SECURITY DEFINER guidance](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable) when changing these boundaries.
-
-
-Instant read-only answers use `answers.ts` and the Treasury Engine, including status, facts, sources and follow-ups in English or Turkish. No model is called for these questions, or when signed out, without consent or without configured keys. Provider outages return the same deterministic fallback, with no automatic write or retry. Disconnected live accounts report `NOT_CONNECTED` and zero balances; unavailable or partial live balances pause financial answers.
-
-The only API endpoints are `/api/hoddie/chat`, `/api/hoddie/consent` and `/api/hoddie/confirm`. The UI does not name an interpreter. Keys are `GEMINI_API_KEY` and `OPENROUTER_API_KEY`, with `HODDIE_GEMINI_FREE_TIER_CONFIRMED=true` only after unpaid-tier verification; `HODDIE_GEMINI_MODEL` optionally selects a verified free-tier Flash model. The pinned OpenRouter endpoint and zero-price verification remain unchanged.
-
-Money requests are saved through the signed review and separate confirmation route. Wallet review requests then open the normal `EarnOperationDialog` with the proposed amount prefilled and current engine limits rechecked, or `PaymentDialog` for the selected obligation. The dialog obtains a fresh quote and requires explicit confirmation and the user wallet signature. Chat text, including typed approvals, never executes a transaction or applies a workspace change.
-
-## Circle Gateway: USDC on every chain
-
-Overview shows the selected wallet's USDC on 12 Circle Gateway testnets plus its Gateway unified balance (`/api/gateway/balances`, public read, display only — the Treasury Engine still counts Arc funds alone). **Bring USDC to Arc** is one button (pressed twice: **Confirm?**). `MOVE_QUOTE` estimates Gateway's fee and, when the Gateway balance on the source chain is short of the amount plus fees, adds the shortfall with an exact EIP-2612 permit to the GatewayWallet (`src/lib/gateway/permit.ts`; the token's own `DOMAIN_SEPARATOR` must match, otherwise it falls back to approve + `deposit`). The wallet signs the free EIP-712 burn intent first, then the permit, then sends one `depositWithPermit` transaction; the page waits for Gateway to credit it (the quote handle lives one hour in that case) and submits the intent signed at the start. Circle's Forwarding Service mints on Arc to the user's own wallet and Hodd verifies the mint before offering the normal Morpho deposit within the engine's limit. "Only add to Gateway" keeps the plain deposit for paying from another chain later. **Pay from another chain** (Obligations) puts a payment proposal on the `GATEWAY` rail: Gateway mints the exact amount straight to the obligation's Arc recipient, and PAID still requires a verified GatewayMinter `Transfer(0x0 → recipient, amount)`. Direct minting to a third-party recipient was verified live before building this (see [Gateway validation](./docs/gateway-validation.md)). Gateway signing is EOA-only (MetaMask, Rabby, dev test signer). No new database migration or environment variable is needed; execution uses the existing Earn/payment gates and kill switches.
-
-## Autopilot (agent wallet and vault)
-
-`/autopilot` gives a separate Circle developer-controlled wallet (one EOA per user on Arc Testnet) a budget. It has two buttons: **Invest N USDC** creates the agent and its mandate, asks the user's wallet to sign one USDC transfer to the agent and starts it; **Return everything** withdraws the agent's Morpho position and sends all its USDC (minus that transfer's gas) to the user's verified wallet in a single run. Funded this way, Hodd's deterministic engine then invests idle budget in the allowlisted Morpho vault, refills the agent's cash reserve, and sends liquidity back to the user's proven wallet when obligations need it. The agent can only call the Earn router for the allowlisted vault and transfer canonical USDC to the owner's verified wallet; every run records its inputs, decision, Circle transaction and verified receipt, and UNKNOWN outcomes are never resubmitted. Requires `supabase/migrations/20261010121212_agent_autopilot.sql`, `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET`, `HODD_AGENT_EXECUTION_ENABLED=true` locally, and the `AGENT` row in `hodd_live_controls` (on for the live host). Live custody evidence and the fixes it produced: [Autopilot validation](./docs/autopilot-validation.md).
-
-**Vault mode** (`src/lib/autopilot/vault*.ts`, migration `20261014082201_autopilot_vault.sql`). Invest predicts the owner's vault address from HoddieVaultFactory `0x311578B21F269ca0E45f5c16324A3E51f69ce389` (owner = the user's wallet, operator = the Circle agent, no amount limits — every budget set to 2^64-1 —, strategies Morpho and HoddUSYCVault) and returns the owner's calls: create the vault (first time), top up the agent's fee money (0.5 USDC), fund the vault. A vault created earlier with the 1,000/2,000 USDC limits keeps its address and is found too; its owner lifts the limits with one `setLimits` call (`lift-limits` on `/api/autopilot/vault`). Hodd stores the vault only after reading its owner, operator, asset and strategies onchain. Runs then decide over the vault's cash, Morpho position and USYC pool position (`decideVault`, `vault-decision.ts`): approved bills due within a day are paid first (`pay`, after a `withdrawFromStrategy` on Morpho and/or a `redeemFromStrategy` on USYC for any missing part), the owner's own bills are topped up, approved bills inside the protection window are brought back to cash (`RESERVE_REFILL`), and the rest of the cash is invested by recent yield. The vault advisor (`vault-advisor.ts`) decides those last two: it may invest the whole cash (`ALLOCATE`), hold (`WAIT`), move between the strategies (`REBALANCE`) or back to cash (`DE_RISK`). Decisions carry a `route` per strategy; the runner turns it into legs (withdrawals, then deposits, then the payment) and re-checks each against fresh state. Each operator call is decoded before signing (only this vault, only the six operator functions, only Morpho or the USYC pool) and verified from the vault's events after. A bill payment opens a `payment_proposals` row on the `AUTOPILOT_VAULT` rail before it is signed and closes through `hodd_finish_payment`, so the bill becomes PAID like an owner payment and can never be paid twice. It is paid only while no other payment of the owner is open. The owner approves recipients (`addRecipient`, cap = the bill) and can `withdrawAll` from the Autopilot page. Live lifecycle: `HODD_VAULT_LIVE=1` (`src/lib/autopilot/vault.live.test.ts`).
-
-**Scheduling.** `supabase/migrations/20261013192912_autopilot_scheduler.sql` adds an hourly pg_cron job (`hodd-autopilot-tick`, minute 7) that calls `/api/autopilot/cron` through pg_net with a bearer secret kept in Supabase Vault (`autopilot_scheduler_secret`; `CRON_SECRET` for Vercel's daily cron also works). For up to 50 mandates per tick it starts at most five runs, each only when `scheduledTrigger` (`src/lib/autopilot/triggers.ts`) says so: first run, six hours since the last run, a policy that differs from the last run's snapshot, or a bill that entered its protection window or fell due since then; never twice within five minutes. The trigger is stored on the run and shown in History.
-
-**AI advisor.** `src/lib/autopilot/advisor.ts` turns the engine's INVEST or NO_ACTION decision into an envelope: deposit at most the engine's amount, or withdraw at most min(redeemable, position) back to the agent's cash when cash covers the fee reserve and the position read is fresh. Groq's `openai/gpt-oss-120b` (`@ai-sdk/groq`, strict JSON schema, no retries, 20 s timeout) answers FOLLOW, REDUCE, WAIT or DE_RISK with a rationale, from aggregate figures only. Safety kinds and return-all never reach it; any invalid answer or failure keeps the engine's decision (`FOLLOWED`/`APPLIED`/`REJECTED`/`UNAVAILABLE` are recorded with the model and the engine's own proposal). Before signing, the runner recomputes the engine decision and blocks the run if the fresh state no longer allows it. The advisor runs for every mandate while the `AGENT_ADVISOR` row is on and a Groq key exists (`GROQ_API_KEY`, else Vault secret `groq_api_key` through the service-role-only `hodd_autopilot_secret` function).
-
-## USYC through Hodd's pool
-
-USYC on Arc Testnet requires the caller, holder and receiver to be allowlisted by Circle. Instead of asking every user to be allowlisted, Hodd deployed [HoddUSYCVault](./contracts/src/HoddUSYCVault.sol) at `0x97A7BAaA5416e0aC0674C395cec22FF606120b76` (verified on ArcScan; 100,000 USDC per deposit, 1,000,000 total) and Circle allowlisted that one contract. Users deposit and withdraw only USDC from their own wallet; shares (12 decimals) are non-transferable and redeemable only by and to the holder. The **Invest** page's USYC card quotes with the pool's own previews and a 0.5% minimum (`src/lib/usyc/quotes.ts`), signs inside server gas ceilings and verifies the pool's events on every receipt (`src/lib/usyc/verify.ts`). The `USYC` row in `hodd_live_controls` switches it. Design, risks and tests: [contracts README](./contracts/README.md); live evidence: [USYC validation](./docs/usyc-validation.md).
-
-## Next work
-
-Verify Circle Passkey and Circle PIN on the live host, then switch `PROVIDER:CIRCLE_USER_CONTROLLED` on. Deploy `HoddieVaultFactory` and move Autopilot into per-user vaults so budgets, recipients and slippage are enforced onchain, with HoddUSYCVault as a second strategy. Onboard outside businesses. Financial calculations and amounts remain deterministic. Real integrations must follow current [Arc](https://docs.arc.io/), [Circle](https://developers.circle.com/wallets) and [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client) documentation.
 
 ## License
 
