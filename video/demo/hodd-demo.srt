@@ -76,7 +76,7 @@ Bills never reach the model; answers outside its envelope are discarded.
 
 20
 00:01:21,267 --> 00:01:25,230
-Many runs end in no action, and the history records those too.
+On its own schedule, the agent decides again and records why.
 
 21
 00:01:25,400 --> 00:01:29,402

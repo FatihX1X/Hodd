@@ -226,7 +226,7 @@ const Decision: React.FC = () => (
     </Phase>
     <Phase from={27.3} to={31.4}>
       <div style={{ ...left, top: 200 }}>
-        <Rise text="Many runs: no action" at={27.4} style={big} />
+        <Rise text="Always deciding" at={27.4} style={big} />
         <In at={28.0}><p style={{ ...bodyText, marginTop: 20 }}>Every run keeps its trigger, the engine's proposal and the advisor's reason.</p></In>
       </div>
       <In at={27.3} style={{ position: "absolute", left: 600, top: 170 }}><Screen name="console-autopilot-history-full" url="app.hoddfinance.xyz/autopilot · History" width={1240} height={700} cam={[{ at: 27.3, x: 560, y: 2740, w: 2570 }, { at: 31.4, x: 560, y: 3260, w: 2570 }]} /></In>

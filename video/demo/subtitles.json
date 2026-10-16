@@ -78,8 +78,8 @@
           "say": "It may follow, allocate, wait, or move between strategies. Bills never reach the model, and answers outside its envelope are discarded."
         },
         {
-          "caption": "Many runs end in no action, and the history records those too.",
-          "say": "Many runs end in no action, and the history records those too."
+          "caption": "On its own schedule, the agent decides again and records why.",
+          "say": "On its own schedule, the agent decides again and records why."
         }
       ]
     },
