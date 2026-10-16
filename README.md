@@ -124,7 +124,7 @@ Snapshot from the production database on 2026-10-16. All values are testnet USDC
 | | |
 | --- | --- |
 | Accounts | 6: our own test business and 5 people from our circle |
-| Arc transactions sent through Hodd, each with a server-verified receipt | 81: 20 signed by the Circle agent wallet, 51 Morpho Earn steps (including approvals) and 10 bill payments from owner wallets. 37 of them were signed by users' own wallets (MetaMask, Rabby) or the agent; the rest by the development test signer used for regression runs. Gateway, USYC and vault-setup transactions come on top |
+| Arc transactions sent through Hodd | 150: 111 with a server-verified receipt in Hodd's database (Morpho Earn steps including approvals, bill payments and Circle agent steps), plus 39 calls to Hodd's own contracts and agent wallets found on ArcScan (vault creation and setup, USYC pool deposits and redemptions, agent test runs). 71 were signed by users' own wallets (MetaMask, Rabby) or Circle agent wallets, 79 by the development test signer used for regression and pilot runs. Contract deployments and admin calls are not counted |
 | Autopilot runs | 28: 11 completed, 13 with nothing to do, 1 partial, 3 stopped safely |
 | USDC moved by the agent in verified steps | 143.81 |
 | Completed Morpho operations | 24: 12 deposits, 7 withdrawals, 5 redeem-all |
