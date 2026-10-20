@@ -1,7 +1,7 @@
 import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { z } from "zod";
-import { encodeFunctionData, erc20Abi, getAddress } from "viem";
+import { encodeFunctionData, erc20Abi, formatUnits, getAddress } from "viem";
 import type { AuthInfo, CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import type { Money, TreasuryWorkspace } from "@/lib/treasury/models";
 import { arcClient, discoverAllowedVaults } from "@/lib/earn/gateway";
@@ -201,7 +201,7 @@ export function registerHoddTools(server: McpServer) {
     const live = await liveWorkspace(context.workspace);
     const portfolio = live.portfolio;
     const money = (minor: string) => usdc({ currency: "USDC", decimals: 6, minorUnits: minor });
-    const usyc = live.usyc ? { pool: live.usyc.pool, value: money(live.usyc.valueUsdc), withdrawableNow: money(live.usyc.maxWithdrawUsdc), depositRoom: money(live.usyc.maxDepositUsdc), depositsPaused: live.usyc.depositsPaused, circleStatus: live.usyc.circle, priceUsdcPerUsyc: (Number(live.usyc.priceUsdcPerUsyc) / 1e6).toString(), observedAt: live.usyc.observedAt, note: "Users hold USDC value in Hodd's pool; the pool holds the USYC. Withdrawals always go back to the same wallet as USDC." } : null;
+    const usyc = live.usyc ? { pool: live.usyc.pool, value: money(live.usyc.valueUsdc), withdrawableNow: money(live.usyc.maxWithdrawUsdc), depositRoom: money(live.usyc.maxDepositUsdc), depositsPaused: live.usyc.depositsPaused, circleStatus: live.usyc.circle, priceUsdcPerUsyc: Number(formatUnits(BigInt(live.usyc.priceUsdcPerUsyc), 18)).toFixed(4), observedAt: live.usyc.observedAt, note: "Users hold USDC value in Hodd's pool; the pool holds the USYC. Withdrawals always go back to the same wallet as USDC." } : null;
     return { dataSource: live.source, note: live.note, vaults: (portfolio?.vaults ?? []).map((vault) => ({ address: vault.address, name: vault.name, apy: vault.apyBps === null ? null : `${(vault.apyBps / 100).toFixed(2)}%`, liquidity: usdc(vault.liquidity), status: vault.status })), positions: (portfolio?.positions ?? []).map((position) => ({ vaultAddress: position.vaultAddress, vaultName: position.vaultName, balance: usdc(position.currentBalance), redeemable: usdc(position.redeemable), shares: position.shares, status: position.liquidityStatus })), usyc };
   }));
 
