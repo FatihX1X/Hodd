@@ -2,7 +2,9 @@
 
 import { isExecutionAvailable } from "@/lib/earn/access-policy";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Bot } from "lucide-react";
+import { z } from "zod";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { moneyToInput } from "@/lib/treasury/money";
 import { planEarn, type EarnChange } from "@/lib/hoddie/earn";
@@ -12,10 +14,23 @@ import { PaymentDialog } from "./payment-dialog";
 import { SectionCard, SectionHeading, StatusPill } from "./primitives";
 import { useTreasuryWorkspace } from "./treasury-workspace-provider";
 
-type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST"; source?: "CLAUDE_MCP" | "HODDIE"; summary: string; change: Record<string, unknown>; created_at: string; expires_at: string | null };
+type AgentRequest = { id: string; kind: "PAYMENT_REQUEST" | "EARN_REQUEST" | "USYC_REQUEST" | "AUTOPILOT_REQUEST"; source?: "CLAUDE_MCP" | "HODDIE"; summary: string; change: Record<string, unknown>; created_at: string; expires_at: string | null };
+
+const usdcAmount = z.string().regex(/^\d+(\.\d{1,6})?$/);
+const usycChange = z.object({ operation: z.enum(["DEPOSIT", "WITHDRAW", "WITHDRAW_ALL"]), amount: usdcAmount.optional() }).refine((change) => change.operation === "WITHDRAW_ALL" || change.amount !== undefined);
+const autopilotChange = z.object({ operation: z.enum(["INVEST", "APPROVE_BILL", "RETURN_ALL", "WITHDRAW_ALL", "LIFT_LIMITS"]), amount: usdcAmount.optional(), obligationId: z.string().min(1).optional() }).refine((change) => (change.operation !== "INVEST" || change.amount !== undefined) && (change.operation !== "APPROVE_BILL" || change.obligationId !== undefined));
+const usycMode = { DEPOSIT: "deposit", WITHDRAW: "withdraw", WITHDRAW_ALL: "withdraw-all" } as const;
+const autopilotAction = { INVEST: "invest", APPROVE_BILL: "approve-bill", RETURN_ALL: "return-all", WITHDRAW_ALL: "withdraw-all", LIFT_LIMITS: "lift-limits" } as const;
+const kindLabel = { PAYMENT_REQUEST: "Payment", EARN_REQUEST: "Morpho", USYC_REQUEST: "USYC pool", AUTOPILOT_REQUEST: "Autopilot" } as const;
+const href = (path: string, params: Record<string, string | undefined>) => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
+  return path + "?" + query.toString();
+};
+const linkClass = "border border-white/20 px-3 py-2 text-xs";
 
 /**
- * Payment and Morpho requests approved in Claude. Claude never moves money: each
+ * Payment, Morpho, USYC pool and Autopilot requests approved in Claude. Claude never moves money: each
  * request opens the normal Hodd flow (fresh quote, confirmation, wallet signature).
  */
 export function AgentRequests() {
@@ -74,6 +89,7 @@ export function AgentRequests() {
       {requests.map((request) => {
         const expired = request.expires_at !== null && Date.parse(request.expires_at) <= loadedAt;
         let action: React.ReactNode = null;
+        let invalid = false;
         if (!expired && request.kind === "PAYMENT_REQUEST") {
           const obligation = workspace.obligations.find((item) => item.id === request.change.obligationId);
           action = obligation ? <PaymentDialog obligation={obligation} /> : <span className="text-xs text-white/60">Obligation not found in this workspace.</span>;
@@ -85,15 +101,24 @@ export function AgentRequests() {
             action = <EarnOperationDialog operation={plan.operation} vault={plan.vault} position={plan.position} policyLimit={plan.limit} enabled={localExecution} initialAmount={plan.amount ? moneyToInput(plan.amount) : ""} onComplete={() => void resolve(request.id, "DONE")} />;
           } catch (cause) { action = <span role="status" className="text-xs text-white/60">{cause instanceof Error ? cause.message : "Waiting for live Morpho data…"}</span>; }
         }
+        if (!expired && request.kind === "USYC_REQUEST") {
+          const parsed = usycChange.safeParse(request.change);
+          if (parsed.success) action = <Link href={href("/invest", { usyc: usycMode[parsed.data.operation], amount: parsed.data.amount, request: request.id })} className={linkClass}>Open USYC pool</Link>; else invalid = true;
+        }
+        if (!expired && request.kind === "AUTOPILOT_REQUEST") {
+          const parsed = autopilotChange.safeParse(request.change);
+          if (parsed.success) action = <Link href={href("/autopilot", { request: request.id, action: autopilotAction[parsed.data.operation], amount: parsed.data.amount, obligation: parsed.data.obligationId })} className={linkClass}>Open Autopilot</Link>; else invalid = true;
+        }
         return <article key={request.id} className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
           <div className="flex items-start gap-3"><Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[#8fb0ff]" /><div>
             <p className="text-sm font-semibold">{request.summary}</p>
             <p className="mt-1 text-xs text-white/55">Source: {request.source === "HODDIE" ? "Hoddie" : "Claude connector"}</p>
-            <p className="mt-1 text-[12px] text-white/55">{request.kind === "PAYMENT_REQUEST" ? "Payment" : "Morpho"}, requested {new Date(request.created_at).toLocaleString()}{expired ? ", expired" : request.expires_at ? `, expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
-            {!expired && !localExecution && <p className="mt-1 text-xs text-white/65">Wallet signing is not available on this host right now. Open app.hoddfinance.xyz to finish it.</p>}
+            <p className="mt-1 text-[12px] text-white/55">{kindLabel[request.kind]}, requested {new Date(request.created_at).toLocaleString()}{expired ? ", expired" : request.expires_at ? `, expires ${new Date(request.expires_at).toLocaleString()}` : ""}</p>
+            {invalid && <p role="status" className="mt-1 text-xs text-white/60">This request is not valid any more.</p>}
+            {!expired && (request.kind === "PAYMENT_REQUEST" || request.kind === "EARN_REQUEST") && !localExecution && <p className="mt-1 text-xs text-white/65">Wallet signing is not available on this host right now. Open app.hoddfinance.xyz to finish it.</p>}
           </div></div>
           <div className="flex flex-wrap items-center gap-2">{action}
-            {!expired && <button onClick={() => void resolve(request.id, "DONE")} className="border border-white/20 px-3 py-2 text-xs">Mark done</button>}
+            {!expired && !invalid && <button onClick={() => void resolve(request.id, "DONE")} className="border border-white/20 px-3 py-2 text-xs">Mark done</button>}
             <button onClick={() => void resolve(request.id, "DISMISSED")} className="border border-white/20 px-3 py-2 text-xs text-[#ff9a92]">Dismiss</button>
           </div>
         </article>;

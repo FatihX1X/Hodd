@@ -31,6 +31,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("UsycPoolCard", () => {
+  it("prefills the amount from a Claude request link and the notice, without sending anything", async () => {
+    const fetcher = serve([]); const scroll = vi.fn(); Element.prototype.scrollIntoView = scroll;
+    window.history.pushState({}, "", "/invest?usyc=deposit&amount=125.5&request=abc");
+    render(<UsycPoolCard />);
+    expect(await screen.findByText(/Claude asked you to: Deposit 125.5 USDC/)).toBeInTheDocument();
+    expect(screen.getByLabelText("USYC pool amount")).toHaveValue("125.5"); expect(scroll).toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
+    window.history.pushState({}, "", "/");
+  });
+  it("ignores a bad amount and leaves the withdraw-all form empty", async () => {
+    serve([]); Element.prototype.scrollIntoView = vi.fn();
+    window.history.pushState({}, "", "/invest?usyc=withdraw-all&amount=9");
+    render(<UsycPoolCard />);
+    expect(await screen.findByText(/Claude asked you to: Withdraw all./)).toBeInTheDocument();
+    expect(screen.getByLabelText("USYC pool amount")).toHaveValue("");
+    window.history.pushState({}, "", "/");
+  });
   it("deposits in one click: exact approval, then the deposit, each verified on the server before the next", async () => {
     const fetcher = serve([
       { body: { status: "READY", quote: depositQuote } },

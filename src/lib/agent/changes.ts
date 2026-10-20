@@ -4,6 +4,7 @@ import { treasuryWorkspaceSchema, type Money, type Obligation, type StrategyKind
 import { moneyToInput, parseMoneyInput } from "@/lib/treasury/money";
 import { boundActivities, makeActivity } from "@/lib/treasury/live";
 import { formatMoney } from "@/lib/treasury/format";
+import { canDeleteObligation } from "@/lib/treasury/sample-cleanup";
 
 // Pure workspace changes shared by the prepare (preview) and confirm (apply) tools,
 // so what Claude shows the user is exactly what gets written.
@@ -38,6 +39,7 @@ export const updatePolicyChange = z.object({
   minimumLiquidityCoverageBps: z.number().int().min(0).max(100_000).optional().describe("Minimum liquidity coverage in basis points (10000 = 100%)"),
   strategyCapsBps: z.object({ LIQUID: bps, MORPHO: bps, USYC: bps, BTC_RESERVE: bps }).partial().optional().describe("Max share of deployable capital per strategy, basis points"),
   enabledStrategies: z.object({ LIQUID: z.boolean(), MORPHO: z.boolean(), USYC: z.boolean(), BTC_RESERVE: z.boolean() }).partial().optional(),
+  protectionLeadDays: z.number().int().min(3).max(30).nullable().optional().describe("Days before a bill's due date when Hodd starts protecting its cash (3-30); null = automatic (Hodd's default for the current mode)"),
 }).strict();
 
 export const setTargetsChange = z.object({
@@ -51,17 +53,33 @@ export const earnRequestChange = z.object({
   vaultAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional().describe("Allowlisted Morpho vault; defaults to the first verified vault"),
 }).strict();
 
+export const deleteObligationChange = z.object({ obligationId: z.string().min(1) }).strict();
+export const usycRequestChange = z.object({
+  operation: z.enum(["DEPOSIT", "WITHDRAW", "WITHDRAW_ALL"]).describe("Deposit USDC into Hodd's USYC pool, withdraw an amount as USDC, or withdraw the whole position"),
+  amount: amount.optional().describe("Required for DEPOSIT and WITHDRAW"),
+}).strict();
+export const autopilotRequestChange = z.object({
+  operation: z.enum(["INVEST", "APPROVE_BILL", "RETURN_ALL", "WITHDRAW_ALL", "LIFT_LIMITS"]).describe("INVEST: fund the Autopilot vault (and resume it). APPROVE_BILL: let the vault pay a bill on its payment day. RETURN_ALL: pause and send everything the agent holds back to the owner. WITHDRAW_ALL: the owner takes everything out of the vault. LIFT_LIMITS: remove an older vault's amount limits"),
+  amount: amount.optional().describe("Required for INVEST"),
+  obligationId: z.string().min(1).optional().describe("Required for APPROVE_BILL"),
+}).strict();
+export const pauseAutopilotChange = z.object({}).strict();
+
 export const changeSchemas = {
-  CREATE_OBLIGATION: createObligationChange, UPDATE_OBLIGATION: updateObligationChange, UPDATE_POLICY: updatePolicyChange,
+  CREATE_OBLIGATION: createObligationChange, UPDATE_OBLIGATION: updateObligationChange, DELETE_OBLIGATION: deleteObligationChange, UPDATE_POLICY: updatePolicyChange,
   SET_TARGETS: setTargetsChange, PAYMENT_REQUEST: paymentRequestChange, EARN_REQUEST: earnRequestChange,
+  USYC_REQUEST: usycRequestChange, AUTOPILOT_REQUEST: autopilotRequestChange, PAUSE_AUTOPILOT: pauseAutopilotChange,
 } as const;
 export type ChangeKind = keyof typeof changeSchemas;
 export type ChangeOf<K extends ChangeKind> = z.infer<(typeof changeSchemas)[K]>;
-export const REQUEST_KINDS: readonly ChangeKind[] = ["PAYMENT_REQUEST", "EARN_REQUEST"];
+export const REQUEST_KINDS: readonly ChangeKind[] = ["PAYMENT_REQUEST", "EARN_REQUEST", "USYC_REQUEST", "AUTOPILOT_REQUEST"];
+/** Kinds about the user's Autopilot, which exists only for the main treasury. */
+export const AUTOPILOT_KINDS: readonly ChangeKind[] = ["AUTOPILOT_REQUEST", "PAUSE_AUTOPILOT"];
 
 const usdc = (value: string) => parseMoneyInput(value, "USDC", 6);
 const usdcOrZero = (value: string): Money => /^0+(\.0+)?$/.test(value.trim()) ? { currency: "USDC", decimals: 6, minorUnits: "0" } : usdc(value);
 const show = (money: Money) => formatMoney(money, { fractionDigits: 2 });
+const leadText = (days: number | null) => days === null ? "automatic" : `${days} days`;
 
 function activeObligation(workspace: TreasuryWorkspace, id: string): Obligation {
   const obligation = workspace.obligations.find((item) => item.id === id);
@@ -121,6 +139,13 @@ export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawC
       if (!lines.length) throw new Error("Nothing would change.");
       return finish({ ...workspace, obligations: workspace.obligations.map((item) => item.id === previous.id ? next : item) }, "Obligation updated via Claude", `${next.title}: ${lines.join("; ")}`, lines);
     }
+    case "DELETE_OBLIGATION": {
+      const change = deleteObligationChange.parse(rawChange);
+      const obligation = activeObligation(workspace, change.obligationId);
+      if (!canDeleteObligation(workspace, obligation)) throw new Error("Bills that are paid or have a pending payment or payment reference cannot be deleted. Keep them for the audit trail.");
+      const summary = `Delete ${obligation.title}: ${show(obligation.amount)} due ${obligation.dueAt.slice(0, 10)}`;
+      return finish({ ...workspace, obligations: workspace.obligations.filter((item) => item.id !== obligation.id) }, "Obligation deleted via Claude", summary, [summary, "It leaves obligations and treasury math; Activity keeps this record."]);
+    }
     case "UPDATE_POLICY": {
       const change = updatePolicyChange.parse(rawChange);
       if (anyPaymentPending) throw new Error("A payment is pending in Hodd; the policy is locked until it completes.");
@@ -130,6 +155,7 @@ export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawC
       if (change.minimumLiquidityCoverageBps !== undefined) { next.minimumLiquidityCoverageBps = change.minimumLiquidityCoverageBps; lines.push(`Minimum coverage: ${policy.minimumLiquidityCoverageBps / 100}% → ${change.minimumLiquidityCoverageBps / 100}%`); }
       for (const [key, value] of Object.entries(change.strategyCapsBps ?? {}) as [StrategyKind, number][]) { next.strategyCapsBps[key] = value; lines.push(`${key} cap: ${policy.strategyCapsBps[key] / 100}% → ${value / 100}%`); }
       for (const [key, value] of Object.entries(change.enabledStrategies ?? {}) as [StrategyKind, boolean][]) { next.enabledStrategies[key] = value; lines.push(`${key}: ${policy.enabledStrategies[key] ? "enabled" : "disabled"} → ${value ? "enabled" : "disabled"}`); }
+      if (change.protectionLeadDays !== undefined && change.protectionLeadDays !== policy.protectionLeadDays) { next.protectionLeadDays = change.protectionLeadDays; lines.push(`Protection window: ${leadText(policy.protectionLeadDays)} → ${leadText(change.protectionLeadDays)}`); }
       if (!lines.length) throw new Error("Nothing would change.");
       return finish({ ...workspace, policy: next }, "Treasury policy updated via Claude", lines.join("; "), lines);
     }
@@ -155,6 +181,30 @@ export function applyChange(workspace: TreasuryWorkspace, kind: ChangeKind, rawC
       const label = change.operation === "DEPOSIT" ? "Deposit" : change.operation === "WITHDRAW" ? "Withdraw" : "Redeem all";
       const summary = `${label}${change.amount ? ` ${show(usdc(change.amount))}` : ""} ${change.operation === "DEPOSIT" ? "into" : "from"} Morpho`;
       return finish(workspace, "Earn operation requested via Claude", summary, [summary, "Complete it in Hodd: review the fresh quote, confirm and sign with your wallet."]);
+    }
+    case "USYC_REQUEST": {
+      const change = usycRequestChange.parse(rawChange);
+      if ((change.operation !== "WITHDRAW_ALL") !== Boolean(change.amount)) throw new Error(change.operation === "WITHDRAW_ALL" ? "WITHDRAW_ALL takes no amount." : "An amount is required for USYC deposits and withdrawals.");
+      const summary = change.operation === "DEPOSIT" ? `Deposit ${show(usdc(change.amount!))} into Hodd's USYC pool` : change.operation === "WITHDRAW" ? `Withdraw ${show(usdc(change.amount!))} from Hodd's USYC pool` : "Withdraw the whole USYC pool position";
+      return finish(workspace, "USYC operation requested via Claude", summary, [summary, "Complete it in Hodd on the USYC pool card: review the fresh quote and sign with your wallet. Withdrawals always return to your own wallet as USDC."]);
+    }
+    case "AUTOPILOT_REQUEST": {
+      const change = autopilotRequestChange.parse(rawChange);
+      if ((change.operation === "INVEST") !== Boolean(change.amount)) throw new Error(change.operation === "INVEST" ? "An amount is required to invest." : "Only INVEST takes an amount.");
+      if ((change.operation === "APPROVE_BILL") !== Boolean(change.obligationId)) throw new Error(change.operation === "APPROVE_BILL" ? "Give the obligationId of the bill to approve." : "Only APPROVE_BILL takes an obligationId.");
+      let summary: string;
+      if (change.operation === "APPROVE_BILL") {
+        const bill = activeObligation(workspace, change.obligationId!);
+        if (!["UPCOMING", "OVERDUE"].includes(bill.status)) throw new Error("Only upcoming or overdue bills can be approved for Autopilot.");
+        if (!bill.recipientAddress) throw new Error("This bill has no recipient address. Add one first.");
+        summary = `Approve ${bill.title} (${show(bill.amount)} to ${bill.recipientAddress}) for Autopilot to pay on its payment day`;
+      } else if (change.operation === "INVEST") summary = `Invest ${show(usdc(change.amount!))} with Autopilot`;
+      else summary = { RETURN_ALL: "Pause Autopilot and return everything to your wallet", WITHDRAW_ALL: "Withdraw everything from your Autopilot vault", LIFT_LIMITS: "Remove your Autopilot vault's old amount limits" }[change.operation];
+      return finish(workspace, "Autopilot action requested via Claude", summary, [summary, "Complete it in Hodd on the Autopilot page: review it there and confirm (with your wallet signature where one is needed)."]);
+    }
+    case "PAUSE_AUTOPILOT": {
+      pauseAutopilotChange.parse(rawChange);
+      return finish(workspace, "Autopilot paused via Claude", "Pause Autopilot", ["Pause Autopilot", "It starts no new runs; transactions already submitted can still settle. Resume it in Hodd with Invest."]);
     }
   }
 }

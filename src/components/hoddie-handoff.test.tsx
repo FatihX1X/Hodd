@@ -38,6 +38,31 @@ describe("Hoddie wallet-review handoff", () => {
     const obligation = initialWorkspace.obligations[0]; fake.rows = [request("PAYMENT_REQUEST", { obligationId: obligation.id })]; render(<AgentRequests />);
     await screen.findByRole("button", { name: "Open normal payment review" }); expect(fake.payment).toHaveBeenCalledWith({ obligation }); expect(fake.rpc).not.toHaveBeenCalled();
   });
+  it("links a USYC request to the pool card with the amount prefilled, and sends nothing", async () => {
+    fake.rows = [request("USYC_REQUEST", { operation: "DEPOSIT", amount: "125.5" })]; render(<AgentRequests />);
+    const link = await screen.findByRole("link", { name: "Open USYC pool" });
+    expect(link).toHaveAttribute("href", "/invest?usyc=deposit&amount=125.5&request=request");
+    expect(screen.getByText(/USYC pool, requested/)).toBeInTheDocument(); expect(screen.getByRole("button", { name: "Mark done" })).toBeInTheDocument(); expect(fake.rpc).not.toHaveBeenCalled();
+  });
+  it("links withdraw-all without an amount", async () => {
+    fake.rows = [request("USYC_REQUEST", { operation: "WITHDRAW_ALL" })]; render(<AgentRequests />);
+    expect(await screen.findByRole("link", { name: "Open USYC pool" })).toHaveAttribute("href", "/invest?usyc=withdraw-all&request=request");
+  });
+  it("links an Autopilot bill approval with the bill id and sends nothing", async () => {
+    fake.rows = [request("AUTOPILOT_REQUEST", { operation: "APPROVE_BILL", obligationId: "bill-7" })]; render(<AgentRequests />);
+    const link = await screen.findByRole("link", { name: "Open Autopilot" });
+    expect(link).toHaveAttribute("href", "/autopilot?request=request&action=approve-bill&obligation=bill-7");
+    expect(screen.getByText(/Autopilot, requested/)).toBeInTheDocument(); expect(fake.rpc).not.toHaveBeenCalled();
+  });
+  it("links an Autopilot invest with the amount and no empty params", async () => {
+    fake.rows = [request("AUTOPILOT_REQUEST", { operation: "INVEST", amount: "40" })]; render(<AgentRequests />);
+    expect(await screen.findByRole("link", { name: "Open Autopilot" })).toHaveAttribute("href", "/autopilot?request=request&action=invest&amount=40");
+  });
+  it.each([["USYC_REQUEST", { operation: "DEPOSIT" }], ["USYC_REQUEST", { operation: "SWEEP", amount: "1" }], ["AUTOPILOT_REQUEST", { operation: "APPROVE_BILL" }], ["AUTOPILOT_REQUEST", { operation: "INVEST", amount: "-1" }]])("shows only Dismiss for an invalid %s change", async (kind, change) => {
+    fake.rows = [request(kind, change)]; render(<AgentRequests />);
+    await screen.findByText("This request is not valid any more.");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument(); expect(screen.queryByRole("button", { name: "Mark done" })).not.toBeInTheDocument(); expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
   it("read-only workspace never loads or resolves stored money requests", async () => {
     fake.readOnly = true; fake.rows = [request("EARN_REQUEST", { operation: "DEPOSIT", amount: "100", vaultAddress: address })]; render(<AgentRequests />);
     await waitFor(() => expect(screen.queryByText("Reviewed Hoddie request")).not.toBeInTheDocument()); expect(fake.earn).not.toHaveBeenCalled(); expect(fake.rpc).not.toHaveBeenCalled();
