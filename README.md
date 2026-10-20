@@ -48,11 +48,24 @@ Every page reads live balances from Arc Testnet, and every money movement ends w
 | **Autopilot** | **Invest N USDC** creates the owner's vault on first use and funds it. Approve a bill once with **Let Autopilot pay**, and the agent pays it from the vault on its payment day (a day before it is due). **Return everything** brings it all back through the agent; **Take everything back yourself** does it from the owner's wallet without Hodd. A progress rail follows each step to the verified receipt. **History** shows every run: what triggered it, what the engine proposed, what the AI advisor decided and why. |
 | **Hoddie** | A treasury assistant in English and Turkish. It answers from the engine's own numbers ("Can I pay tomorrow's bills?") and drafts bills, policy changes and payment or Earn requests for the owner to approve. It never moves money. |
 | **Activity** | A timeline of everything that happened. Local audit records are kept apart from onchain receipts. |
-| **Connections** | Connect Hodd to Claude as a remote MCP connector with 19 tools. Reads are instant. Every write is previewed, approved by the user in Claude and recorded, and a connection can be revoked in one click. |
+| **Connections** | Connect Hodd to Claude as a remote MCP connector with 25 tools that reach every page above (see [Claude connector](#claude-connector-mcp)). Reads are instant. Every write is previewed, approved by the user in Claude and recorded, and a connection can be revoked in one click. |
 
 Actions that send money with one tap ask once: the first press turns the button into **Confirm?** and the second press sends.
 
 **Wallets:** **MetaMask** and **Rabby** are verified end to end on the live host. **Circle Passkey** (Modular Wallets, gas sponsored by the Gas Station paymaster) and **Circle Embedded (PIN)** are built into the app; PIN stays switched off on the live host until it is verified there. Before any live operation the owner proves control of the wallet with a free signed message.
+
+## Claude connector (MCP)
+
+Add `https://app.hoddfinance.xyz/api/mcp` as a custom connector in Claude and sign in with your Hodd account. Claude then sees the same live numbers as the app: wallet USDC, Morpho, the USYC pool and the Autopilot vault.
+
+Every change takes two steps. `hodd_prepare_change` returns a preview and changes nothing. After the user approves it in the chat, Claude calls the write tool with the same values and a single-use confirmation. **Claude never moves money**: payment, Morpho, USYC and Autopilot requests appear under **Agent requests** on Overview and open the right page prefilled, and the user finishes them with their own wallet.
+
+| Kind | Tools |
+| --- | --- |
+| **Read** | `hodd_whoami`, `hodd_get_overview`, `hodd_list_obligations`, `hodd_get_obligation`, `hodd_check_payment` ("Can I pay tomorrow's bill?"), `hodd_get_allocation_preview`, `hodd_list_vaults_and_positions` (Morpho and the USYC pool), `hodd_get_autopilot` (vault balances, which bills it will pay, what needs the owner, recent runs), `hodd_get_unified_balance` (USDC on every Gateway testnet), `hodd_get_policy`, `hodd_list_activity`, `hodd_list_payments`, `hodd_list_requests` |
+| **Preview** | `hodd_prepare_change` |
+| **Change, applied after approval** | `hodd_create_obligation`, `hodd_update_obligation`, `hodd_delete_obligation` (bills without payment history), `hodd_update_policy` (including the protection window), `hodd_set_allocation_targets`, `hodd_pause_autopilot` |
+| **Request, finished in Hodd with the owner's wallet** | `hodd_request_payment`, `hodd_request_earn` (Morpho), `hodd_request_usyc`, `hodd_request_autopilot` (invest, approve a bill, return everything, withdraw all from the vault, lift old vault limits), `hodd_dismiss_request` |
 
 ## How the agent decides
 
@@ -114,6 +127,7 @@ The destinations are enforced onchain by [`HoddieVault`](./contracts/src/HoddieV
 | **USYC through HoddUSYCVault** | Deposit 1 USDC, then withdraw everything back to the same wallet |
 | **Gateway, one button** | Shortfall deposited in one `depositWithPermit` transaction, the transfer signed before the deposit, minted on Arc |
 | **Claude connector** | Dynamic registration, consent, all 19 tools, an approved write, a refused replay and revocation, on the production host |
+| **Claude connector, every feature** (2026-10-20) | 25 tools in production. The connector reads the owner's live Morpho position and USYC pool position with its USDC price, and the Autopilot view matches the owner's real vault (balances, APYs, runs) |
 
 Details: [Autopilot validation](./docs/autopilot-validation.md), [Gateway validation](./docs/gateway-validation.md), [USYC validation](./docs/usyc-validation.md), [Hoddie validation](./docs/hoddie-unified-validation.md).
 
@@ -162,7 +176,7 @@ Each deposit or payment on the live host is capped at 1,000 testnet USDC. Gatewa
 - **Treasury Engine** (`src/lib/treasury`): pure, deterministic functions over integer minor units.
 - **Execution** is a durable, request-driven state machine. The server records the exact next call, the wallet signs, the server verifies the receipt and moves on. It works on serverless hosts and survives restarts.
 - **Contracts** (`contracts/`): Solidity 0.8 with Foundry and OpenZeppelin 5.
-- **Tests:** 884 Vitest unit and component tests, 104 Playwright browser checks on desktop and mobile, 245 Foundry tests (unit, fuzz, invariant, Arc fork). GitHub Actions runs lint, typecheck and unit tests on every push. Opt-in live tests run against Arc Testnet.
+- **Tests:** 922 Vitest unit and component tests, 104 Playwright browser checks on desktop and mobile, 245 Foundry tests (unit, fuzz, invariant, Arc fork). GitHub Actions runs lint, typecheck and unit tests on every push. Opt-in live tests run against Arc Testnet.
 
 ## Roadmap
 
