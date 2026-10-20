@@ -1,7 +1,8 @@
 import { loadProtectionContext } from "@/lib/autopilot/protection-context";
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { applyChange, changeSchemas, REQUEST_KINDS, type ChangeKind } from "@/lib/agent/changes";
+import { z } from "zod";
+import { applyChange, changeSchemas, REQUEST_KINDS } from "@/lib/agent/changes";
 import { liveWorkspace } from "@/lib/agent/context";
 import { allocationView, obligationView, overviewView, paymentCheckView, policyView, usdc } from "@/lib/agent/views";
 import { estimateTransferFee } from "@/lib/agent/tools";
@@ -11,13 +12,15 @@ import { decimalStringToMoney } from "@/lib/earn/money";
 import { dueDate, percentageBps, slotValue, type MaskedCommand } from "./privacy";
 import { HoddieError, intentSchema, kindSchema, type HoddieIntent, type HoddieResult } from "./models";
 import { issueReview, verifyReview, type HoddieContext, type requireConsent } from "./security";
+/** Hoddie prepares only the original six kinds; the Claude connector has more. */
+type HoddieKind = z.infer<typeof kindSchema>;
 type Consent = Awaited<ReturnType<typeof requireConsent>>;
 const zero = { currency: "USDC", decimals: 6, minorUnits: "0" } as const;
 const text = (value: unknown): string => value === null || value === undefined ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value);
 const card = (title: string, values: Record<string, unknown>) => ({ title, fields: Object.entries(values).map(([label, value]) => ({ label, value: text(value) })) });
 const say = (language: "en" | "tr", en: string, tr: string) => language === "tr" ? tr : en;
 
-async function evaluatedChange(context: HoddieContext, kind: ChangeKind, raw: unknown, newId: string) {
+async function evaluatedChange(context: HoddieContext, kind: HoddieKind, raw: unknown, newId: string) {
   const change = changeSchemas[kind].parse(raw);
   if ("dueDate" in change && change.dueDate) dueDate("EXPLICIT", String(change.dueDate), "UTC");
   const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId)]);
@@ -48,7 +51,7 @@ async function evaluatedChange(context: HoddieContext, kind: ChangeKind, raw: un
   return { change, applied, live, impact: [{ label: "Deployable capital", before: usdc(before.deployableCapital), after: usdc(after.deployableCapital) }, { label: "Protected capital", before: usdc(before.protectedCapital), after: usdc(after.protectedCapital) }, { label: "Coverage", before: before.coverageStatus, after: after.coverageStatus }] };
 }
 
-export async function prepareChange(context: HoddieContext, consent: Consent, kind: ChangeKind, raw: Record<string, unknown>, language: "en" | "tr" = "en"): Promise<HoddieResult> {
+export async function prepareChange(context: HoddieContext, consent: Consent, kind: HoddieKind, raw: Record<string, unknown>, language: "en" | "tr" = "en"): Promise<HoddieResult> {
   const parsed = changeSchemas[kind].safeParse(raw);
   if (!parsed.success) return { language, message: say(language, "Complete these fields in Hodd, then review the change.", "Bu alanları Hodd içinde tamamla, ardından değişikliği incele."), cards: [], draft: { kind, values: raw } };
   const newId = randomUUID();

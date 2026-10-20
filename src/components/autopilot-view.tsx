@@ -193,8 +193,28 @@ function RunTimeline({ runs, steps }: { runs: Run[]; steps: Status["steps"] }) {
   })}</ol>;
 }
 
+/** What a Claude request asked for, read from `?action=…&amount=…&obligation=…`. It only highlights and prefills; the user confirms with their wallet. */
+const asked = { invest: "invest", "approve-bill": "bills", "return-all": "return", "withdraw-all": "vault", "lift-limits": "vault" } as const;
+type Ask = { action: keyof typeof asked; amount: string; obligation: string };
+function readAsk(search: string): Ask | null {
+  const query = new URLSearchParams(search), action = query.get("action") ?? "", amount = query.get("amount") ?? "";
+  if (!Object.hasOwn(asked, action)) return null;
+  return { action: action as Ask["action"], amount: action === "invest" && /^\d+(\.\d{1,6})?$/.test(amount) ? amount : "", obligation: query.get("obligation") ?? "" };
+}
+const askText = (ask: Ask, bills: VaultBillView[]) => {
+  switch (ask.action) {
+    case "invest": return ask.amount ? "Invest " + ask.amount + " USDC" : "Invest";
+    case "approve-bill": { const bill = bills.find(item => item.id === ask.obligation); return bill ? "Approve the bill " + bill.title : "Approve a bill"; }
+    case "return-all": return "Return everything";
+    case "withdraw-all": return "Withdraw everything from your vault";
+    case "lift-limits": return "Remove the vault's amount limits";
+  }
+};
+
 export function AutopilotView() {
   const { signedIn, workspace } = useTreasuryWorkspace();
+  const [ask, setAsk] = useState<Ask | null>(null);
+  const scrolled = useRef(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -219,6 +239,23 @@ export function AutopilotView() {
     window.dispatchEvent(new Event("hodd:autopilot-status"));
     return data;
   }, []);
+
+  // A link from an agent request prefills the Invest amount and shows what was asked. Nothing is sent from here.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const found = readAsk(window.location.search);
+      if (!found) return;
+      setAsk(found); if (found.amount) setAmount(found.amount);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const askTarget = ask ? asked[ask.action] : null;
+  const targetReady = askTarget === "invest" || askTarget === "return" || (askTarget === "vault" && !!status?.vault) || (askTarget === "bills" && !!status?.vault?.deployed);
+  useEffect(() => {
+    if (!askTarget || !targetReady || scrolled.current) return;
+    scrolled.current = true;
+    document.getElementById("autopilot-" + askTarget)?.scrollIntoView?.({ block: "start" });
+  }, [askTarget, targetReady]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -424,6 +461,7 @@ export function AutopilotView() {
         <StatusPill label={status?.executionEnabled ? "Testnet execution enabled" : "Autopilot disabled"} tone={status?.executionEnabled ? "info" : "warning"} />
         {!signedIn ? <p className="text-sm text-white/60">Sign in and connect a verified wallet to use Autopilot.</p> : !status?.executionEnabled ? <p className="text-sm text-white/60">The operator must enable and verify Autopilot before funds can move.</p> : <Tip label="How Autopilot works">You sign the funding transfer. Your agent handles the rest within Hodd&apos;s limits.</Tip>}
       </div>
+      {ask && <p role="status" className="mb-6 border border-[#8fb0ff]/40 bg-[#8fb0ff]/10 px-4 py-3 text-sm text-[#cfdcff]">Claude asked you to: {askText(ask, status?.bills ?? [])}. Review it below and confirm with your wallet.</p>}
       {message && <p role="alert" className="mb-6 border border-[#fab219]/40 p-4 text-sm text-[#ffd27f]">{message}</p>}
       {status?.balanceError && <p className="mb-5 text-sm text-[#ffd27f]">{status.balanceError}</p>}
       <NeedsYouBanner items={status?.needsYou ?? []} />
@@ -433,24 +471,24 @@ export function AutopilotView() {
         <DestinationsCard />
       </section>
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <SectionCard><SectionHeading icon={<TrendingUp aria-hidden="true" className="size-4" />} title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
+        <div id="autopilot-invest" className="scroll-mt-6 flex flex-col [&>section]:flex-1"><SectionCard><SectionHeading icon={<TrendingUp aria-hidden="true" className="size-4" />} title="Invest" /><form className="space-y-4 p-5" onSubmit={event => { event.preventDefault(); if (!disabled) void act(invest, "invest"); }}>
           <label className="block text-xs text-white/60">Amount (USDC)<input className={inputClass + " mono tabular-nums"} inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder="10" required disabled={busy || open} /></label>
           <div className="flex flex-wrap items-center gap-2">
             <ConfirmButton type="submit" disabled={disabled}>{amount.trim() ? "Invest " + amount.trim() + " USDC" : "Invest"}</ConfirmButton>
             <Tip label="How investing works">Your wallet sends the USDC into your own vault (the first time it also creates the vault). Your agent can invest all of it. It decides how much goes to Morpho and how much to USYC, when to bring money back to cash for the bills you approved, and pays each one on its payment day.</Tip>
           </div>
-        </form></SectionCard>
-        <SectionCard><SectionHeading icon={<Undo2 aria-hidden="true" className="size-4" />} title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
+        </form></SectionCard></div>
+        <div id="autopilot-return" className="scroll-mt-6 flex flex-col [&>section]:flex-1"><SectionCard><SectionHeading icon={<Undo2 aria-hidden="true" className="size-4" />} title="Return to my wallet" /><div className="space-y-4 p-5 text-sm">
           <div>
             <p className="flex items-center gap-1 text-[12px] text-white/55">{status?.vault?.deployed ? "In your vault" : "With your agent"}<Tip align="end" label="About returning">{status?.vault?.deployed ? "Your agent redeems the Morpho and USYC positions straight to your wallet, then sends the vault's cash. You can also do it yourself below." : "A tiny network-fee remainder stays behind."}</Tip></p>
             <p className="mono mt-1 text-2xl font-medium tabular-nums tracking-[-0.03em]">{total === null ? "Balance unavailable" : display(total)}</p>
           </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-white/60"><Bot aria-hidden="true" className="size-4 shrink-0" /><ArrowRight aria-hidden="true" className="size-3.5 shrink-0 text-white/40" /><Wallet aria-hidden="true" className="size-4 shrink-0" /><span className="sr-only">Destination:</span>{destination ? <span title={destination} className="mono text-[13px] text-white/80">{destination.slice(0, 6)}…{destination.slice(-4)}</span> : <span>Connect your verified wallet</span>}</p>
           <ConfirmButton disabled={disabled || total === null || BigInt(total) === 0n || !destination} onClick={() => void act(async signal => { setActiveRun(null); setPhase("preparing"); await startRun("return-all", signal); }, "return")}>Return everything</ConfirmButton>
-        </div></SectionCard>
+        </div></SectionCard></div>
       </div>
-      {status?.vault && <VaultCard vault={status.vault} disabled={disabled} onWithdrawAll={() => void act(signal => vaultAction({ op: "withdraw-all" }, signal))} onLiftLimits={() => void act(signal => vaultAction({ op: "lift-limits" }, signal))} />}
-      {status?.vault?.deployed && <VaultBills bills={status.bills ?? []} disabled={disabled} onApprove={id => void act(signal => vaultAction({ op: "approve-bill", obligationId: id }, signal))} />}
+      {status?.vault && <div id="autopilot-vault" className="scroll-mt-6"><VaultCard vault={status.vault} disabled={disabled} onWithdrawAll={() => void act(signal => vaultAction({ op: "withdraw-all" }, signal))} onLiftLimits={() => void act(signal => vaultAction({ op: "lift-limits" }, signal))} /></div>}
+      {status?.vault?.deployed && <div id="autopilot-bills" className="scroll-mt-6"><VaultBills bills={status.bills ?? []} disabled={disabled} onApprove={id => void act(signal => vaultAction({ op: "approve-bill", obligationId: id }, signal))} /></div>}
       {(phase || failure || open || result) && <SectionCard className="mt-6"><SectionHeading title="Progress" />
         <AutopilotProgress input={progress} />
         {manualAddress && <div className="space-y-3 px-5 pb-5 text-sm"><p>Send {amount} USDC on Arc Testnet to your agent. Investing starts automatically after the funds arrive.</p><label className="block text-xs text-white/60">Agent funding address<input className={inputClass + " font-mono"} readOnly value={manualAddress} onFocus={event => event.target.select()} /></label><button className={buttonClass.ghost} onClick={() => void navigator.clipboard.writeText(manualAddress).catch(() => setMessage("Select the agent address to copy it."))}><Copy aria-hidden="true" className="size-3.5" />Copy agent address</button></div>}

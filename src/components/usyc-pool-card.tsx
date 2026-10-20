@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, ArrowUpFromLine, Coins, LoaderCircle, TriangleAlert } from "lucide-react";
 import { formatUnits } from "viem";
 import { ARCSCAN_TX } from "@/lib/usyc/constants";
@@ -27,6 +27,14 @@ const show = (minorUnits: string | bigint) => formatMoney(usdc(minorUnits), { fr
 const price = (value: string) => Number(formatUnits(BigInt(value), 18)).toFixed(4);
 const verbs: Record<Kind, string> = { DEPOSIT: "Deposit", WITHDRAW: "Withdraw" };
 const POLL_MS = 2000, VERIFY_DEADLINE_MS = 4 * 60_000;
+/** What a Claude request asked for, read from `?usyc=deposit|withdraw|withdraw-all&amount=…`. It only fills the form; it never sends anything. */
+const asks = { deposit: "Deposit", withdraw: "Withdraw", "withdraw-all": "Withdraw all" } as const;
+type Ask = { key: keyof typeof asks; amount: string };
+function readAsk(search: string): Ask | null {
+  const query = new URLSearchParams(search), key = query.get("usyc"), amount = query.get("amount") ?? "";
+  if (key !== "deposit" && key !== "withdraw" && key !== "withdraw-all") return null;
+  return { key, amount: key !== "withdraw-all" && /^\d+(\.\d{1,6})?$/.test(amount) ? amount : "" };
+}
 
 /** The pool deposit or withdrawal as rail milestones: check → (approve) → deposit or withdraw → verified. */
 export function usycProgress(run: UsycRun) {
@@ -66,6 +74,18 @@ export function UsycPoolCard() {
   const hasSigner = useHasActiveSigner(workspace.walletConnection);
   const [amount, setAmount] = useState("");
   const [run, setRun] = useState<UsycRun | null>(null);
+  const [ask, setAsk] = useState<Ask | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // A link from an agent request prefills the form and scrolls here; the user still presses the button and signs.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const found = readAsk(window.location.search);
+      if (!found) return;
+      setAsk(found); if (found.amount) setAmount(found.amount);
+      root.current?.scrollIntoView?.({ block: "start" });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const busy = run?.outcome === "running";
   const data = usycState.status === "READY" ? usycState.data : null;
   const position = data?.position ?? null;
@@ -140,8 +160,9 @@ export function UsycPoolCard() {
   const capacity = position ? Number(formatUnits(BigInt(position.maxDepositUsdc), 6)) : 0;
   const enteredRatio = amount.trim() !== "" && Number.isFinite(typed) && typed > 0 && capacity > 0 ? typed / capacity : null;
 
-  return <SectionCard>
+  return <div id="usyc-pool" ref={root} className="scroll-mt-6"><SectionCard>
     <SectionHeading icon={<Coins className="size-4" />} title="USYC via Hodd's pool" action={<div className="flex items-center gap-2"><StatusPill label={!position ? (usycState.status === "ERROR" ? "Unavailable" : usycState.status === "READY" ? "Not live" : "Loading") : position.circle === "OK" ? "Circle enabled" : position.circle === "PAUSED" ? "Circle paused" : "Awaiting Circle"} tone={position?.circle === "OK" ? "success" : usycState.status === "ERROR" ? "danger" : position ? "warning" : "info"} /><InfoTip label="About this pool">Deposit and withdraw USDC only; the pool holds Circle&apos;s USYC. Your wallet signs every step. Deposits ask for an exact USDC approval, then the deposit; withdrawals pay USDC straight back to this wallet. Each transaction carries a 0.5% minimum so a price move cannot take more.</InfoTip></div>} />
+    {ask && <p role="status" className="border-b border-[#8fb0ff]/30 bg-[#8fb0ff]/10 px-5 py-3 text-xs leading-5 text-[#cfdcff]">Claude asked you to: {asks[ask.key]}{ask.amount ? ` ${ask.amount} USDC` : ""}. Review it below and press {asks[ask.key]} to confirm with your wallet.</p>}
     {!position ? <div role="status" className="p-5 text-sm leading-6 text-white/60">{usycState.status === "ERROR" ? usycState.message : usycState.status === "READY" ? "Hodd's USYC pool is not live on Arc Testnet yet. It opens once the pool contract is deployed and Circle enables it." : workspace.walletConnection ? "Loading the USYC pool…" : "Connect your wallet to see the USYC pool."}</div> : <PoolBody position={position} entered={enteredRatio} />}
     {position && <div className="border-t border-white/10 p-5">
       <label className={`block ${labelClass}`}>Amount (USDC)<input aria-label="USYC pool amount" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="1.00" disabled={busy} className={`${inputClass} mono`} /></label>
@@ -154,7 +175,7 @@ export function UsycPoolCard() {
       {open && !hasSigner && <p role="note" className="mt-4 flex items-start gap-2 border border-[#fab219]/30 bg-[#fab219]/10 p-3 text-xs leading-5 text-[#ffd27f]"><TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /><span>Signer session: reconnect required. Use “Reconnect signer” in the wallet panel first.</span></p>}
     </div>}
     {progress && run && <ProgressRail label={`${progress.verb} progress`} steps={progress.steps} active={progress.active} outcome={run.outcome} caption={progress.caption} link={run.hash ? { href: `${ARCSCAN_TX}${run.hash}`, text: "Open transaction" } : null} />}
-  </SectionCard>;
+  </SectionCard></div>;
 }
 
 function PoolBody({ position, entered }: { position: UsycPosition; entered: number | null }) {

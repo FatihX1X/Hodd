@@ -2,7 +2,9 @@ import "server-only";
 import type { AuthInfo } from "@modelcontextprotocol/server";
 import { treasuryWorkspaceSchema, type TreasuryWorkspace, type WalletSnapshot } from "@/lib/treasury/models";
 import type { WorkspaceScope } from "@/lib/treasury/smoke-workspace";
-import { applyEarnPortfolio, applyWalletSnapshot } from "@/lib/treasury/live";
+import { applyEarnPortfolio, applyUsycPosition, applyWalletSnapshot } from "@/lib/treasury/live";
+import { readUsycStatus } from "@/lib/usyc/status";
+import type { UsycPosition } from "@/lib/usyc/models";
 import { ViemArcTreasuryReader } from "@/lib/arc/reader";
 import { getEarnPortfolio } from "@/lib/earn/gateway";
 import { AgentError, agentIdentity, agentSupabase, assertAgentSessionActive } from "./auth";
@@ -30,16 +32,18 @@ export type LiveView = Readonly<{
   note: string;
   snapshot: WalletSnapshot | null;
   portfolio: Awaited<ReturnType<typeof getEarnPortfolio>> | null;
+  /** The wallet's share of Hodd's USYC pool; null without a wallet, an undeployed pool or a failed read. */
+  usyc: UsycPosition | null;
 }>;
 
 /**
- * Applies fresh Arc balances and Morpho positions, exactly like the browser does.
+ * Applies fresh Arc balances, Morpho positions and the USYC pool position, exactly like the browser does.
  * Without a wallet nothing is live: balances are reported as zero, never as stored numbers.
  */
-export async function liveWorkspace(workspace: TreasuryWorkspace, deps: { readSnapshot?: (address: string) => Promise<WalletSnapshot>; readPortfolio?: typeof getEarnPortfolio } = {}): Promise<LiveView> {
+export async function liveWorkspace(workspace: TreasuryWorkspace, deps: { readSnapshot?: (address: string) => Promise<WalletSnapshot>; readPortfolio?: typeof getEarnPortfolio; readUsyc?: (address: string) => Promise<UsycPosition | null> } = {}): Promise<LiveView> {
   if (workspace.treasuryMode === "LOCAL_DEMO" || !workspace.walletConnection) {
     const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
-    return { workspace: { ...workspace, totalTreasury: zero, liquidUsdc: zero, pendingTransactions: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" as const })) }, source: "NOT_CONNECTED", note: "No wallet is connected in Hodd, so there are no live balances. Connect a wallet at app.hoddfinance.xyz first.", snapshot: null, portfolio: null };
+    return { workspace: { ...workspace, totalTreasury: zero, liquidUsdc: zero, pendingTransactions: zero, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" as const })) }, source: "NOT_CONNECTED", note: "No wallet is connected in Hodd, so there are no live balances. Connect a wallet at app.hoddfinance.xyz first.", snapshot: null, portfolio: null, usyc: null };
   }
   const address = workspace.walletConnection.address;
   let snapshot: WalletSnapshot;
@@ -47,11 +51,15 @@ export async function liveWorkspace(workspace: TreasuryWorkspace, deps: { readSn
   catch { throw new AgentError("BALANCE_UNAVAILABLE", "Arc Testnet balances are unavailable right now, so Hodd will not calculate with stale numbers. Try again shortly."); }
   const zero = { ...workspace.liquidUsdc, minorUnits: "0" };
   const withWallet = applyWalletSnapshot({ ...workspace, strategies: workspace.strategies.map((strategy) => ({ ...strategy, balance: zero, redeemable: zero, apyBps: null, integration: "UNAVAILABLE" })) }, snapshot);
-  try {
-    const portfolio = await (deps.readPortfolio ?? getEarnPortfolio)(address);
-    const complete = portfolio.integration.positionAccess === "READY";
-    return { workspace: applyEarnPortfolio(withWallet, portfolio), source: complete ? "LIVE" : "PARTIAL", note: complete ? `Live balances at Arc block ${snapshot.blockNumber}.` : "Some Morpho positions could not be read; they are excluded.", snapshot, portfolio };
-  } catch {
-    return { workspace: withWallet, source: "PARTIAL", note: "Morpho positions are unavailable; only the wallet's USDC is counted.", snapshot, portfolio: null };
-  }
+  const [earn, pool] = await Promise.all([
+    (deps.readPortfolio ?? getEarnPortfolio)(address).then((value) => ({ ok: true as const, value }), () => ({ ok: false as const })),
+    (deps.readUsyc ?? ((value: string) => readUsycStatus(value)))(address).then((value) => ({ ok: true as const, value }), () => ({ ok: false as const })),
+  ]);
+  const portfolio = earn.ok ? earn.value : null;
+  // Only a fresh read for exactly this wallet counts, as in the browser.
+  const usyc = pool.ok && pool.value && pool.value.wallet.toLowerCase() === address.toLowerCase() ? pool.value : null;
+  const withEarn = portfolio ? applyEarnPortfolio(withWallet, portfolio) : withWallet;
+  const live = usyc ? applyUsycPosition(withEarn, usyc) : withEarn;
+  const gaps = [!portfolio ? "Morpho positions are unavailable and excluded." : portfolio.integration.positionAccess !== "READY" ? "Some Morpho positions could not be read; they are excluded." : null, !pool.ok ? "The USYC pool position is unavailable and excluded." : null].filter(Boolean);
+  return { workspace: live, source: gaps.length ? "PARTIAL" : "LIVE", note: gaps.length ? gaps.join(" ") : `Live balances at Arc block ${snapshot.blockNumber}.`, snapshot, portfolio, usyc };
 }

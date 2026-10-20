@@ -11,7 +11,10 @@ import { ARC_TESTNET_USDC } from "@/lib/earn/allowlist";
 import { assessTreasury } from "@/lib/treasury/engine";
 import { AgentError, agentIdentity } from "./auth";
 import { agentContext, liveWorkspace, type AgentContext } from "./context";
-import { applyChange, changeSchemas, REQUEST_KINDS, type ChangeKind } from "./changes";
+import { applyChange, AUTOPILOT_KINDS, changeSchemas, REQUEST_KINDS, type ChangeKind } from "./changes";
+import { agentDb } from "@/lib/autopilot/store";
+import { readUnifiedUsdc } from "@/lib/gateway/balances";
+import { assertAutopilotChange, autopilotRecords, autopilotView } from "./autopilot-view";
 import { confirmationKey, issueHandle, verifyHandle, HANDLE_TTL_MS } from "./handles";
 import { allocationView, obligationView, overviewView, paymentCheckView, policyView, usdc } from "./views";
 
@@ -58,9 +61,25 @@ function rejectChange(error: unknown): never {
 }
 
 const writeToolFor: Record<ChangeKind, string> = {
-  CREATE_OBLIGATION: "hodd_create_obligation", UPDATE_OBLIGATION: "hodd_update_obligation", UPDATE_POLICY: "hodd_update_policy",
+  CREATE_OBLIGATION: "hodd_create_obligation", UPDATE_OBLIGATION: "hodd_update_obligation", DELETE_OBLIGATION: "hodd_delete_obligation", UPDATE_POLICY: "hodd_update_policy",
   SET_TARGETS: "hodd_set_allocation_targets", PAYMENT_REQUEST: "hodd_request_payment", EARN_REQUEST: "hodd_request_earn",
+  USYC_REQUEST: "hodd_request_usyc", AUTOPILOT_REQUEST: "hodd_request_autopilot", PAUSE_AUTOPILOT: "hodd_pause_autopilot",
 };
+const CHANGE_KINDS = Object.keys(changeSchemas) as [ChangeKind, ...ChangeKind[]];
+const nextStep: Partial<Record<ChangeKind, string>> = {
+  PAYMENT_REQUEST: "Open Hodd: the request waits under 'Agent requests' on Overview. The user reviews the fresh quote there, confirms and signs with their wallet. It expires in 24 hours.",
+  EARN_REQUEST: "Open Hodd: the request waits under 'Agent requests' on Overview. The user reviews the fresh Morpho quote there, confirms and signs with their wallet. It expires in 24 hours.",
+  USYC_REQUEST: "Open Hodd: the request waits under 'Agent requests' on Overview and opens the USYC pool card prefilled. The user reviews the quote and signs with their wallet. It expires in 24 hours.",
+  AUTOPILOT_REQUEST: "Open Hodd: the request waits under 'Agent requests' on Overview and opens the Autopilot page prefilled. The user reviews and confirms it there (with a wallet signature where needed). It expires in 24 hours.",
+  PAUSE_AUTOPILOT: "Paused. Autopilot starts no new runs until the user resumes it in Hodd (Invest). Recorded in Activity as approved in Claude.",
+};
+
+/** Autopilot belongs to the main treasury and must match the user's current Autopilot state. */
+async function checkAutopilot(userId: string, workspaceScope: "TREASURY" | "SMOKE_TEST", workspace: TreasuryWorkspace, kind: ChangeKind, change: unknown) {
+  if (!AUTOPILOT_KINDS.includes(kind)) return;
+  if (workspaceScope !== "TREASURY") throw new AgentError("TREASURY_ONLY", "Autopilot exists only for the main treasury (scope TREASURY).");
+  assertAutopilotChange(await autopilotRecords(userId), workspace, kind as "PAUSE_AUTOPILOT" | "AUTOPILOT_REQUEST", (change as { operation?: string }).operation);
+}
 
 async function prepare(auth: AuthInfo | undefined, workspaceScope: "TREASURY" | "SMOKE_TEST", kind: ChangeKind, raw: unknown) {
   let change: unknown;
@@ -69,6 +88,7 @@ async function prepare(auth: AuthInfo | undefined, workspaceScope: "TREASURY" | 
   const now = new Date();
   let applied;
   try { applied = applyChange(context.workspace, kind, change, now); } catch (error) { rejectChange(error); }
+  await checkAutopilot(context.userId, workspaceScope, context.workspace, kind, change);
   const [live, protectionContext] = await Promise.all([liveWorkspace(context.workspace), loadProtectionContext(context.userId, context.scope)]);
   const before = assessTreasury(live.workspace, now, protectionContext);
   const afterWorkspace = applyChange(live.workspace, kind, change, now).workspace;
@@ -98,6 +118,9 @@ async function commit(auth: AuthInfo | undefined, kind: ChangeKind, args: { scop
   if (handle.rev !== context.revision) throw new AgentError("WORKSPACE_CHANGED", "The workspace changed after this preview (for example in the Hodd app). Nothing was written; prepare the change again.");
   let applied;
   try { applied = applyChange(context.workspace, kind, change, new Date()); } catch (error) { rejectChange(error); }
+  await checkAutopilot(context.userId, workspaceScope, context.workspace, kind, change);
+  // Pausing only stops new runs, so it happens before the record: a failed record never leaves Autopilot running.
+  if (kind === "PAUSE_AUTOPILOT") { const { error: pauseError } = await agentDb().rpc("hodd_pause_agent", { p_user: context.userId }); if (pauseError) throw new AgentError("WRITE_FAILED", "Hodd could not pause Autopilot right now. Nothing was changed; try again or pause it in Hodd."); }
   const isRequest = REQUEST_KINDS.includes(kind);
   const stored = kind === "EARN_REQUEST" && !change.vaultAddress ? { ...change, vaultAddress: (await discoverAllowedVaults())[0]?.address ?? null } : change;
   const { data, error } = await context.client.rpc("hodd_apply_agent_action", {
@@ -110,11 +133,12 @@ async function commit(auth: AuthInfo | undefined, kind: ChangeKind, args: { scop
     if (error.code === "PT409" || error.code === "40001" || error.message.includes("revision conflict")) throw new AgentError("WORKSPACE_CHANGED", "The workspace changed while saving. Nothing was written; prepare the change again.");
     if (error.message.includes("payment execution requires completion")) throw new AgentError("PAYMENT_PENDING", "A payment is pending in Hodd; finish or review it first. Nothing was written.");
     if (error.message.includes("obligation revision conflict")) throw new AgentError("WORKSPACE_CHANGED", "That obligation changed in the meantime. Prepare the change again.");
+    if (error.message.includes("obligation deletion is not supported")) throw new AgentError("DELETE_REFUSED", "This bill has payment history and cannot be deleted. Keep it for the audit trail. Nothing was written.");
     throw new AgentError("WRITE_FAILED", "Hodd could not save this change. Nothing was written.");
   }
   return {
     status: isRequest ? "REQUESTED" : "APPLIED", actionId: handle.id, summary: applied.summary, changes: applied.lines, workspaceRevision: data,
-    next: isRequest ? "Open Hodd: the request is waiting under 'Claude requests'. The user reviews the fresh quote there, confirms and signs with their wallet. It expires in 24 hours." : "Saved. It is visible in Hodd and recorded in Activity as approved in Claude.",
+    next: nextStep[kind] ?? "Saved. It is visible in Hodd and recorded in Activity as approved in Claude.",
   };
 }
 
@@ -172,15 +196,31 @@ export function registerHoddTools(server: McpServer) {
     return { dataSource: live.source, dataNote: live.note, ...allocationView(live.workspace, new Date(), protectionContext) };
   }));
 
-  server.registerTool("hodd_list_vaults_and_positions", { title: "Morpho vaults and positions", description: "Verified Morpho vaults (APY, liquidity) and this wallet's positions with redeemable amounts.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
+  server.registerTool("hodd_list_vaults_and_positions", { title: "Morpho vaults, USYC pool and positions", description: "Verified Morpho vaults (APY, liquidity) and this wallet's Morpho positions, plus its share of Hodd's USYC pool (value, what can be withdrawn now, deposit room, Circle status).", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
     const context = await agentContext(auth, workspaceScope);
     const live = await liveWorkspace(context.workspace);
     const portfolio = live.portfolio;
-    if (!portfolio) return { dataSource: live.source, note: live.note, vaults: [], positions: [] };
-    return { dataSource: live.source, note: live.note, vaults: portfolio.vaults.map((vault) => ({ address: vault.address, name: vault.name, apy: vault.apyBps === null ? null : `${(vault.apyBps / 100).toFixed(2)}%`, liquidity: usdc(vault.liquidity), status: vault.status })), positions: portfolio.positions.map((position) => ({ vaultAddress: position.vaultAddress, vaultName: position.vaultName, balance: usdc(position.currentBalance), redeemable: usdc(position.redeemable), shares: position.shares, status: position.liquidityStatus })) };
+    const money = (minor: string) => usdc({ currency: "USDC", decimals: 6, minorUnits: minor });
+    const usyc = live.usyc ? { pool: live.usyc.pool, value: money(live.usyc.valueUsdc), withdrawableNow: money(live.usyc.maxWithdrawUsdc), depositRoom: money(live.usyc.maxDepositUsdc), depositsPaused: live.usyc.depositsPaused, circleStatus: live.usyc.circle, priceUsdcPerUsyc: (Number(live.usyc.priceUsdcPerUsyc) / 1e6).toString(), observedAt: live.usyc.observedAt, note: "Users hold USDC value in Hodd's pool; the pool holds the USYC. Withdrawals always go back to the same wallet as USDC." } : null;
+    return { dataSource: live.source, note: live.note, vaults: (portfolio?.vaults ?? []).map((vault) => ({ address: vault.address, name: vault.name, apy: vault.apyBps === null ? null : `${(vault.apyBps / 100).toFixed(2)}%`, liquidity: usdc(vault.liquidity), status: vault.status })), positions: (portfolio?.positions ?? []).map((position) => ({ vaultAddress: position.vaultAddress, vaultName: position.vaultName, balance: usdc(position.currentBalance), redeemable: usdc(position.redeemable), shares: position.shares, status: position.liquidityStatus })), usyc };
   }));
 
-  server.registerTool("hodd_get_policy", { title: "Treasury policy", description: "Safety buffer, minimum liquidity coverage, strategy caps, enabled strategies and target allocations.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => { const context = await agentContext(auth, workspaceScope); return policyView(context.workspace, await loadProtectionContext(context.userId, context.scope)); }));
+  server.registerTool("hodd_get_autopilot", { title: "Autopilot status", description: "The user's Autopilot (main treasury only): whether it is active or paused, its vault and agent wallet, vault balances in cash/Morpho/USYC with APYs, which bills it will pay on their payment day and which need approval, what needs the user, and the latest runs with their decisions.", inputSchema: z.object({}), annotations: READ }, guard(async (_args: Record<string, never>, auth) => {
+    const context = await agentContext(auth, "TREASURY");
+    return { today: new Date().toISOString().slice(0, 10), ...(await autopilotView(context.userId, context.workspace)) };
+  }));
+
+  server.registerTool("hodd_get_unified_balance", { title: "Cross-chain USDC (Circle Gateway)", description: "USDC for the connected wallet on every Circle Gateway testnet: in the wallet on each chain and already in Gateway (spendable on Arc in seconds). Read-only; moving it happens in Hodd with the user's wallet.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => {
+    const context = await agentContext(auth, workspaceScope);
+    const wallet = context.workspace.walletConnection;
+    if (!wallet) return { dataSource: "NOT_CONNECTED", note: "No wallet is connected in Hodd. Connect one at app.hoddfinance.xyz first.", chains: [] };
+    let view;
+    try { view = await readUnifiedUsdc(wallet.address); } catch { throw new AgentError("UNIFIED_BALANCE_UNAVAILABLE", "Cross-chain balances could not be read right now."); }
+    const show = (value: { minorUnits: string } | null) => value === null ? null : usdc({ currency: "USDC", decimals: 6, minorUnits: value.minorUnits });
+    return { address: view.address, observedAt: view.observedAt, gatewayStatus: view.gatewayStatus, unavailableChains: view.unavailableChains, totals: { inWallets: show(view.totals.wallet), inGateway: show(view.totals.gateway), all: show(view.totals.all), inWalletsOffArc: show(view.totals.offArcWallet) }, chains: view.chains.map((chain) => ({ chain: chain.label, inWallet: show(chain.wallet), inGateway: show(chain.gateway), depositWait: chain.depositWait })), next: "To use USDC from another chain, the user moves it to Arc on Hodd's Overview (Unified balance) with their own wallet." };
+  }));
+
+  server.registerTool("hodd_get_policy", { title: "Treasury policy", description: "Safety buffer, minimum liquidity coverage, protection window (lead days), strategy caps, enabled strategies and target allocations.", inputSchema: z.object({ scope }), annotations: READ }, guard(async ({ scope: workspaceScope }: { scope: "TREASURY" | "SMOKE_TEST" }, auth) => { const context = await agentContext(auth, workspaceScope); return policyView(context.workspace, await loadProtectionContext(context.userId, context.scope)); }));
 
   server.registerTool("hodd_list_activity", { title: "Activity log", description: "Recent treasury activity: who did what (you, the system, or Claude), with approval and policy results.", inputSchema: z.object({ scope, limit: z.number().int().min(1).max(100).default(20), actor: z.enum(["HUMAN", "AGENT", "SYSTEM"]).optional() }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; limit: number; actor?: string }, auth) => {
     const context = await agentContext(auth, args.scope);
@@ -194,7 +234,7 @@ export function registerHoddTools(server: McpServer) {
     return { payments: (data ?? []).map((row) => { const proposal = row.proposal as { obligationId?: string; recipientAddress?: string; amount?: Money; recipientLabel?: string | null }; return { id: row.id, state: row.state, obligationId: proposal.obligationId ?? null, recipient: proposal.recipientLabel ?? proposal.recipientAddress ?? null, amount: proposal.amount ? usdc(proposal.amount) : null, transactionHash: row.tx_hash, updatedAt: row.updated_at }; }) };
   }));
 
-  server.registerTool("hodd_list_requests", { title: "Claude requests and changes", description: "Changes applied through Claude and money requests waiting for the user in Hodd (OPEN, DONE, DISMISSED).", inputSchema: z.object({ scope, status: z.enum(["APPLIED", "OPEN", "DONE", "DISMISSED"]).optional(), limit: z.number().int().min(1).max(50).default(20) }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; status?: string; limit: number }, auth) => {
+  server.registerTool("hodd_list_requests", { title: "Claude requests and changes", description: "Changes applied through Claude and requests (payment, Morpho, USYC, Autopilot) waiting for the user in Hodd (OPEN, DONE, DISMISSED).", inputSchema: z.object({ scope, status: z.enum(["APPLIED", "OPEN", "DONE", "DISMISSED"]).optional(), limit: z.number().int().min(1).max(50).default(20) }), annotations: READ }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; status?: string; limit: number }, auth) => {
     const context = await agentContext(auth, args.scope);
     let query = context.client.from("agent_actions").select("id,kind,summary,status,created_at,expires_at,resolved_at").eq("user_id", context.userId).eq("scope", args.scope).order("created_at", { ascending: false }).limit(args.limit);
     if (args.status) query = query.eq("status", args.status);
@@ -206,8 +246,8 @@ export function registerHoddTools(server: McpServer) {
 
   server.registerTool("hodd_prepare_change", {
     title: "Preview a change (no effect)",
-    description: "Step 1 of every change. Validates a change against live data and Hodd's rules and returns a human-readable preview plus a confirmation handle. Changes nothing. Kinds: CREATE_OBLIGATION, UPDATE_OBLIGATION, UPDATE_POLICY, SET_TARGETS, PAYMENT_REQUEST, EARN_REQUEST. After showing the preview, get the user's explicit approval before calling the write tool named in confirmWith.",
-    inputSchema: z.object({ scope, kind: z.enum(["CREATE_OBLIGATION", "UPDATE_OBLIGATION", "UPDATE_POLICY", "SET_TARGETS", "PAYMENT_REQUEST", "EARN_REQUEST"]), change: z.record(z.string(), z.unknown()).describe("Fields for the chosen kind, exactly as the matching write tool accepts them (without scope/confirmation)") }),
+    description: `Step 1 of every change. Validates a change against live data and Hodd's rules and returns a human-readable preview plus a confirmation handle. Changes nothing. Kinds: ${CHANGE_KINDS.join(", ")} (fields: see the matching write tool: ${CHANGE_KINDS.map((kind) => `${kind} → ${writeToolFor[kind]}`).join(", ")}). After showing the preview, get the user's explicit approval before calling the write tool named in confirmWith.`,
+    inputSchema: z.object({ scope, kind: z.enum(CHANGE_KINDS), change: z.record(z.string(), z.unknown()).describe("Fields for the chosen kind, exactly as the matching write tool accepts them (without scope/confirmation)") }),
     annotations: READ,
   }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; kind: ChangeKind; change: Record<string, unknown> }, auth) => prepare(auth, args.scope, args.kind, args.change)));
 
@@ -219,12 +259,16 @@ export function registerHoddTools(server: McpServer) {
   };
   writeTool("hodd_create_obligation", "CREATE_OBLIGATION", "Create obligation", "Adds a bill/obligation to the treasury.");
   writeTool("hodd_update_obligation", "UPDATE_OBLIGATION", "Update obligation", "Edits an obligation (amount, date, status DRAFT/UPCOMING/OVERDUE, recipient…). Paid obligations and deletion are not allowed.");
-  writeTool("hodd_update_policy", "UPDATE_POLICY", "Update treasury policy", "Changes safety buffer, minimum coverage, strategy caps or enabled strategies.");
+  writeTool("hodd_delete_obligation", "DELETE_OBLIGATION", "Delete obligation", "Deletes a bill that has no payment history (not paid, no pending payment or payment reference). Activity keeps a record.");
+  writeTool("hodd_update_policy", "UPDATE_POLICY", "Update treasury policy", "Changes safety buffer, minimum coverage, protection window (lead days), strategy caps or enabled strategies.");
   writeTool("hodd_set_allocation_targets", "SET_TARGETS", "Set allocation targets", "Sets target allocation percentages (basis points totalling 10000). Affects previews only.");
   writeTool("hodd_request_payment", "PAYMENT_REQUEST", "Request a payment", "Creates a payment request for an obligation. It does not move money: the user completes it in Hodd by confirming and signing with their own wallet.");
   writeTool("hodd_request_earn", "EARN_REQUEST", "Request a Morpho deposit/withdrawal", "Creates a Morpho deposit, withdrawal or redeem-all request. It does not move money: the user completes it in Hodd with a fresh quote and their wallet signature.");
+  writeTool("hodd_request_usyc", "USYC_REQUEST", "Request a USYC pool deposit/withdrawal", "Creates a deposit, withdrawal or withdraw-all request for Hodd's USYC pool (USDC in, USDC out). It does not move money: the user completes it in Hodd with a fresh quote and their wallet signature.");
+  writeTool("hodd_request_autopilot", "AUTOPILOT_REQUEST", "Request an Autopilot action", "Creates an Autopilot request (invest, approve a bill for the vault, return everything, withdraw all from the vault, lift old vault limits). Main treasury only. It does nothing by itself: the user confirms it on Hodd's Autopilot page, with a wallet signature where needed.");
+  writeTool("hodd_pause_autopilot", "PAUSE_AUTOPILOT", "Pause Autopilot", "Pauses Autopilot right away: it starts no new runs (already submitted transactions can still settle). Main treasury only. Resuming happens in Hodd.");
 
-  server.registerTool("hodd_dismiss_request", { title: "Dismiss a request", description: "Cancels an open payment or Earn request created through Claude.", inputSchema: z.object({ scope, requestId: z.string().uuid() }), annotations: WRITE }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; requestId: string }, auth) => {
+  server.registerTool("hodd_dismiss_request", { title: "Dismiss a request", description: "Cancels an open request created through Claude (payment, Morpho, USYC or Autopilot).", inputSchema: z.object({ scope, requestId: z.string().uuid() }), annotations: WRITE }, guard(async (args: { scope: "TREASURY" | "SMOKE_TEST"; requestId: string }, auth) => {
     const context = await agentContext(auth, args.scope);
     const { error } = await context.client.rpc("hodd_resolve_agent_request", { p_id: args.requestId, p_status: "DISMISSED" });
     if (error) throw new AgentError("NOT_OPEN", "That request is not open (already done, dismissed or not yours).");
@@ -236,6 +280,7 @@ export const HODD_INSTRUCTIONS = [
   "Hodd is a liability-aware treasury on Arc Testnet (USDC). Read tools are safe to call anytime.",
   "Every change is two steps: call hodd_prepare_change, show the user the returned summary and changes, and ask for explicit approval in the chat. Only after the user approves, call the write tool named in confirmWith with exactly the same values and the confirmation handle.",
   "Never invent a confirmation and never call a write tool the user has not approved. If a write fails because the workspace changed, prepare again and ask again.",
-  "Money never moves from Claude: hodd_request_payment and hodd_request_earn only create requests; the user finishes them in Hodd with their own wallet signature.",
+  "Money never moves from Claude: hodd_request_payment, hodd_request_earn, hodd_request_usyc and hodd_request_autopilot only create requests; the user finishes them in Hodd with their own wallet signature. hodd_pause_autopilot stops Autopilot (after approval) and never moves money.",
+  "Use hodd_get_autopilot for Autopilot questions, hodd_list_vaults_and_positions for Morpho and the USYC pool, and hodd_get_unified_balance for USDC on other chains.",
   "Use hodd_check_payment for questions like 'Can I pay tomorrow's bill?'. Dates are YYYY-MM-DD; get today's date from hodd_whoami or hodd_get_overview.",
 ].join(" ");

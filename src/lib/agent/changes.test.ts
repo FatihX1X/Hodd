@@ -82,3 +82,40 @@ describe("can I pay it?", () => {
     expect(paymentCheckView(workspace, workspace.obligations[1], fee, now).funding.action).toBe("INSUFFICIENT");
   });
 });
+
+describe("connector changes added for full Hodd coverage", () => {
+  it("deletes a bill without payment history and refuses paid or reserved ones", () => {
+    const result = applyChange(fresh(), "DELETE_OBLIGATION", { obligationId: "obl-aws-oct" }, now);
+    expect(result.workspace.obligations.some((item) => item.id === "obl-aws-oct")).toBe(false);
+    expect(result.workspace.activities[0]).toMatchObject({ actor: "AGENT", approval: "APPROVED", action: "Obligation deleted via Claude" });
+    const paid = fresh(); paid.obligations[1].status = "PAID";
+    expect(() => applyChange(paid, "DELETE_OBLIGATION", { obligationId: "obl-aws-oct" }, now)).toThrow("cannot be deleted");
+    const reserved = fresh(); reserved.paymentReservations = [{ proposalId: "11111111-1111-4111-8111-111111111111", obligationId: "obl-aws-oct", amount: reserved.obligations[1].amount, feeReserve: reserved.obligations[1].amount }];
+    expect(() => applyChange(reserved, "DELETE_OBLIGATION", { obligationId: "obl-aws-oct" }, now)).toThrow("cannot be deleted");
+    expect(() => applyChange(fresh(), "DELETE_OBLIGATION", { obligationId: "nope" }, now)).toThrow("No obligation");
+  });
+  it("sets the protection window or returns it to automatic", () => {
+    const set = applyChange(fresh(), "UPDATE_POLICY", { protectionLeadDays: 7 }, now);
+    expect(set.workspace.policy.protectionLeadDays).toBe(7); expect(set.lines).toContain("Protection window: automatic → 7 days");
+    expect(applyChange(set.workspace, "UPDATE_POLICY", { protectionLeadDays: null }, now).workspace.policy.protectionLeadDays).toBeNull();
+    expect(() => applyChange(fresh(), "UPDATE_POLICY", { protectionLeadDays: 2 }, now)).toThrow();
+    expect(() => applyChange(fresh(), "UPDATE_POLICY", { protectionLeadDays: null }, now)).toThrow("Nothing would change");
+  });
+  it("USYC and Autopilot requests only record a request and validate their fields", () => {
+    const workspace = fresh(); workspace.obligations[1].recipientAddress = recipient;
+    const usyc = applyChange(workspace, "USYC_REQUEST", { operation: "DEPOSIT", amount: "25" }, now);
+    expect(usyc.workspace.obligations).toEqual(workspace.obligations); expect(usyc.summary).toBe("Deposit 25.00 USDC into Hodd's USYC pool");
+    expect(applyChange(workspace, "USYC_REQUEST", { operation: "WITHDRAW_ALL" }, now).summary).toContain("whole USYC");
+    expect(() => applyChange(workspace, "USYC_REQUEST", { operation: "WITHDRAW" }, now)).toThrow("amount is required");
+    expect(() => applyChange(workspace, "USYC_REQUEST", { operation: "WITHDRAW_ALL", amount: "1" }, now)).toThrow("no amount");
+    expect(applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "INVEST", amount: "100" }, now).summary).toBe("Invest 100.00 USDC with Autopilot");
+    expect(applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "APPROVE_BILL", obligationId: "obl-aws-oct" }, now).summary).toContain(recipient);
+    expect(() => applyChange(fresh(), "AUTOPILOT_REQUEST", { operation: "APPROVE_BILL", obligationId: "obl-aws-oct" }, now)).toThrow("no recipient");
+    expect(() => applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "APPROVE_BILL", obligationId: "obl-invoice-104" }, now)).toThrow("upcoming or overdue");
+    expect(() => applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "INVEST" }, now)).toThrow("amount is required");
+    expect(() => applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "RETURN_ALL", amount: "1" }, now)).toThrow("Only INVEST");
+    expect(() => applyChange(workspace, "AUTOPILOT_REQUEST", { operation: "RETURN_ALL", obligationId: "obl-aws-oct" }, now)).toThrow("Only APPROVE_BILL");
+    const pause = applyChange(workspace, "PAUSE_AUTOPILOT", {}, now);
+    expect(pause.workspace.obligations).toEqual(workspace.obligations); expect(pause.workspace.activities[0].action).toBe("Autopilot paused via Claude");
+  });
+});

@@ -283,3 +283,37 @@ describe("Autopilot vault mode", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no amount limits now"), { timeout: 5_000 });
   });
 });
+describe("Autopilot request links", () => {
+  const visit = (query: string) => window.history.pushState({}, "", "/autopilot" + query);
+  afterEach(() => visit(""));
+
+  it("prefills the Invest amount and says what Claude asked, without starting anything", async () => {
+    visit("?request=abc&action=invest&amount=25.5");
+    await ready();
+    expect(await screen.findByRole("status")).toHaveTextContent("Claude asked you to: Invest 25.5 USDC.");
+    expect(screen.getByLabelText("Amount (USDC)")).toHaveValue("25.5");
+    expect(requests).toEqual([]);
+  });
+  it.each([["return-all", "Return everything"], ["withdraw-all", "Withdraw everything from your vault"], ["lift-limits", "Remove the vault's amount limits"]])("shows a notice for %s and leaves the amount empty", async (action, text) => {
+    visit("?request=abc&action=" + action + "&amount=9");
+    await ready();
+    expect(await screen.findByRole("status")).toHaveTextContent("Claude asked you to: " + text + ". Review it below and confirm with your wallet.");
+    expect(screen.getByLabelText("Amount (USDC)")).toHaveValue("");
+    expect(requests).toEqual([]);
+  });
+  it("names the bill to approve and scrolls to the bills", async () => {
+    const scroll = vi.fn(); Element.prototype.scrollIntoView = scroll;
+    visit("?request=abc&action=approve-bill&obligation=rent");
+    snapshot = { ...initial(), vault: { address: "0x4cE19EAbc6F38fb95030E400A50abac0f4f12B88", deployed: true, factory: "0x311578B21F269ca0E45f5c16324A3E51f69ce389", limitsLifted: true }, bills: [{ id: "rent", title: "Office rent", amountMinor: "2000000", dueAt: "2026-10-20T12:00:00.000Z", recipient: null, capMinor: "0", plan: "NEEDS_APPROVAL", payFrom: null }] } as unknown as ReturnType<typeof initial>;
+    await ready();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Claude asked you to: Approve the bill Office rent."));
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    expect(scroll.mock.contexts.at(-1)).toHaveProperty("id", "autopilot-bills");
+    expect(requests).toEqual([]);
+  });
+  it("shows no notice for an unknown action", async () => {
+    visit("?action=steal-everything");
+    await ready(); await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
