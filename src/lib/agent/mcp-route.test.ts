@@ -129,4 +129,11 @@ describe("Hodd MCP endpoint", () => {
     const view = JSON.parse(toolText((await call("tools/call", { name: "hodd_get_autopilot", arguments: {} })).body));
     expect(view).toMatchObject({ setUp: true, active: true, state: "ACTIVE", balances: { cash: "1 USDC", morpho: "2 USDC", usyc: "3 USDC", morphoApy: "5.12%" }, needsYou: [{ code: "APPROVE_BILLS" }], recentRuns: [{ decision: "INVEST", deposited: "5 USDC" }] });
   });
+
+  it("shows the USYC pool position with the oracle price in USDC", async () => {
+    const { liveWorkspace } = await import("@/lib/agent/context");
+    vi.mocked(liveWorkspace).mockImplementationOnce(async (workspace) => ({ workspace, source: "LIVE", note: "live", snapshot: null, portfolio: null, usyc: { wallet: "0x0000000000000000000000000000000000000001", pool: "0x97A7BAaA5416e0aC0674C395cec22FF606120b76", circle: "OK", depositsPaused: false, maxDepositUsdc: "100000000000", shares: "1", usycMinor: "1", valueUsdc: "5002314", maxWithdrawShares: "1", maxWithdrawUsdc: "5002314", priceUsdcPerUsyc: "1140801411579339400", subscribePriceUsdcPerUsyc: "1140801411579339400", afterHoursPricing: false, observedAt: "2026-10-20T09:00:00.000Z" } }));
+    const view = JSON.parse(toolText((await call("tools/call", { name: "hodd_list_vaults_and_positions", arguments: {} })).body));
+    expect(view.usyc).toMatchObject({ value: "5.002314 USDC", withdrawableNow: "5.002314 USDC", priceUsdcPerUsyc: "1.1408" });
+  });
 });
